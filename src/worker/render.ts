@@ -111,7 +111,8 @@ function renderCard(c: Card): string {
   if (merge.state === 'ready') links.push(link(f.url, 'Merge on GitHub'));
 
   const parts: string[] = [];
-  if (c.status === null) parts.push('<div class="detail age">No status written yet</div>');
+  if (c.statusUnreadable) parts.push(`<div class="detail age">${esc("The status section couldn't be read")}</div>`);
+  else if (c.status === null) parts.push('<div class="detail age">No status written yet</div>');
   if (c.status && c.status.questions.length > 0) {
     const qs = c.status.questions
       .map((q) => {
@@ -201,7 +202,11 @@ function renderTimeline(t: Timeline): string {
 export function renderBoard(b: Board): string {
   const now = new Date(b.generatedAt);
   const errors = b.errors.map((e) => `<div class="err">${esc(e)}</div>`).join('');
-  const waiting = b.waiting.length ? b.waiting.map(renderCard).join('\n') : '<div class="empty">Nothing is waiting on you.</div>';
+  // With anything unread, an empty list proves nothing, so never offer the reassuring line.
+  const nothingWaiting = b.errors.length
+    ? esc("Couldn't read everything from GitHub, so this list may be incomplete.")
+    : 'Nothing is waiting on you.';
+  const waiting = b.waiting.length ? b.waiting.map(renderCard).join('\n') : `<div class="empty">${nothingWaiting}</div>`;
   const claude = b.onClaude.length ? b.onClaude.map((c) => claudeRow(c, now)).join('\n') : '<div class="empty">Nothing in progress.</div>';
   const quiet = b.quiet.length ? b.quiet.map((c) => quietRow(c, now)).join('\n') : '<div class="empty">Nothing quiet.</div>';
 

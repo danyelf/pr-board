@@ -53,6 +53,22 @@ describe('renderBoard', () => {
     expect(await page([], ["Couldn't read danyelf/broken"])).toContain("Couldn&#39;t read danyelf/broken");
   });
 
+  it('says nothing is waiting only when GitHub was read in full', () => {
+    expect(renderBoard(buildBoard([], [], NOW))).toContain('Nothing is waiting on you.');
+  });
+
+  it('never says nothing is waiting when GitHub could not be read in full', () => {
+    const html = renderBoard(buildBoard([], ['GitHub said 401 Unauthorized'], NOW));
+    expect(html).not.toContain('Nothing is waiting on you');
+    expect(html).toContain("Couldn&#39;t read everything from GitHub, so this list may be incomplete.");
+  });
+
+  it('says when a status section is there but could not be read', async () => {
+    const body = '<!-- status -->\n**Waiting on:** Danyel, since yesterday afternoon\n<!-- /status -->';
+    const html = await page([facts({ number: 907, labels: ['on danyel'], body, lastActivityAt: '2026-11-05T23:00:00Z' })]);
+    expect(html).toContain("The status section couldn&#39;t be read");
+  });
+
   it('lists quiet items with a reason', async () => {
     const html = await page([
       facts({ number: 903, labels: ['parked'], lastActivityAt: '2026-11-05T23:00:00Z' }),
