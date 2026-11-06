@@ -1,0 +1,3 @@
+{"type":"user","timestamp":"2026-11-05T10:00:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"user","content":"comment on 574"}}
+{"type":"assistant","timestamp":"2026-11-05T10:01:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"gh pr comment 574 --body x"}}]}}
+{"type":"user","isMeta":true,"timestamp":"2026-11-05T10:02:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /x\nInjected skill body"}]}}
