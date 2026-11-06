@@ -19,6 +19,14 @@ describe('renderBoard', () => {
     expect(html).toContain('search for a word, open the search panel, pin a verse');
   });
 
+  it("shows the status's Ask as one line under the title", async () => {
+    const body = renderStatus(status({ waitingOn: 'Danyel', ask: 'Pick a <colour> for the button' }));
+    const html = await page([facts({ number: 960, labels: ['on danyel'], body, lastActivityAt: '2026-11-05T23:00:00Z' })]);
+    const card = html.slice(html.indexOf('PR #960'));
+    expect(card).toContain('<div class="ask">Pick a &lt;colour&gt; for the button</div>');
+    expect(card.indexOf('class="ask"')).toBeLessThan(card.indexOf('class="steps"'));
+  });
+
   it('says so when no status has been written', async () => {
     expect(await page([facts({ number: 900, labels: ['on danyel'],lastActivityAt: '2026-11-05T23:00:00Z' })])).toContain('No status written yet');
   });

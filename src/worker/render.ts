@@ -26,6 +26,7 @@ const CSS = `
   .ready .why { background:#e4f3e8; color:#245e36; }
   .sync { font-size:12px; font-weight:600; padding:2px 8px; border-radius:20px; background:#fbece7; color:#8a3a26; white-space:nowrap; }
   .age { color:var(--mute); font-size:12px; }
+  .ask { font-size:13px; color:#3b3a37; margin-top:4px; overflow-wrap:anywhere; }
   .steps { display:flex; gap:3px; margin:9px 0 4px; }
   .steps span { flex:1; min-width:0; font-size:11px; text-align:center; padding:4px 2px; border-radius:4px; background:#efede7; color:#9a978e; line-height:1.2; }
   .steps span small { display:block; font-size:10px; opacity:.85; overflow-wrap:anywhere; }
@@ -141,6 +142,7 @@ function renderCard(c: Card): string {
   return `<div class="card${merge.state === 'ready' ? ' ready' : ''}">
     <div class="row"><div>${ref(f)}${esc(f.title)}</div>
       <div class="tags">${c.waited ? `<span class="age">waiting ${esc(c.waited)}</span>` : ''}${c.why ? `<span class="why">${esc(c.why)}</span>` : ''}${c.outOfSync ? '<span class="sync">label out of sync</span>' : ''}${c.statusStale ? `<span class="sync">${STALE_STATUS}</span>` : ''}</div></div>
+    ${c.status?.ask ? `<div class="ask">${esc(c.status.ask)}</div>` : ''}
     <div class="steps">${strip}</div>
     ${links.length ? `<div class="links">${links.join('')}</div>` : ''}
     ${parts.join('\n    ')}

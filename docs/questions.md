@@ -37,6 +37,6 @@ Nothing below has been run. Each needs your OK. They are in the order to do them
 
 ## Design questions the build turned up
 
-9. **Should cards show the "Ask" line?** (**yes, one line under the title** | leave out) Each status section has an `Ask:` line ("look at the preview, and answer one question"). The plan didn't list it among card contents, so cards don't show it: they show the why-tag, stage strip, test protocol and questions. I'd add it as one line under the title. Your call.
+9. **Should cards show the "Ask" line?** Answered: yes. Cards show the status section's `Ask:` line as one line under the title.
 
 10. **Some commits still ask for your approval.** Claude Code's own check (logged as `hook:tool.check`, not one of your hooks; I tested each) prompts on some `git commit` calls even in auto mode with `Bash(git commit:*)` allowed. It isn't the `cd` chains (fixed), line breaks, or the working folder. Next time one appears, the wording of the prompt should name the check.
