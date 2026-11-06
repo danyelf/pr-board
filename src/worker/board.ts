@@ -36,17 +36,25 @@ function statusOf(f: ItemFacts): Status | null {
   return parseStatus(f.kind === 'pr' ? f.body : f.statusCommentBody ?? '');
 }
 
-function makeCard(f: ItemFacts, now: Date): Card {
+/** An issue hidden behind an open PR, whose labels or status say it is waiting on Danyel. */
+interface HiddenWait { issue: number; since: string | null }
+
+function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card {
   const status = statusOf(f);
   const effective = effectiveTurn(f.labels, status);
-  const since = waitingSince(f, status);
+  const own = waitingSince(f, status);
+  const why = whyTag(f, status, now);
+  // The PR stands in for an issue that is waiting on Danyel, so the PR waits too. Unless the PR
+  // already says so itself, its labels are out of step with that.
+  const carried = hidden !== undefined && effective.turn !== 'danyel';
+  const since = carried ? own ?? hidden.since : own;
   return {
     facts: f,
     status,
-    turn: effective.turn,
-    outOfSync: effective.outOfSync,
+    turn: carried ? 'danyel' : effective.turn,
+    outOfSync: carried || effective.outOfSync,
     strip: stageStrip(f, status, now),
-    why: whyTag(f, status, now),
+    why: carried && !why ? `Issue #${hidden.issue} is waiting on you` : why,
     waitingSince: since,
     waited: since ? formatWait(since, now) : '',
     toTest: status?.toTest ?? extractToTest(f.body),
@@ -59,12 +67,29 @@ function time(iso: string): number {
 
 export function buildBoard(items: ItemFacts[], errors: string[], now: Date): Board {
   const open = items.filter(isOpen);
-  // An issue stands in only until its PR exists, whether that PR is still open or already merged.
-  const standsInFor = new Set(
-    items.filter((f) => f.kind === 'pr' && f.linkedIssue !== null && (f.merged || f.closedAt === null)).map((f) => `${f.repo}#${f.linkedIssue}`),
-  );
-  const hasPr = (f: ItemFacts) => f.kind === 'issue' && standsInFor.has(`${f.repo}#${f.number}`);
-  const cards = open.filter((f) => !hasPr(f)).map((f) => makeCard(f, now));
+  const key = (repo: string, n: number) => `${repo}#${n}`;
+  // An issue stands in only until an open PR takes over from it. Once that PR is merged or closed,
+  // an issue that is still open (say, one with more parts to do) comes back on its own.
+  const openPrsFor = new Map<string, ItemFacts[]>();
+  for (const f of open) {
+    if (f.kind !== 'pr' || f.linkedIssue === null) continue;
+    const k = key(f.repo, f.linkedIssue);
+    openPrsFor.set(k, [...(openPrsFor.get(k) ?? []), f]);
+  }
+  const hasPr = (f: ItemFacts) => f.kind === 'issue' && openPrsFor.has(key(f.repo, f.number));
+
+  // A hidden issue that is waiting on Danyel must not take that signal with it.
+  const hiddenWaits = new Map<string, HiddenWait>();
+  for (const issue of open) {
+    if (!hasPr(issue)) continue;
+    const status = statusOf(issue);
+    if (effectiveTurn(issue.labels, status).turn !== 'danyel') continue;
+    for (const pr of openPrsFor.get(key(issue.repo, issue.number))!) {
+      hiddenWaits.set(key(pr.repo, pr.number), { issue: issue.number, since: waitingSince(issue, status) });
+    }
+  }
+
+  const cards = open.filter((f) => !hasPr(f)).map((f) => makeCard(f, now, hiddenWaits.get(key(f.repo, f.number))));
 
   const waiting: Card[] = [];
   const onClaude: Card[] = [];
@@ -89,5 +114,7 @@ export function buildBoard(items: ItemFacts[], errors: string[], now: Date): Boa
 
   const timelineItems = items.filter((f) => !hasPr(f));
 
-  return { waiting, onClaude, quiet, timeline: buildTimeline(timelineItems, now), errors, generatedAt: now.toISOString() };
+  const alsoWaiting = new Map([...hiddenWaits].map(([k, w]) => [k, w.since]));
+
+  return { waiting, onClaude, quiet, timeline: buildTimeline(timelineItems, now, 7, alsoWaiting), errors, generatedAt: now.toISOString() };
 }

@@ -37,7 +37,11 @@ function statusOf(f: ItemFacts) {
   return parseStatus(f.kind === 'pr' ? f.body : f.statusCommentBody ?? '');
 }
 
-function rawSegments(f: ItemFacts, now: number): RawSegment[] {
+/**
+ * `alsoWaiting` is set when the item counts as waiting on Danyel for a reason its own labels and
+ * status don't show (an issue it stands in for is waiting); the value is when that wait started, if known.
+ */
+function rawSegments(f: ItemFacts, now: number, alsoWaiting?: string | null): RawSegment[] {
   const created = ms(f.createdAt);
   const end = itemEnd(f, now);
   if (f.merged && f.mergedAt && end - created < QUICK_MERGE) {
@@ -64,8 +68,10 @@ function rawSegments(f: ItemFacts, now: number): RawSegment[] {
     if (on.has('on danyel')) {
       const last = segs[segs.length - 1];
       if (ready && last?.kind === 'waiting') last.kind = 'ready';
-    } else if (effectiveTurn(f.labels, s).turn === 'danyel') {
-      const from = Math.min(Math.max(ms(s?.since ?? f.lastActivityAt), created), end);
+    } else if (effectiveTurn(f.labels, s).turn === 'danyel' || alsoWaiting !== undefined) {
+      const ownTurn = effectiveTurn(f.labels, s).turn === 'danyel';
+      const since = ownTurn ? s?.since ?? f.lastActivityAt : alsoWaiting ?? f.lastActivityAt;
+      const from = Math.min(Math.max(ms(since), created), end);
       const kept: RawSegment[] = [];
       for (const seg of segs) {
         if (seg.start >= from) continue;
@@ -125,7 +131,11 @@ function localMidnights(start: number, end: number): number[] {
   return out.sort((a, b) => a - b);
 }
 
-export function buildTimeline(items: ItemFacts[], now: Date, days = 7): Timeline {
+/**
+ * `alsoWaiting` names items (as "owner/repo#N") that count as waiting on Danyel although their own
+ * labels and status don't say so, with when that wait started if known.
+ */
+export function buildTimeline(items: ItemFacts[], now: Date, days = 7, alsoWaiting: Map<string, string | null> = new Map()): Timeline {
   const nowMs = now.getTime();
   const start = nowMs - days * DAY;
 
@@ -168,7 +178,8 @@ export function buildTimeline(items: ItemFacts[], now: Date, days = 7): Timeline
 
   const lanes: Lane[] = inWindow.map((f) => {
     const segments: Segment[] = [];
-    for (const raw of rawSegments(f, nowMs)) {
+    const key = `${f.repo}#${f.number}`;
+    for (const raw of rawSegments(f, nowMs, alsoWaiting.has(key) ? alsoWaiting.get(key)! : undefined)) {
       const s = laterOf(raw.start, start);
       const e = Math.min(raw.end, nowMs);
       if (e <= s) continue;

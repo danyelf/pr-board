@@ -31,16 +31,64 @@ describe('buildBoard', () => {
     expect(all.find((c) => c.facts.number === 563)).toBeUndefined();
   });
 
-  it('gives an issue no timeline lane once its PR exists, open or merged', async () => {
-    const board = buildBoard(await boardItems(), [], NOW);
-    expect(board.timeline.lanes.some((l) => l.label.startsWith('#563 '))).toBe(false);
-    expect(board.timeline.lanes.some((l) => l.label.startsWith('#564 '))).toBe(true);
-
+  it('gives an issue no timeline lane while an open PR stands for it', () => {
     const issue = facts({ number: 10, kind: 'issue', labels: ['in-progress'], lastActivityAt: '2026-11-05T20:00:00Z' });
+    const pr = facts({ number: 11, linkedIssue: 10, labels: ['in-progress'], createdAt: '2026-11-05T10:00:00Z', lastActivityAt: '2026-11-05T21:00:00Z' });
+    const board = buildBoard([issue, pr], [], NOW);
+    expect(board.timeline.lanes.map((l) => l.label.split(' ')[0])).toEqual(['#11']);
+    expect(board.onClaude.map((c) => c.facts.number)).toEqual([11]);
+  });
+
+  it('keeps an open issue waiting on Danyel when the PR that refers to it has merged', () => {
+    const issue = facts({ number: 10, kind: 'issue', labels: ['on danyel'], createdAt: '2026-11-05T09:00:00Z', lastActivityAt: '2026-11-05T20:00:00Z' });
     const pr = facts({ number: 11, linkedIssue: 10, merged: true, mergedAt: '2026-11-05T21:00:00Z', closedAt: '2026-11-05T21:00:00Z', createdAt: '2026-11-05T10:00:00Z' });
-    const merged = buildBoard([issue, pr], [], NOW);
-    expect(merged.timeline.lanes.map((l) => l.label.split(' ')[0])).toEqual(['#11']);
-    expect(merged.onClaude).toEqual([]);
+    const board = buildBoard([issue, pr], [], NOW);
+    expect(board.waiting.map((c) => c.facts.number)).toEqual([10]);
+    expect(board.timeline.lanes.map((l) => l.label.split(' ')[0]).sort()).toEqual(['#10', '#11']);
+  });
+
+  it("carries a hidden issue's wait onto its open PR, flagged out of sync", () => {
+    const issue = facts({
+      number: 10, kind: 'issue', labels: ['on danyel'], lastActivityAt: '2026-11-05T20:00:00Z',
+      labelEvents: [{ label: 'on danyel', action: 'added', at: '2026-11-05T12:00:00Z' }],
+    });
+    const pr = facts({ number: 11, linkedIssue: 10, labels: ['in-progress'], createdAt: '2026-11-05T10:00:00Z', lastActivityAt: '2026-11-05T21:00:00Z' });
+    const board = buildBoard([issue, pr], [], NOW);
+    expect(board.waiting.map((c) => c.facts.number)).toEqual([11]);
+    const card = board.waiting[0]!;
+    expect(card.turn).toBe('danyel');
+    expect(card.outOfSync).toBe(true);
+    expect(card.waitingSince).toBe('2026-11-05T12:00:00Z');
+    expect(card.why).toBe('Issue #10 is waiting on you');
+    expect([...board.onClaude, ...board.quiet]).toEqual([]);
+
+    const lane = board.timeline.lanes.find((l) => l.label.startsWith('#11 '))!;
+    expect(lane.segments[lane.segments.length - 1]!.kind).toBe('waiting');
+  });
+
+  it("carries an issue's wait when only its status comment says so", () => {
+    const issue = facts({
+      number: 10, kind: 'issue', labels: [], lastActivityAt: '2026-11-05T20:00:00Z',
+      statusCommentBody: renderStatus(status({ waitingOn: 'Danyel', since: '2026-11-05T13:00:00Z' })),
+    });
+    const pr = facts({ number: 11, linkedIssue: 10, createdAt: '2026-11-05T10:00:00Z', lastActivityAt: '2026-11-05T21:00:00Z' });
+    const board = buildBoard([issue, pr], [], NOW);
+    expect(board.waiting.map((c) => c.facts.number)).toEqual([11]);
+    expect(board.waiting[0]!.outOfSync).toBe(true);
+  });
+
+  it('does not flag the PR when it already says it is waiting on Danyel', () => {
+    const issue = facts({ number: 10, kind: 'issue', labels: ['on danyel'], lastActivityAt: '2026-11-05T20:00:00Z' });
+    const pr = facts({
+      number: 11, linkedIssue: 10, labels: ['on danyel'], createdAt: '2026-11-05T10:00:00Z', lastActivityAt: '2026-11-05T21:00:00Z',
+      labelEvents: [{ label: 'on danyel', action: 'added', at: '2026-11-05T15:00:00Z' }],
+    });
+    const board = buildBoard([issue, pr], [], NOW);
+    const card = board.waiting[0]!;
+    expect(card.facts.number).toBe(11);
+    expect(card.outOfSync).toBe(false);
+    expect(card.waitingSince).toBe('2026-11-05T15:00:00Z');
+    expect(card.why).toBe('Only your look is left');
   });
 
   it('keeps merged items off the cards', async () => {
