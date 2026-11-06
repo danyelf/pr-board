@@ -90,7 +90,7 @@ describe('buildTimeline', () => {
   it('handles no items', () => {
     const t = buildTimeline([], new Date(NOW));
     expect(t.lanes).toEqual([]);
-    expect(t.openCount.length).toBeGreaterThanOrEqual(0);
+    expect(t.openCount.every((o) => o.n === 0)).toBe(true);
   });
 
   it('shows a PR with steady commits and no labels as one unlabelled bar with no cuts', () => {
@@ -128,5 +128,31 @@ describe('buildTimeline', () => {
     const t = buildTimeline([quick, old], new Date(NOW), 1);
     expect(t.lanes).toHaveLength(1);
     expect(t.lanes[0].segments.map((s) => s.kind)).toEqual(['merged']);
+  });
+
+  it('counts still-open items at the final sample and drops merged ones after they merge', () => {
+    const open = facts({ number: 1, createdAt: iso(NOW - 10 * H), activityTimes: [iso(NOW - 10 * H), iso(NOW - 5 * H)] });
+    const merged = facts({
+      number: 2, merged: true, createdAt: iso(NOW - 20 * H), mergedAt: iso(NOW - 8 * H), closedAt: iso(NOW - 8 * H),
+      activityTimes: [iso(NOW - 20 * H), iso(NOW - 8 * H)],
+    });
+    const t = buildTimeline([open, merged], new Date(NOW), 1);
+    // instants: window start, -20h, -10h, -8h, -5h, now
+    expect(t.openCount.map((o) => o.n)).toEqual([0, 1, 2, 1, 1, 1]);
+    expect(t.openCount[t.openCount.length - 1].at).toBe(1);
+  });
+
+  it('reports the full real length of a bar that began before the window', () => {
+    const start = NOW - 3 * 24 * H;
+    const waitFrom = NOW - 5 * 24 * H;
+    const item = facts({
+      createdAt: iso(waitFrom - H),
+      labels: ['on danyel'],
+      labelEvents: [{ label: 'on danyel', action: 'added', at: iso(waitFrom) }],
+      activityTimes: [iso(waitFrom), ...dense(start, start + 12 * H), ...dense(NOW - 12 * H, NOW)],
+    });
+    const t = buildTimeline([item], new Date(NOW), 3);
+    expect(t.cuts).toHaveLength(1);
+    expect(t.lanes[0].segments[0].trueLength).toBe('waited 5 d 0 h');
   });
 });
