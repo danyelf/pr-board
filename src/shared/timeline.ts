@@ -167,7 +167,7 @@ export function buildTimeline(items: ItemFacts[], now: Date, days = 7): Timeline
       const seg: Segment = { kind: raw.kind, start: pos(s), end: pos(e) };
       const crossesCut = cutSpans.some((c) => s < c.end && e > c.start);
       if (crossesCut && e - s >= DAY) {
-        const length = formatWait(new Date(s).toISOString(), new Date(e));
+        const length = formatWait(new Date(raw.start).toISOString(), new Date(raw.end));
         seg.trueLength = raw.kind === 'waiting' ? `waited ${length}` : length;
       }
       segments.push(seg);
@@ -187,7 +187,10 @@ export function buildTimeline(items: ItemFacts[], now: Date, days = 7): Timeline
 
   const openCount = sorted.map((t) => ({
     at: pos(t),
-    n: inWindow.filter((f) => ms(f.createdAt) <= t && t < itemEnd(f, nowMs)).length,
+    n: inWindow.filter((f) => {
+      const ended = f.mergedAt ?? f.closedAt;
+      return ms(f.createdAt) <= t && (ended === null || ms(ended) > t);
+    }).length,
   }));
 
   return { lanes, cuts, ticks, openCount };
