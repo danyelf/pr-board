@@ -12,6 +12,10 @@ interface World {
   comments: { id: number; body: string; user: { login: string } }[];
   labels: Set<string>;      // labels on the item
   repoLabels: Set<string>;  // labels that exist in the repo
+  author: string;           // who opened the item
+  ownerType: 'User' | 'Organization';
+  reviewers: string[];      // review requests made
+  reviewFails?: boolean;
 }
 
 function fakeGh(world: World) {
@@ -20,7 +24,13 @@ function fakeGh(world: World) {
     calls.push(args);
     const line = args.join(' ');
     if (line === 'api repos/acme/x/issues/5') {
-      return JSON.stringify({ body: world.body, ...(world.kind === 'pr' ? { pull_request: {} } : {}) });
+      return JSON.stringify({ body: world.body, user: { login: world.author }, ...(world.kind === 'pr' ? { pull_request: {} } : {}) });
+    }
+    if (line === 'api repos/acme/x -q .owner.type') return `${world.ownerType}\n`;
+    if (line.startsWith('api -X POST repos/acme/x/pulls/5/requested_reviewers')) {
+      if (world.reviewFails) throw new Error('gh: Reviews may only be requested from collaborators (HTTP 422)');
+      world.reviewers.push(args[args.length - 1]!.replace('reviewers[]=', ''));
+      return '{}';
     }
     if (line.startsWith('api -X PATCH repos/acme/x/pulls/5')) {
       world.body = args[args.length - 1]!.replace(/^body=/, '');
@@ -59,7 +69,10 @@ function fakeGh(world: World) {
 }
 
 function world(over: Partial<World> = {}): World {
-  return { kind: 'pr', body: 'Old description\n', comments: [], labels: new Set(), repoLabels: new Set(['on danyel', 'parked']), ...over };
+  return {
+    kind: 'pr', body: 'Old description\n', comments: [], labels: new Set(), repoLabels: new Set(['on danyel', 'parked']),
+    author: 'robot', ownerType: 'User', reviewers: [], ...over,
+  };
 }
 
 async function run(w: World, argv: string[], at = '2026-11-05T10:00:00.000Z') {
@@ -201,6 +214,59 @@ describe('pr-status set', () => {
     const w = world({ labels: new Set(['on danyel']) });
     await run(w, ['set', 'acme/x#5', '--waiting', 'nobody', '--ask', 'x']);
     expect([...w.labels]).toEqual(['parked']);
+  });
+});
+
+describe('pr-status set asks the repo owner to review', () => {
+  it('when a PR becomes waiting on Danyel', async () => {
+    const w = world();
+    const r = await run(w, SET);
+    expect(r.code).toBe(0);
+    expect(w.reviewers).toEqual(['acme']);
+  });
+
+  it('not again while it stays waiting on Danyel, but again when it comes back', async () => {
+    const w = world();
+    await run(w, SET);
+    await run(w, SET);
+    expect(w.reviewers).toEqual(['acme']);
+    await run(w, ['set', 'acme/x#5', '--waiting', 'claude', '--ask', 'x']);
+    await run(w, SET);
+    expect(w.reviewers).toEqual(['acme', 'acme']);
+  });
+
+  it('not for an issue, or when the turn goes to Claude or nobody', async () => {
+    const issue = world({ kind: 'issue' });
+    await run(issue, SET);
+    expect(issue.reviewers).toEqual([]);
+    for (const waiting of ['claude', 'nobody']) {
+      const w = world();
+      await run(w, ['set', 'acme/x#5', '--waiting', waiting, '--ask', 'x']);
+      expect(w.reviewers).toEqual([]);
+    }
+  });
+
+  it('not when the owner opened the PR', async () => {
+    const w = world({ author: 'acme' });
+    const r = await run(w, SET);
+    expect(r.code).toBe(0);
+    expect(w.reviewers).toEqual([]);
+  });
+
+  it('not when the repo belongs to an organization, and says so', async () => {
+    const w = world({ ownerType: 'Organization' });
+    const r = await run(w, SET);
+    expect(r.code).toBe(0);
+    expect(w.reviewers).toEqual([]);
+    expect(r.errors).toEqual(["Didn't ask for a review: acme/x belongs to an organization, not a person"]);
+  });
+
+  it('writes the status, then exits 1 saying why when the request fails', async () => {
+    const w = world({ reviewFails: true });
+    const r = await run(w, SET);
+    expect(r.code).toBe(1);
+    expect(patches(r.calls)).toHaveLength(1);
+    expect(r.errors[0]).toMatch(/^Couldn't ask acme to review acme\/x#5: .*HTTP 422/);
   });
 });
 
