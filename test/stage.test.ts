@@ -16,26 +16,26 @@ const pr573 = () => facts({
 describe('stage strip', () => {
   it('always has the six stages in order', () => {
     expect(stageStrip(facts(), null, now).map((b) => b.name)).toEqual(
-      ['Issue', 'Design', 'Build', 'Claude review', 'Your look', 'Merge']);
+      ['Issue', 'Design', 'Build', 'Your look', 'Prep', 'Ready for merge']);
   });
 
   it('shows 573 as waiting on a look, with a rebase needed', () => {
     const f = pr573();
     const s = status({}, 0);
-    expect(states(f, s)).toEqual(['done', 'done', 'done', 'done', 'now', 'todo']);
+    expect(states(f, s)).toEqual(['done', 'done', 'done', 'now', 'todo', 'todo']);
     expect(box(f, s, 'Issue').note).toBe('#569');
     expect(box(f, s, 'Design').note).toBe('✓');
-    expect(box(f, s, 'Claude review').note).toBe('✓ 1 commit since');
-    expect(box(f, s, 'Your look').note).toBe('1 d 3 h');
-    expect(box(f, s, 'Merge').note).toBe('rebase first');
-    expect(whyTag(f, s, now)).toBe('Only your look is left');
+    expect(box(f, s, 'Build').note).toBe('✓ reviewed, 1 commit since');
+    expect(box(f, s, 'Your look').note).toBe('');
+    expect(box(f, s, 'Ready for merge').note).toBe('rebase first');
+    expect(whyTag(f, s, now)).toBe('Needs your look');
   });
 
   it('shows 574 stacked on an open PR with two questions', () => {
     const f = facts({ number: 574, stackedOn: 573, stackedOnOpen: true, labels: ['on danyel'], linkedIssue: 570 });
     const s = status({}, 2);
     expect(box(f, s, 'Your look').note).toBe('2 questions');
-    expect(box(f, s, 'Merge')).toEqual({ name: 'Merge', state: 'todo', note: 'after #573' });
+    expect(box(f, s, 'Ready for merge')).toEqual({ name: 'Ready for merge', state: 'todo', note: 'after #573' });
     expect(whyTag(f, s, now)).toBe('2 decisions + your look');
   });
 
@@ -56,34 +56,42 @@ describe('stage strip', () => {
       expect(whyTag(f(), status(), now)).toBe('Ready to merge');
     });
     it('is blocked by failing checks', () => {
-      expect(box(f({ mergeState: 'UNSTABLE' }), status(), 'Merge')).toMatchObject({ state: 'blocked', note: 'checks failing' });
+      expect(box(f({ mergeState: 'UNSTABLE' }), status(), 'Ready for merge')).toMatchObject({ state: 'blocked', note: 'checks failing' });
       expect(whyTag(f({ mergeState: 'UNSTABLE' }), status(), now)).toBe("Can't merge yet: checks failing");
     });
     it('is blocked by being a draft', () => {
-      expect(box(f({ isDraft: true }), status(), 'Merge')).toMatchObject({ state: 'blocked', note: 'draft' });
+      expect(box(f({ isDraft: true }), status(), 'Ready for merge')).toMatchObject({ state: 'blocked', note: 'draft' });
     });
     it('names the other blockers', () => {
-      expect(box(f({ stackedOn: 1, stackedOnOpen: true }), status(), 'Merge').note).toBe('after #1');
-      expect(box(f({ mergeState: 'DIRTY' }), status(), 'Merge').note).toBe('conflicts');
-      expect(box(f({ mergeState: 'BLOCKED' }), status(), 'Merge').note).toBe('checks failing');
-      expect(box(f({ mergeState: 'BEHIND' }), status(), 'Merge').note).toBe('rebase first');
-      expect(box(f({ behindBase: true }), status(), 'Merge').note).toBe('rebase first');
-      expect(box(f({ commitsSincePrep: 2 }), status(), 'Merge').note).toBe('commits since prep');
-      expect(box(f({ mergeState: 'UNKNOWN' }), status(), 'Merge').note).toBe('GitHub still checking');
+      expect(box(f({ stackedOn: 1, stackedOnOpen: true }), status(), 'Ready for merge').note).toBe('after #1');
+      expect(box(f({ mergeState: 'DIRTY' }), status(), 'Ready for merge').note).toBe('conflicts');
+      expect(box(f({ mergeState: 'BLOCKED' }), status(), 'Ready for merge').note).toBe('checks failing');
+      expect(box(f({ mergeState: 'BEHIND' }), status(), 'Ready for merge').note).toBe('rebase first');
+      expect(box(f({ behindBase: true }), status(), 'Ready for merge').note).toBe('rebase first');
+      expect(box(f({ commitsSincePrep: 2 }), status(), 'Ready for merge').note).toBe('commits since prep');
+      expect(box(f({ mergeState: 'UNKNOWN' }), status(), 'Ready for merge').note).toBe('GitHub still checking');
     });
   });
 
-  it('counts commits since prep instead of since review once prep is done', () => {
-    const f = facts({ reviewSha: 'x', commitsSinceReview: 5, prepDone: true, commitsSincePrep: 2 });
-    expect(box(f, null, 'Claude review').note).toBe('✓ 2 commits since');
-    expect(box(facts({ prepDone: true, commitsSincePrep: 0 }), null, 'Claude review').note).toBe('✓ prep done');
-    expect(box(facts({ reviewSha: 'x', commitsSinceReview: 0 }), null, 'Claude review').note).toBe('✓');
-    expect(box(facts(), null, 'Claude review').state).toBe('todo');
+  it('shows an early code review as a note on Build', () => {
+    expect(box(facts({ reviewSha: 'x', commitsSinceReview: 0 }), null, 'Build').note).toBe('✓ reviewed');
+    expect(box(facts({ reviewSha: 'x', commitsSinceReview: 2 }), null, 'Build').note).toBe('✓ reviewed, 2 commits since');
+    expect(box(facts(), null, 'Build').note).toBe('✓');
+  });
+
+  it('marks Prep done once prep for merge has run, counting commits since', () => {
+    expect(box(facts({ prepDone: true, commitsSincePrep: 0 }), null, 'Prep')).toMatchObject({ state: 'done', note: '✓' });
+    expect(box(facts({ prepDone: true, commitsSincePrep: 2 }), null, 'Prep').note).toBe('✓ 2 commits since');
+    expect(box(facts({ reviewSha: 'x' }), null, 'Prep').state).toBe('todo');
+  });
+
+  it('puts your look before prep: a PR waiting on Danyel with no prep yet', () => {
+    expect(states(facts({ labels: ['on danyel'] }), status({}, 0))).toEqual(['todo', 'todo', 'done', 'now', 'todo', 'todo']);
   });
 
   it('shows an issue with no PR waiting on Danyel at Design', () => {
     const f = facts({ kind: 'issue', number: 569, labels: ['on danyel'] });
-    expect(states(f, null)).toEqual(['done', 'now', 'todo', 'todo', 'now', 'todo']);
+    expect(states(f, null)).toEqual(['done', 'now', 'todo', 'now', 'todo', 'todo']);
     expect(box(f, null, 'Issue').note).toBe('#569');
   });
 
@@ -96,7 +104,7 @@ describe('stage strip', () => {
   it('marks everything done on a merged PR', () => {
     const f = facts({ merged: true, reviewSha: 'x' });
     const s = states(f, null);
-    expect(s[4]).toBe('done');
+    expect(s[3]).toBe('done');
     expect(s[5]).toBe('done');
   });
 

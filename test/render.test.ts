@@ -13,7 +13,7 @@ describe('renderBoard', () => {
   it('shows each waiting card with its number, why tag, preview and test protocol', async () => {
     const html = await page();
     expect(html).toContain('#573');
-    expect(html).toContain('Only your look is left');
+    expect(html).toContain('Needs your look');
     expect(html).toContain('panels-unchanged-torahmap.danyel.workers.dev');
     expect(html).toContain('search for a word, open the search panel, pin a verse');
   });

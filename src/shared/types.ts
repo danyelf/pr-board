@@ -24,4 +24,4 @@ export interface ItemFacts {
   lastActivityAt: string;
 }
 export type BoxState = 'done' | 'now' | 'ready' | 'blocked' | 'todo';
-export interface StageBox { name: 'Issue' | 'Design' | 'Build' | 'Claude review' | 'Your look' | 'Merge'; state: BoxState; note: string }
+export interface StageBox { name: 'Issue' | 'Design' | 'Build' | 'Your look' | 'Prep' | 'Ready for merge'; state: BoxState; note: string }

@@ -83,7 +83,7 @@ describe('buildBoard', () => {
     expect(card.facts.number).toBe(11);
     expect(card.outOfSync).toBe(false);
     expect(card.waitingSince).toBe('2026-11-05T15:00:00Z');
-    expect(card.why).toBe('Only your look is left');
+    expect(card.why).toBe('Needs your look');
   });
 
   it('keeps merged items off the cards', async () => {
