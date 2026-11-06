@@ -96,6 +96,14 @@ const LA = { timeZone: 'America/Los_Angeles' } as const;
 const dateParts = new Intl.DateTimeFormat('en-US', { ...LA, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' });
 const weekday = new Intl.DateTimeFormat('en-US', { ...LA, weekday: 'short' });
 
+const clock = new Intl.DateTimeFormat('en-US', { ...LA, weekday: 'short', hour: 'numeric', minute: 'numeric', hour12: true });
+
+function clockLabel(t: number): string {
+  const p = Object.fromEntries(clock.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+  const minutes = p.minute === '00' ? '' : `:${p.minute}`;
+  return `${p.weekday} ${p.hour}${minutes} ${String(p.dayPeriod).toLowerCase()}`;
+}
+
 function localParts(t: number): { y: number; m: number; d: number; h: number; min: number } {
   const p = Object.fromEntries(dateParts.formatToParts(new Date(t)).map((x) => [x.type, Number(x.value)]));
   return { y: p.year, m: p.month, d: p.day, h: p.hour, min: p.minute };
@@ -181,9 +189,13 @@ export function buildTimeline(items: ItemFacts[], now: Date, days = 7): Timeline
     length: formatWait(new Date(c.start).toISOString(), new Date(c.end)),
   }));
 
-  const ticks: Tick[] = localMidnights(start, nowMs)
+  // Reference ticks: the window start and where every cut ends, so the axis always says what time it is.
+  const anchors: Tick[] = [start, ...cutSpans.map((c) => c.end)].map((t) => ({ at: pos(t), text: clockLabel(t) }));
+  const midnights: Tick[] = localMidnights(start, nowMs)
     .filter((t) => !cutSpans.some((c) => t > c.start && t < c.end))
-    .map((t) => ({ at: pos(t), text: `${weekday.format(new Date(t))} 0:00` }));
+    .map((t) => ({ at: pos(t), text: `${weekday.format(new Date(t))} 0:00` }))
+    .filter((m) => !anchors.some((a) => Math.abs(a.at - m.at) < 0.04));
+  const ticks: Tick[] = [...anchors, ...midnights].sort((a, b) => a.at - b.at);
 
   const openCount = sorted.map((t) => ({
     at: pos(t),

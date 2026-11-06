@@ -31,6 +31,18 @@ describe('buildBoard', () => {
     expect(all.find((c) => c.facts.number === 563)).toBeUndefined();
   });
 
+  it('gives an issue no timeline lane once its PR exists, open or merged', async () => {
+    const board = buildBoard(await boardItems(), [], NOW);
+    expect(board.timeline.lanes.some((l) => l.label.startsWith('#563 '))).toBe(false);
+    expect(board.timeline.lanes.some((l) => l.label.startsWith('#564 '))).toBe(true);
+
+    const issue = facts({ number: 10, kind: 'issue', labels: ['in-progress'], lastActivityAt: '2026-11-05T20:00:00Z' });
+    const pr = facts({ number: 11, linkedIssue: 10, merged: true, mergedAt: '2026-11-05T21:00:00Z', closedAt: '2026-11-05T21:00:00Z', createdAt: '2026-11-05T10:00:00Z' });
+    const merged = buildBoard([issue, pr], [], NOW);
+    expect(merged.timeline.lanes.map((l) => l.label.split(' ')[0])).toEqual(['#11']);
+    expect(merged.onClaude).toEqual([]);
+  });
+
   it('keeps merged items off the cards', async () => {
     const board = buildBoard(await boardItems(), [], NOW);
     const all = [...board.waiting, ...board.onClaude, ...board.quiet];

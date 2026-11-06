@@ -18,6 +18,9 @@ describe('effectiveTurn', () => {
   it('flags a label that disagrees with the status', () => {
     expect(effectiveTurn(['on danyel'], status({ waitingOn: 'Claude' }))).toEqual({ turn: 'danyel', outOfSync: true });
   });
+  it('flags a status that says Danyel when there is no turn label at all', () => {
+    expect(effectiveTurn([], status({ waitingOn: 'Danyel' }))).toEqual({ turn: 'danyel', outOfSync: true });
+  });
   it('is in sync with no status', () => {
     expect(effectiveTurn(['on danyel'], null)).toEqual({ turn: 'danyel', outOfSync: false });
   });

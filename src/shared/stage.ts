@@ -1,6 +1,10 @@
 import type { BoxState, ItemFacts, StageBox, Status } from './types.ts';
 import { effectiveTurn, formatWait, isReadyToMerge, waitingSince } from './turn.ts';
 
+function count(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
+}
+
 function box(name: StageBox['name'], state: BoxState, note = ''): StageBox {
   return { name, state, note };
 }
@@ -46,7 +50,7 @@ export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date(
   const reviewed = f.reviewSha !== null || f.prepDone;
   const since = f.prepDone ? f.commitsSincePrep : f.commitsSinceReview;
   const review = !reviewed ? box('Claude review', 'todo')
-    : (since ?? 0) > 0 ? box('Claude review', 'done', `✓ ${since} commits since`)
+    : (since ?? 0) > 0 ? box('Claude review', 'done', `✓ ${count(since ?? 0, 'commit')} since`)
     : box('Claude review', 'done', f.prepDone ? '✓ prep done' : '✓');
 
   let look: StageBox;
@@ -54,7 +58,7 @@ export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date(
     look = box('Your look', 'done');
   } else if (turn === 'danyel') {
     const at = waitingSince(f, s);
-    look = box('Your look', 'now', questions > 0 ? `${questions} questions` : at ? formatWait(at, now) : '');
+    look = box('Your look', 'now', questions > 0 ? count(questions, 'question') : at ? formatWait(at, now) : '');
   } else {
     look = box('Your look', 'todo');
   }
@@ -70,7 +74,7 @@ export function whyTag(f: ItemFacts, s: Status | null, now: Date = new Date()): 
   const questions = s?.questions.length ?? 0;
   if (merge.state === 'ready') return 'Ready to merge';
   if (merge.state === 'blocked') return `Can't merge yet: ${merge.note}`;
-  if (questions > 0 && turn === 'danyel') return `${questions} decisions + your look`;
+  if (questions > 0 && turn === 'danyel') return `${count(questions, 'decision')} + your look`;
   if (look.state === 'now') return 'Only your look is left';
   if (turn === 'nobody') return 'Parked';
   return '';

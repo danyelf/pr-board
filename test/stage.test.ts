@@ -25,7 +25,7 @@ describe('stage strip', () => {
     expect(states(f, s)).toEqual(['done', 'done', 'done', 'done', 'now', 'todo']);
     expect(box(f, s, 'Issue').note).toBe('#569');
     expect(box(f, s, 'Design').note).toBe('✓');
-    expect(box(f, s, 'Claude review').note).toBe('✓ 1 commits since');
+    expect(box(f, s, 'Claude review').note).toBe('✓ 1 commit since');
     expect(box(f, s, 'Your look').note).toBe('1 d 3 h');
     expect(box(f, s, 'Merge').note).toBe('rebase first');
     expect(whyTag(f, s, now)).toBe('Only your look is left');
@@ -37,6 +37,13 @@ describe('stage strip', () => {
     expect(box(f, s, 'Your look').note).toBe('2 questions');
     expect(box(f, s, 'Merge')).toEqual({ name: 'Merge', state: 'todo', note: 'after #573' });
     expect(whyTag(f, s, now)).toBe('2 decisions + your look');
+  });
+
+  it('says one question and one decision in the singular', () => {
+    const f = facts({ number: 575, labels: ['on danyel'] });
+    const s = status({}, 1);
+    expect(box(f, s, 'Your look').note).toBe('1 question');
+    expect(whyTag(f, s, now)).toBe('1 decision + your look');
   });
 
   describe('578 after prep', () => {

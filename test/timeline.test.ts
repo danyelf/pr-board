@@ -87,6 +87,31 @@ describe('buildTimeline', () => {
     expect(at('Mon 0:00')).toBeCloseTo((mon - start) / total, 5);
   });
 
+  it('always ticks the window start and the far edge of each cut, in Pacific time', () => {
+    const start = NOW - 4 * 24 * H;
+    const quietStart = start + 18 * H;
+    const quietEnd = quietStart + 38 * H;
+    const item = facts({
+      createdAt: iso(start - H),
+      activityTimes: [...dense(start, quietStart), ...dense(quietEnd, NOW)],
+    });
+    const t = buildTimeline([item], new Date(NOW), 4);
+    // start is 2026-11-01T20:00Z, which is noon on Sunday in Pacific standard time
+    expect(t.ticks[0]).toEqual({ at: 0, text: 'Sun 12 pm' });
+    const edge = t.ticks.find((x) => x.at > 0 && x.text !== t.ticks[0].text && !x.text.endsWith('0:00'))!;
+    expect(edge.at).toBeCloseTo(t.cuts[0].at + t.cuts[0].width, 5);
+    expect(edge.text).toMatch(/^\w{3} \d{1,2}(:\d\d)? [ap]m$/);
+  });
+
+  it('drops a midnight tick within 0.04 of a reference tick', () => {
+    const start = Date.parse('2026-11-03T07:30:00Z'); // just after local midnight
+    const now = start + 2 * 24 * H;
+    const item = facts({ createdAt: iso(start), activityTimes: [iso(start), iso(start + 12 * H), iso(start + 24 * H), iso(now)] });
+    const t = buildTimeline([item], new Date(now), 2);
+    expect(t.ticks[0].at).toBe(0);
+    expect(t.ticks.filter((x) => x.at < 0.04)).toHaveLength(1);
+  });
+
   it('handles no items', () => {
     const t = buildTimeline([], new Date(NOW));
     expect(t.lanes).toEqual([]);
