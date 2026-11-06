@@ -1,0 +1,145 @@
+<style>
+  .pb { --bg:#fbfaf7; --ink:#1d1d1b; --mute:#6b6a65; --line:#e3e0d8; --wait:#e8a33a; --waitbg:#fdf3e1; --work:#4a7bd0; --done:#9aa59a; --ok:#3f9a5b;
+        background:var(--bg); color:var(--ink); font:14px/1.45 -apple-system, system-ui, sans-serif; padding:20px; border-radius:10px; }
+  .sec { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--mute); margin:22px 0 8px; }
+  .card { border:1px solid var(--line); border-left:5px solid var(--wait); background:#fff; border-radius:8px; padding:12px 14px; margin-bottom:10px; }
+  .card.ready { border-left-color:var(--ok); }
+  .row { display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  .num { font-weight:700; margin-right:6px; }
+  .why { font-size:12px; font-weight:600; padding:2px 8px; border-radius:20px; background:var(--waitbg); color:#8a5a10; white-space:nowrap; }
+  .ready .why { background:#e4f3e8; color:#245e36; }
+  .age { color:var(--mute); font-size:12px; }
+  .steps { display:flex; gap:3px; margin:9px 0 4px; }
+  .steps span { flex:1; font-size:11px; text-align:center; padding:4px 2px; border-radius:4px; background:#efede7; color:#9a978e; line-height:1.2; }
+  .steps span small { display:block; font-size:10px; opacity:.85; }
+  .steps .d { background:#dfe7f5; color:#3d5c95; }
+  .steps .now { background:var(--wait); color:#fff; font-weight:600; }
+  .ready .steps .now { background:var(--ok); }
+  .links { display:flex; gap:6px; margin:8px 0 0; flex-wrap:wrap; }
+  .links a { font-size:12px; padding:3px 9px; border:1px solid #cfccc3; border-radius:5px; background:#fff; color:#1d4f9c; }
+  .detail { font-size:12.5px; color:#3b3a37; margin-top:8px; }
+  .detail b { color:var(--ink); }
+  .q { margin:6px 0 0; padding:0; list-style:none; } .q li { margin-bottom:8px; }
+  .choices { display:flex; gap:6px; margin-top:4px; }
+  .btn { font-size:12px; padding:4px 10px; border:1px solid #cfccc3; border-radius:5px; background:#fff; }
+  .btn.p { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .actions { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; align-items:center; }
+  .reply { flex:1; min-width:200px; font-size:12px; padding:5px 8px; border:1px dashed #cfccc3; border-radius:5px; color:#9b998f; }
+  .quiet { display:flex; gap:10px; align-items:baseline; font-size:13px; padding:7px 12px; border:1px solid var(--line); border-radius:6px; background:#f6f5f1; margin-bottom:6px; }
+  .quiet .age { margin-left:auto; }
+  /* timelines */
+  .tlwrap { border:1px solid var(--line); border-radius:8px; background:#fff; padding:10px 12px 12px; margin-bottom:14px; }
+  .tlwrap h4 { margin:0 0 2px; font-size:13px; } .tlwrap p { margin:0 0 8px; font-size:12px; color:var(--mute); }
+  .tl { position:relative; margin-left:112px; }
+  .axis { position:relative; height:16px; font-size:10.5px; color:var(--mute); }
+  .axis span { position:absolute; top:0; white-space:nowrap; }
+  .fold { position:absolute; top:16px; bottom:0; background:repeating-linear-gradient(90deg,#f3f1ec 0 2px,#fff 2px 5px); border-left:1px dashed #d4d1c8; border-right:1px dashed #d4d1c8; }
+  .fold em { position:absolute; top:-15px; left:50%; transform:translateX(-50%); font-size:9.5px; color:#a3a097; font-style:normal; white-space:nowrap; }
+  .lane { position:relative; height:17px; margin:2px 0; }
+  .lane .lab { position:absolute; left:-112px; width:106px; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#45443f; }
+  .lane .bar { position:absolute; top:3px; height:11px; border-radius:3px; }
+  .lane.you { height:20px; border-bottom:1px solid var(--line); margin-bottom:5px; }
+  .lane.you .lab { font-weight:700; color:var(--ink); }
+  .lane.you .bar { top:3px; height:13px; background:var(--ink); border-radius:2px; }
+  .lane.you i { position:absolute; top:3px; width:2px; height:13px; background:var(--ink); }
+  .w { background:var(--work); } .wt { background:var(--wait); } .dn { background:var(--done); } .rd { background:var(--ok); }
+  .id { background:repeating-linear-gradient(45deg,#d8d5cc 0 4px,#ecebe5 4px 8px); }
+  .dot { position:absolute; top:2px; width:9px; height:9px; margin-left:-4.5px; border-radius:50%; background:#fff; border:2.5px solid var(--ink); box-sizing:content-box; width:4px; height:4px; top:3.5px; }
+  .legend { display:flex; gap:14px; font-size:11.5px; color:var(--mute); margin-top:10px; flex-wrap:wrap; }
+  .legend b { display:inline-block; width:12px; height:9px; border-radius:2px; margin-right:4px; vertical-align:middle; }
+</style>
+
+<h2>Third try: stage strip back, quiet list, and your activity on the timeline</h2>
+<p class="subtitle">The stage strip is back, but each box now lights up for what has actually happened, so "Claude reviewed, you haven't looked" shows clearly. Two versions of the timeline are below: A uses real clock time; B squeezes out the hours when you were away.</p>
+
+<div class="pb">
+
+  <div class="sec">Waiting on you</div>
+
+  <div class="card">
+    <div class="row"><div><span class="num">#573</span>Rebuild a tool panel on a link or a stop only when its tool changed</div><span class="why">Only your look is left</span></div>
+    <div class="steps"><span class="d">Issue<small>#569</small></span><span class="d">Design<small>✓</small></span><span class="d">Build<small>✓</small></span><span class="d">Claude review<small>✓ 3 rounds</small></span><span class="now">Your look<small>1 d 16 h</small></span><span>Merge<small>rebase first</small></span></div>
+    <div class="links"><a>Preview ↗</a><a>PR ↗</a><a>Claude's review ↗</a></div>
+    <div class="detail"><b>To test:</b> search for a word, open the search panel, pin a verse, press Escape, then Back. The panel should stay put rather than flash or scroll to the top. Story scrolling (especially the Haftarah story) should look the same.</div>
+    <div class="actions"><span class="btn p">Looks good → rebase and merge</span><span class="reply">Or type a note back…</span></div>
+  </div>
+
+  <div class="card">
+    <div class="row"><div><span class="num">#574</span>One rule for the popup when the pin changes</div><span class="why">2 decisions + your look</span></div>
+    <div class="steps"><span class="d">Issue<small>#558</small></span><span class="d">Design<small>✓</small></span><span class="d">Build<small>✓</small></span><span class="d">Claude review<small>✓</small></span><span class="now">Your look<small>2 questions</small></span><span>Merge<small>after #573</small></span></div>
+    <div class="links"><a>Preview ↗</a><a>PR ↗</a><a>Claude's review ↗</a></div>
+    <div class="detail"><b>Left for you to decide:</b>
+      <ol class="q">
+        <li>1. While a story scrolls under a still mouse, the popup and the overlay's focus don't follow the verse now under the pointer.
+          <div class="choices"><span class="btn">Leave it</span><span class="btn">Fix it here</span><span class="btn">New issue</span></div></li>
+        <li>2. The arrow-key step doesn't stop a camera glide still running from a search click. From reading the code, not tried.
+          <div class="choices"><span class="btn">Leave it</span><span class="btn">Fix it here</span><span class="btn">New issue</span></div></li>
+      </ol>
+    </div>
+    <div class="detail"><b>To test:</b> pin a verse, leave the mouse on it, press Escape: the popup stays up, unpinned. Hover a verse, move onto its popup, click a word: the popup stays.</div>
+    <div class="actions"><span class="btn p">Send answers</span><span class="reply">Or type a note back…</span></div>
+  </div>
+
+  <div class="card ready">
+    <div class="row"><div><span class="num">#578</span>VIS: list the papers the picked authors or topics light</div><span class="why">Ready to merge</span></div>
+    <div class="steps"><span class="d">Issue<small>#577</small></span><span class="d">Design<small>2 mockups</small></span><span class="d">Build<small>✓</small></span><span class="d">Claude review<small>✓ prep done</small></span><span class="d">Your look<small>✓ "heck yeah"</small></span><span class="now">Merge<small>20 min</small></span></div>
+    <div class="links"><a>Preview ↗</a><a>PR ↗</a><a>Merge on GitHub ↗</a></div>
+  </div>
+
+  <div class="sec">Quiet: nobody is working on these</div>
+  <div class="quiet"><b>#564</b> Code map: a SeeSoft-style map of a pull request <span class="age">no activity for 3 days · stage unknown</span></div>
+  <div class="quiet"><b>#411</b> Measure the Talmud's coverage by Sefaria's word-form table <span class="age">draft · parked since Oct 20 on the licence question</span></div>
+
+  <div class="sec">Your activity and the PRs, Monday noon to now (Pacific time)</div>
+
+  <!-- A: real clock -->
+  <div class="tlwrap">
+    <h4>A · Real clock time</h4>
+    <p>Honest about how long things wait, but your sessions are thin slivers, and today's work is squeezed into the right edge.</p>
+    <div class="tl">
+      <div class="axis"><span style="left:0">Mon 8 am</span><span style="left:20%">Tue 0:00</span><span style="left:50%">Wed 0:00</span><span style="left:80%">Thu 0:00</span></div>
+      <div class="lane you"><span class="lab">You</span>
+        <div class="bar" style="left:5.1%;width:5.7%"></div><div class="bar" style="left:17.3%;width:.5%"></div><div class="bar" style="left:27.9%;width:.9%"></div><div class="bar" style="left:45.2%;width:3.4%"></div><div class="bar" style="left:97.4%;width:2.3%"></div></div>
+      <div class="lane"><span class="lab">#554 dev tools</span><div class="bar w" style="left:0;width:6.1%"></div><span class="dot" style="left:6.2%"></span></div>
+      <div class="lane"><span class="lab">#560–567 (5 small)</span><div class="bar dn" style="left:6.2%;width:2.6%"></div><span class="dot" style="left:8.8%"></span></div>
+      <div class="lane"><span class="lab">#564 code map</span><div class="bar w" style="left:7.1%;width:1%"></div><div class="bar id" style="left:8.1%;width:91.6%"></div></div>
+      <div class="lane"><span class="lab">#568 tools plan</span><div class="bar w" style="left:8.9%;width:36.2%"></div><span class="dot" style="left:9.4%"></span><span class="dot" style="left:10.4%"></span></div>
+      <div class="lane"><span class="lab">#571 setTools</span><div class="bar w" style="left:17.6%;width:29.1%"></div><span class="dot" style="left:45.3%"></span><span class="dot" style="left:46.6%"></span></div>
+      <div class="lane"><span class="lab">#572 Vite 8</span><div class="bar w" style="left:45.25%;width:54%"></div><span class="dot" style="left:99.2%"></span></div>
+      <div class="lane"><span class="lab">#573 tool panel</span><div class="bar w" style="left:48.7%;width:.5%"></div><div class="bar wt" style="left:49.2%;width:50.5%"></div><span class="dot" style="left:48.6%"></span><span class="dot" style="left:97.4%"></span></div>
+      <div class="lane"><span class="lab">#574 popup rule</span><div class="bar w" style="left:49.2%;width:.3%"></div><div class="bar wt" style="left:49.5%;width:50.2%"></div><span class="dot" style="left:48.6%"></span><span class="dot" style="left:97.4%"></span></div>
+      <div class="lane"><span class="lab">#576 dim papers</span><div class="bar w" style="left:97.6%;width:1.9%"></div><span class="dot" style="left:99.3%"></span></div>
+      <div class="lane"><span class="lab">#578 paper list</span><div class="bar w" style="left:98.6%;width:1%"></div><div class="bar rd" style="left:99.6%;width:.4%"></div><span class="dot" style="left:99.3%"></span></div>
+    </div>
+  </div>
+
+  <!-- B: folded -->
+  <div class="tlwrap">
+    <h4>B · Your time, with the hours you were away squeezed out</h4>
+    <p>Each striped band is a stretch you were away (labelled with how long). You can see what you touched in each sitting, but the 1 day 16 h wait on #573 and #574 shrinks to a short bar.</p>
+    <div class="tl">
+      <div class="axis"><span style="left:0">Mon noon</span><span style="left:38.3%">Mon 10 pm</span><span style="left:43.6%">Tue 6 am</span><span style="left:53.4%">Tue 8 pm</span><span style="left:83.5%">Thu 2 pm (today)</span></div>
+      <div class="fold" style="left:35.3%;width:3%"><em>5 h</em></div>
+      <div class="fold" style="left:40.6%;width:3%"><em>8 h</em></div>
+      <div class="fold" style="left:50.4%;width:3%"><em>13 h</em></div>
+      <div class="fold" style="left:80.5%;width:3%"><em>1 d 14 h</em></div>
+      <div class="lane you"><span class="lab">You</span>
+        <i style="left:.8%"></i><i style="left:1.5%"></i><i style="left:2.3%"></i><i style="left:3.8%"></i><i style="left:4.5%"></i><i style="left:6.4%"></i><i style="left:7%"></i><i style="left:8.5%"></i><i style="left:9%"></i><i style="left:12.8%"></i><i style="left:13.8%"></i><i style="left:14.3%"></i><i style="left:14.7%"></i><i style="left:15.8%"></i><i style="left:16.1%"></i><i style="left:18.4%"></i><i style="left:22.8%"></i><i style="left:23%"></i><i style="left:25.9%"></i><i style="left:27.1%"></i><i style="left:28.1%"></i><i style="left:29.3%"></i><i style="left:29.5%"></i><i style="left:30.6%"></i><i style="left:31.8%"></i><i style="left:33.8%"></i><i style="left:34.6%"></i>
+        <i style="left:38.8%"></i>
+        <i style="left:44.4%"></i><i style="left:45.4%"></i><i style="left:46.3%"></i><i style="left:47.6%"></i><i style="left:48.7%"></i><i style="left:49.1%"></i><i style="left:49.6%"></i><i style="left:49.9%"></i>
+        <i style="left:54.5%"></i><i style="left:55.7%"></i><i style="left:60.8%"></i><i style="left:63%"></i><i style="left:63.9%"></i><i style="left:65.2%"></i><i style="left:75.6%"></i>
+        <i style="left:84.5%"></i><i style="left:86.9%"></i><i style="left:90.3%"></i><i style="left:95.5%"></i><i style="left:97.2%"></i><i style="left:97.8%"></i></div>
+      <div class="lane"><span class="lab">#554 dev tools</span><div class="bar w" style="left:0;width:6.8%"></div><span class="dot" style="left:7%"></span></div>
+      <div class="lane"><span class="lab">#560–567 (5 small)</span><div class="bar dn" style="left:7.4%;width:15.5%"></div><span class="dot" style="left:22.9%"></span></div>
+      <div class="lane"><span class="lab">#564 code map</span><div class="bar w" style="left:12.4%;width:6.6%"></div><div class="bar id" style="left:19%;width:81%"></div></div>
+      <div class="lane"><span class="lab">#568 tools plan</span><div class="bar w" style="left:23.2%;width:30.7%"></div><span class="dot" style="left:25.9%"></span><span class="dot" style="left:28.1%"></span><span class="dot" style="left:30.6%"></span><span class="dot" style="left:33.8%"></span></div>
+      <div class="lane"><span class="lab">#571 setTools</span><div class="bar w" style="left:40.6%;width:23.3%"></div><span class="dot" style="left:54.5%"></span><span class="dot" style="left:55.7%"></span><span class="dot" style="left:63%"></span></div>
+      <div class="lane"><span class="lab">#572 Vite 8</span><div class="bar w" style="left:54.9%;width:40.6%"></div><span class="dot" style="left:95.5%"></span></div>
+      <div class="lane"><span class="lab">#573 tool panel</span><div class="bar w" style="left:75.8%;width:2.4%"></div><div class="bar wt" style="left:78.2%;width:21.8%"></div><span class="dot" style="left:75.6%"></span><span class="dot" style="left:84.5%"></span></div>
+      <div class="lane"><span class="lab">#574 popup rule</span><div class="bar w" style="left:78.9%;width:.8%"></div><div class="bar wt" style="left:79.7%;width:20.3%"></div><span class="dot" style="left:75.6%"></span><span class="dot" style="left:84.5%"></span></div>
+      <div class="lane"><span class="lab">#576 dim papers</span><div class="bar w" style="left:85.8%;width:11.2%"></div><span class="dot" style="left:86.9%"></span><span class="dot" style="left:95.5%"></span><span class="dot" style="left:97.2%"></span></div>
+      <div class="lane"><span class="lab">#578 paper list</span><div class="bar w" style="left:91.8%;width:5.6%"></div><div class="bar rd" style="left:97.4%;width:2.6%"></div><span class="dot" style="left:90.3%"></span><span class="dot" style="left:95.5%"></span></div>
+    </div>
+    <div class="legend"><span><b style="background:var(--ink)"></b>you typing to Claude</span><span><b style="border-radius:50%;border:2px solid var(--ink);width:6px;height:6px;background:#fff"></b>you said something about this PR</span><span><b class="w"></b>Claude working</span><span><b class="wt"></b>waiting on you</span><span><b class="rd"></b>ready to merge</span><span><b class="dn"></b>quick, merged</span><span><b class="id"></b>quiet</span></div>
+  </div>
+</div>

@@ -88,12 +88,14 @@ At the top of the PR description, between markers, so it can be found and replac
 **Waiting on:** Danyel, since 2026-11-02 16:40 PT
 **Ask:** look at the preview, and answer one question
 **Questions:**
-1. Does the tint over the code dull the colours enough to change the shell?  (leave | change)
+1. Does the tint over the code dull the colours enough to change the shell?  (**leave** | change)
 **To test:** pin a verse, leave the mouse on it, press Escape: the popup stays up, unpinned.
 <!-- /status -->
 ```
 
 - Questions are numbered and each lists its choices, so the page can draw buttons. A question with no listed choices gets a text box only.
+- **Every question has a default**, the choice Claude would go with (bold above). The page makes the default visibly stand out, for example `Button colour: [[RED]] [green] [file an issue]`.
+- **Every question also gets a "file an issue" choice.** It means "go with the default, and file the question as a new issue to decide later". Claude applies the default on the PR, files an issue holding the question, its choices, any screenshots and a link back to the PR, and marks the question on the PR "default taken; moved to #NNN". The PR stops waiting on that question. No work starts on the new issue.
 - The page always offers a free-text "note back" as well.
 - On issues with no PR yet, the same block goes in a single Claude comment on the issue, edited in place. Claude does not rewrite Danyel's own issue text.
 - Merge commits in Torahmap use the PR title only (checked: `merge_commit_message: PR_TITLE`), so the status section doesn't leak into git history. Check this per repo.
@@ -152,23 +154,26 @@ Top to bottom:
    - the test protocol
    - each question with buttons for its choices, a free-text note box, and **Send answers**
    - files: screenshots in the PR description (as thumbnails) and design docs the PR adds
+   - At the very top of the page, a **File an issue** button: title, a few lines, optional screenshot (the phone matters here). It only files the issue; no work starts.
 2. **On Claude**: items Claude is working on (a compact row each; not in the mockups yet, the builder decides the look).
 3. **Quiet**: `parked` items and anything with no activity for a few days, one row each, saying what it's waiting on.
-4. **Timeline**: one row per PR open in the window, plus a **You** row on top.
+4. **Backlog**: open issues nobody has picked up, by priority, each with a **Pick up** button. Shown next to the "how many open at once" count so Danyel decides with his parallelism in view. Pick up adds `in-progress`, and the Mac service starts a **fresh Claude session for that issue, in a new worktree, with Remote Control on** (so it appears in claude.ai/code and on the phone; Danyel finds starting several Remote Control sessions by hand annoying). The session starts on step 2 (brainstorm and design), so it soon comes back to the top with its first questions.
+5. **Timeline**: one row per PR open in the window, plus a **You** row on top.
    - Bars: blue when Claude is working (`in-progress` without `on danyel`), amber when waiting on Danyel, green when ready to merge, grey hatched when parked or quiet, grey for quick merged ones. Use label history for these; fall back to open→merged where there's no history.
    - Dots on a PR's row where Danyel said something about it.
    - **Real clock time**, except that any gap of 24 hours or more with no activity is cut down to a narrow break mark. A bar crossing a cut gap carries its true length as a label ("waited 1 d 16 h").
    - A "how many open at once" strip under the rows.
    - Times in Pacific time.
 
-The mockups from this conversation (`board-v3.html` in the scratchpad: cards with stage strip, quiet rows, timeline A) show the intended look. Timeline B (away time squeezed out) was rejected in favour of real time with the 24-hour cut.
+The mockups from this conversation (`docs/mockups/board-v3.html` and `board-v3.png`: cards with stage strip, quiet rows, timeline A) show the intended look. Timeline B (away time squeezed out) was rejected in favour of real time with the 24-hour cut.
 
 ## The always-on service on the Mac
 
-One small background service started with the Mac at login. It does two jobs:
+One small background service started with the Mac at login. It does three jobs:
 
 - Uploads Danyel's activity to the Worker (above).
 - Starts a fresh Claude session for answers nobody picked up (above).
+- Starts a fresh Claude session, with Remote Control on, for each issue Danyel picks up from the page. It learns about pick-ups the same way it learns about unclaimed answers (from GitHub, or from the Worker).
 
 ## Decided by Danyel
 
@@ -181,6 +186,10 @@ One small background service started with the Mac at login. It does two jobs:
 - Answers reach whichever session is open within about a minute via a background watcher; otherwise a fresh session starts.
 - Hosted on Cloudflare so it works on the phone; the laptop is the main use.
 - Activity uploads batch every 10 minutes at most, and only when there's something new.
+- Every question shows its default visibly; "file an issue" means "take the default and file the question".
+- The page can file an issue (sudden, out-of-band ideas) and pick up an issue (start the next project).
+- If an answer isn't picked up within 10 minutes, the card goes back to the top and says so.
+- Picking up an issue starts a fresh session with Remote Control on (Claude recommended; Danyel agreed).
 - Code lives in `~/code/MISC/pr-board`.
 - `in-progress` stays, meaning "picked up" by anyone.
 - The page covers every repo the token he provides can see; the token type doesn't change the design.
@@ -193,7 +202,6 @@ One small background service started with the Mac at login. It does two jobs:
 - Cloudflare Access with Google login; Danyel's answers posted as danyelf via a token stored as a Worker secret; Claude's own posts stay as danyel-claude.
 - D1 for activity.
 - Repos found by searching for the turn labels.
-- A third answer choice, "New issue", offered alongside Leave it / Fix it here where it fits.
 
 ## Details settled after the builder review (Claude's calls)
 
