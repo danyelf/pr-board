@@ -69,6 +69,19 @@ describe('renderStatus', () => {
   });
 });
 
+describe('renderStatus guards', () => {
+  it('refuses a field with a line break, since each field is one line and a second could change whose turn it is', () => {
+    expect(() => renderStatus({ ...expected, toTest: 'step one\nstep two' })).toThrow(/one line/);
+    expect(() => renderStatus({ ...expected, ask: 'ok\n**Waiting on:** nobody' })).toThrow(/one line/);
+    expect(() => renderStatus({ ...expected, questions: [{ ...expected.questions[0]!, text: 'a\nb' }] })).toThrow(/one line/);
+    expect(() => renderStatus({ ...expected, questions: [{ ...expected.questions[0]!, choices: ['leave\nx', 'change'] }] })).toThrow(/one line/);
+  });
+
+  it('refuses a field holding a status marker', () => {
+    expect(() => renderStatus({ ...expected, ask: 'see <!-- /status -->' })).toThrow(/status marker/);
+  });
+});
+
 describe('replaceStatus', () => {
   it('replaces the section and leaves surrounding text untouched', () => {
     const out = replaceStatus('A\n<!-- status -->\nold\n<!-- /status -->\nB\n\n## Rest', expected);

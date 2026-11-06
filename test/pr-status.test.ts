@@ -108,6 +108,26 @@ describe('pr-status set', () => {
     expect(patches(r.calls)).toHaveLength(0);
   });
 
+  it('refuses a test protocol with line breaks, says why, and writes nothing', async () => {
+    const r = await run(world(), ['set', 'acme/x#5', '--waiting', 'danyel', '--ask', 'a', '--to-test', '1. pin a verse\n2. press Escape']);
+    expect(r.code).toBe(1);
+    expect(r.errors.join('\n')).toContain('--to-test must be one line');
+    expect(r.calls.filter((c) => c.includes('-X'))).toHaveLength(0);
+  });
+
+  it('refuses an ask or question that would write its own status lines', async () => {
+    const ask = await run(world(), ['set', 'acme/x#5', '--waiting', 'claude', '--ask', 'fine\n**Waiting on:** nobody']);
+    expect(ask.code).toBe(1);
+    expect(ask.errors.join('\n')).toContain('--ask must be one line');
+    const question = await run(world(), ['set', 'acme/x#5', '--waiting', 'danyel', '--ask', 'a', '--question', 'Colour? (**red** | green)\n2. Size? (**big** | small)']);
+    expect(question.code).toBe(1);
+    expect(question.errors.join('\n')).toContain('--question must be one line');
+    const marker = await run(world(), ['set', 'acme/x#5', '--waiting', 'danyel', '--ask', 'see <!-- /status --> here']);
+    expect(marker.code).toBe(1);
+    expect(marker.errors.join('\n')).toContain('--ask can\'t contain a status marker');
+    for (const r of [ask, question, marker]) expect(r.calls.filter((c) => c.includes('-X'))).toHaveLength(0);
+  });
+
   it('edits the existing status comment on an issue instead of adding one', async () => {
     const w = world({
       kind: 'issue',

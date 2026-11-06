@@ -1,6 +1,6 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { parseStatus, renderStatus, replaceStatus } from '../src/shared/status.ts';
+import { parseStatus, renderStatus, replaceStatus, statusValueProblem } from '../src/shared/status.ts';
 import type { Question, Status } from '../src/shared/types.ts';
 import { flattenPages, gh, isNotFound } from './gh.ts';
 import type { Deps, Gh } from './gh.ts';
@@ -42,6 +42,12 @@ function parseSetArgs(args: string[]): SetOptions {
     const need = (): string => {
       if (value === undefined) throw new Error(`${flag} needs a value`);
       i++;
+      // The status section keeps each field on one line; anything more would be cut off or misread.
+      const problem = statusValueProblem(value);
+      if (problem === 'line break') {
+        throw new Error(`${flag} must be one line; join the steps with "; " or "1) … 2) …" instead of line breaks`);
+      }
+      if (problem === 'status marker') throw new Error(`${flag} can't contain a status marker`);
       return value;
     };
     if (flag === '--waiting') waiting = need();
