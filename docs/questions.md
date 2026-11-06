@@ -32,3 +32,9 @@ Nothing below has been run. Each needs your OK.
    That node path (from `command -v node`) is a temporary fnm shell path and will stop working. Use a stable Node 24 path instead (for example the fnm default alias, or whatever `fnm exec --using=24 which node` prints). The hook needs Node 24 because it runs the TypeScript directly.
 
 4. **Install the skill.** `ln -s /Users/danyel/code/MISC/pr-board/skill/pr-status ~/.claude/skills/pr-status`
+
+## Design questions the build turned up
+
+5. **Should cards show the "Ask" line?** Each status section has an `Ask:` line ("look at the preview, and answer one question"). The plan didn't list it among card contents, so cards don't show it: they show the why-tag, stage strip, test protocol and questions. I'd add it as one line under the title. Your call.
+
+6. **Some commits still ask for your approval.** Claude Code's own check (logged as `hook:tool.check`, not one of your hooks; I tested each) prompts on some `git commit` calls even in auto mode with `Bash(git commit:*)` allowed. It isn't the `cd` chains (fixed), line breaks, or the working folder. Next time one appears, the wording of the prompt should name the check.
