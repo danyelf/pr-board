@@ -1,5 +1,5 @@
 import type { ItemFacts, StageBox, Status, Turn } from '../shared/types.ts';
-import { extractToTest, parseStatus } from '../shared/status.ts';
+import { extractToTest, hasStatusSection, parseStatus } from '../shared/status.ts';
 import { stageStrip, whyTag } from '../shared/stage.ts';
 import { buildTimeline, type Timeline } from '../shared/timeline.ts';
 import { effectiveTurn, formatWait, waitingSince } from '../shared/turn.ts';
@@ -7,6 +7,7 @@ import { effectiveTurn, formatWait, waitingSince } from '../shared/turn.ts';
 export interface Card {
   facts: ItemFacts;
   status: Status | null;
+  statusUnreadable: boolean;          // a status section is there, but it couldn't be read
   turn: Turn;
   outOfSync: boolean;
   strip: StageBox[];
@@ -32,8 +33,12 @@ function isOpen(f: ItemFacts): boolean {
   return !f.merged && f.closedAt === null;
 }
 
+function statusText(f: ItemFacts): string {
+  return f.kind === 'pr' ? f.body : f.statusCommentBody ?? '';
+}
+
 function statusOf(f: ItemFacts): Status | null {
-  return parseStatus(f.kind === 'pr' ? f.body : f.statusCommentBody ?? '');
+  return parseStatus(statusText(f));
 }
 
 /** An issue hidden behind an open PR, whose labels or status say it is waiting on Danyel. */
@@ -51,6 +56,7 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
   return {
     facts: f,
     status,
+    statusUnreadable: status === null && hasStatusSection(statusText(f)),
     turn: carried ? 'danyel' : effective.turn,
     outOfSync: carried || effective.outOfSync,
     strip: stageStrip(f, status, now),

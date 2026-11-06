@@ -35,6 +35,11 @@ function parseQuestion(n: number, rest: string): Question {
   return { n, text: text.trim(), choices, defaultChoice };
 }
 
+/** True when the text has a status section, whether or not it can be read. */
+export function hasStatusSection(text: string): boolean {
+  return findSection(text) !== null;
+}
+
 export function parseStatus(text: string): Status | null {
   const section = findSection(text);
   if (!section) return null;
