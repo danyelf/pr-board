@@ -85,7 +85,7 @@ At the top of the PR description, between markers, so it can be found and replac
 
 ```
 <!-- status -->
-**Waiting on:** Danyel, since 2026-11-02 16:40 PT
+**Waiting on:** Danyel, since 2026-11-02T16:40:00-08:00
 **Ask:** look at the preview, and answer one question
 **Questions:**
 1. Does the tint over the code dull the colours enough to change the shell?  (**leave** | change)
