@@ -14,6 +14,8 @@ interface Entry {
   type?: string;
   timestamp?: string;
   cwd?: string;
+  isMeta?: boolean;
+  isCompactSummary?: boolean;
   message?: { content?: unknown };
 }
 
@@ -31,7 +33,7 @@ function contentParts(entry: Entry): Record<string, unknown>[] {
 
 /** Whether this transcript entry is Danyel typing (not a tool result or a system wrapper). */
 function isDanyelTyping(entry: Entry): boolean {
-  if (entry.type !== 'user') return false;
+  if (entry.type !== 'user' || entry.isMeta || entry.isCompactSummary) return false;
   const c = entry.message?.content;
   if (typeof c === 'string') return !c.trimStart().startsWith('<');
   const parts = contentParts(entry);
@@ -105,7 +107,20 @@ function targetArg(tokens: string[]): string | null {
   return null;
 }
 
-const URL_PATTERN = /github\.com\/([^/\s]+)\/([^/\s]+)\/(pull|issues)\/(\d+)/;
+/** First argument after the subcommand that is not a flag or a flag's value. */
+function firstPositional(tokens: string[]): string | null {
+  for (let i = 3; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if (VALUE_FLAGS.has(t)) {
+      i++;
+      continue;
+    }
+    if (!t.startsWith('-')) return t;
+  }
+  return null;
+}
+
+const URL_PATTERN =/github\.com\/([^/\s]+)\/([^/\s]+)\/(pull|issues)\/(\d+)/;
 
 function fromUrl(url: string): Touched | null {
   const m = URL_PATTERN.exec(url);
@@ -159,15 +174,22 @@ async function touchedBy(use: ToolUse, entries: Entry[], deps: HookDeps, cache: 
       const editing = kind === 'pr' ? ['comment', 'edit', 'review'] : ['comment', 'edit'];
       if (!sub || !editing.includes(sub)) continue;
       const target = targetArg(t);
-      if (!target) continue;
-      const url = fromUrl(target);
+      const url = target ? fromUrl(target) : null;
       if (url) {
         found.push(url);
         continue;
       }
       const repoFlag = flagValue(t, ['-R', '--repo']);
       const [owner, repo] = repoFlag ? repoFlag.split('/') : Object.values(await repoOf(deps, cwd, cache));
-      if (owner && repo) found.push({ owner, repo, n: Number(target), kind });
+      if (!owner || !repo) continue;
+      let n = target ? Number(target) : NaN;
+      if (!target && kind === 'pr') {
+        // No number given: gh means the PR of the current branch, or of the branch named.
+        const branch = firstPositional(t);
+        const viewArgs = ['pr', 'view', ...(branch ? [branch] : []), ...(repoFlag ? ['-R', repoFlag] : []), '--json', 'number', '-q', '.number'];
+        n = Number((await deps.gh(viewArgs, { cwd })).trim());
+      }
+      if (Number.isInteger(n) && n > 0) found.push({ owner, repo, n, kind });
     } else if (t[0] === 'gh' && t[1] === 'api') {
       const method = flagValue(t, ['-X', '--method'])?.toUpperCase();
       if (method !== 'PATCH' && method !== 'POST') continue;

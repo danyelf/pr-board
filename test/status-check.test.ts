@@ -35,6 +35,7 @@ function fake(setup: Setup = {}) {
     if (/^api repos\/[^/]+\/[^/]+\/issues\/\d+\/comments/.test(line)) return JSON.stringify([setup.comments ?? []]);
     if (/^api repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(line)) return JSON.stringify(setup.issueIsPr ? { pull_request: {} } : {});
     if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify((setup.headPrs ?? []).map((number) => ({ number })));
+    if (args[0] === 'pr' && args[1] === 'view') return '574\n';
     throw new Error(`unexpected gh call: ${line}`);
   };
   const git: Gh = async () => `${setup.branch ?? 'feature-x'}\n`;
@@ -122,6 +123,16 @@ describe('status-check hook', () => {
     const r = await run('image-paste.jsonl');
     expect(r.block?.reason).toContain('#574');
     expect(r.block?.reason).not.toContain('#500');
+  });
+
+  it('looks up the current branch PR when the command gives no number', async () => {
+    const r = await run('comment-no-number.jsonl');
+    expect(r.block?.reason).toContain('danyelf/torahmap#574');
+  });
+
+  it('does not treat injected meta messages as the start of a turn', async () => {
+    const r = await run('meta-after-command.jsonl');
+    expect(r.block?.reason).toContain('danyelf/torahmap#574');
   });
 
   it('ignores a lone merge', async () => {
