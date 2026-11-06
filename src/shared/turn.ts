@@ -67,8 +67,11 @@ export function isReadyToMerge(f: ItemFacts, s: Status | null): boolean {
   return mergeBlockers(f, s).length === 0;
 }
 
+/** How long since `fromIso`, like "45 min" or "1 d 16 h"; empty if the date can't be read. */
 export function formatWait(fromIso: string, now: Date): string {
-  const minutes = Math.max(0, Math.floor((now.getTime() - new Date(fromIso).getTime()) / 60_000));
+  const from = Date.parse(fromIso);
+  if (Number.isNaN(from)) return '';
+  const minutes = Math.max(0, Math.floor((now.getTime() - from) / 60_000));
   if (minutes < 60) return `${minutes} min`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours} h`;

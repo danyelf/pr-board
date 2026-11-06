@@ -69,6 +69,10 @@ describe('formatWait', () => {
     expect(formatWait('2026-11-05T07:30:00-08:00', now)).toBe('4 h');
     expect(formatWait('2026-11-03T20:00:00-08:00', now)).toBe('1 d 16 h');
   });
+  it('says nothing for a date it cannot read', () => {
+    expect(formatWait('yesterday', now)).toBe('');
+    expect(formatWait('', now)).toBe('');
+  });
 });
 
 describe('isReadyToMerge', () => {

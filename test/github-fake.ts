@@ -20,7 +20,30 @@ export function recordedRepo(): RepoWorld {
   return data;
 }
 
-interface Connection { name: string; kind: 'pullRequests' | 'issues'; first: number; states: string[] | null; labels: string[] | null }
+interface Connection {
+  name: string; kind: 'pullRequests' | 'issues'; first: number; states: string[] | null; labels: string[] | null;
+  /** The fields the query asks for on each item itself (not on the lists inside it). */
+  fields: string[];
+}
+
+/** The names at the top level of the `nodes { ... }` selection that follows `from`; anything inside braces or brackets is skipped. */
+function itemFields(query: string, from: number): string[] {
+  const start = query.indexOf('{', query.indexOf('nodes', from));
+  const names: string[] = [];
+  let depth = 0;
+  let paren = 0;
+  for (let i = start; i < query.length; i++) {
+    const ch = query[i]!;
+    if (ch === '{') depth++;
+    else if (ch === '}') { depth--; if (depth === 0) break; }
+    else if (ch === '(') paren++;
+    else if (ch === ')') paren--;
+    else if (depth === 1 && paren === 0 && /[A-Za-z_]/.test(ch) && !/\w/.test(query[i - 1]!)) {
+      names.push(/^\w+/.exec(query.slice(i))![0]);
+    }
+  }
+  return names;
+}
 
 function connectionsIn(query: string): Connection[] {
   const seen = new Map<string, Connection>();
@@ -34,6 +57,7 @@ function connectionsIn(query: string): Connection[] {
       first: Number(/first:\s*(\d+)/.exec(args)?.[1] ?? 100),
       states: states ? states.replace(/[[\]]/g, '').split(',').map((s) => s.trim()).filter(Boolean) : null,
       labels: labels ? [...labels.matchAll(/"([^"]*)"/g)].map((x) => x[1]!) : null,
+      fields: itemFields(query, m.index!),
     });
   }
   return [...seen.values()];
@@ -50,7 +74,14 @@ export function answerRepo(query: string, world: RepoWorld): Record<string, unkn
     const matching = world[c.kind].nodes.filter((n) =>
       (c.states === null || c.states.includes(stateOf(n, c.kind))) &&
       (c.labels === null || n.labels.nodes.some((l: { name: string }) => c.labels!.includes(l.name))));
-    out[c.name] = { pageInfo: { hasNextPage: matching.length > c.first }, nodes: matching.slice(0, c.first) };
+    const returned = matching.slice(0, c.first);
+    // GitHub sends every field the query asks for, so a recording without one means the query and the
+    // recording have drifted apart (a field was misspelled, or the recording is out of date).
+    for (const node of returned) {
+      const absent = c.fields.filter((f) => !Object.hasOwn(node, f));
+      if (absent.length > 0) throw new Error(`The recorded ${c.kind} #${node.number} has no ${absent.join(', ')}, which the query asks for`);
+    }
+    out[c.name] = { pageInfo: { hasNextPage: matching.length > c.first }, nodes: returned };
   }
   return out;
 }

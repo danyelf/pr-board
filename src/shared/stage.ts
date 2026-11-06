@@ -45,9 +45,12 @@ export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date(
     : box('Design', 'todo');
 
   // A code review Claude posted before prep is a note on Build, not a stage of its own.
+  // When the reviewed commit isn't among the PR's commits any more, the PR was rebased or force-pushed
+  // after the review, so we can't say how much has changed since.
   const sinceReview = f.commitsSinceReview ?? 0;
   const build = !isPr ? box('Build', 'todo')
     : f.reviewSha === null ? box('Build', 'done', '✓')
+    : f.commitsSinceReview === null ? box('Build', 'done', '✓ reviewed before a rebase')
     : sinceReview > 0 ? box('Build', 'done', `✓ reviewed, ${count(sinceReview, 'commit')} since`)
     : box('Build', 'done', '✓ reviewed');
 

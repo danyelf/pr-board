@@ -20,8 +20,8 @@ beforeAll(async () => {
   getKey = createLocalJWKSet({ keys: [jwk] });
 });
 
-function sign(over: { email?: string; aud?: string; iss?: string } = {}): Promise<string> {
-  return new SignJWT({ email: over.email ?? EMAIL })
+function sign(over: { email?: string; noEmail?: boolean; aud?: string; iss?: string } = {}): Promise<string> {
+  return new SignJWT(over.noEmail ? {} : { email: over.email ?? EMAIL })
     .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
     .setAudience(over.aud ?? AUD)
     .setIssuer(over.iss ?? `https://${TEAM}`)
@@ -69,12 +69,28 @@ describe('worker', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
     expect(res.headers.get('Cache-Control')).toBe('no-store');
+    expect(res.headers.get('Content-Security-Policy')).toBe("default-src 'none'; img-src https:; style-src 'unsafe-inline'");
+    expect(res.headers.get('Referrer-Policy')).toBe('no-referrer');
     expect(await res.text()).toContain('#1');
   });
 
   it('refuses a valid signature for the wrong email', async () => {
     const res = await get(handler(ok).h, 'https://board.example.com/', { 'Cf-Access-Jwt-Assertion': await sign({ email: 'x@example.com' }) });
     expect(res.status).toBe(403);
+  });
+
+  it('compares the email without regard to capital letters', async () => {
+    const res = await get(handler(ok).h, 'https://board.example.com/', { 'Cf-Access-Jwt-Assertion': await sign({ email: 'Danyel@GMAIL.com' }) });
+    expect(res.status).toBe(200);
+  });
+
+  it('lets nobody in when no allowed email is set, even a token with no email', async () => {
+    const unset = { ...env } as Partial<Env>;
+    delete unset.ALLOWED_EMAIL;
+    for (const e of [unset as Env, { ...env, ALLOWED_EMAIL: '' }]) {
+      const res = await get(handler(ok).h, 'https://board.example.com/', { 'Cf-Access-Jwt-Assertion': await sign({ noEmail: true }) }, e);
+      expect(res.status).toBe(403);
+    }
   });
 
   it('refuses the wrong audience', async () => {
@@ -107,13 +123,33 @@ describe('worker', () => {
     expect(calls()).toBe(1);
   });
 
-  it('does not cache a fetch that had errors', async () => {
+  it('caches a fetch that had errors too, and shows the errors from the cached copy', async () => {
     const { cache, puts } = fakeCache();
-    const { h } = handler({ items: ok.items, errors: ['bad'] }, cache);
-    const res = await get(h, 'https://board.example.com/', { 'Cf-Access-Jwt-Assertion': await sign() });
+    const { h, calls } = handler({ items: ok.items, errors: ['bad'] }, cache);
+    const headers = { 'Cf-Access-Jwt-Assertion': await sign() };
+    const first = await get(h, 'https://board.example.com/', headers);
+    expect(first.status).toBe(200);
+    expect(await first.text()).toContain('bad');
+    expect(puts).toHaveLength(1);
+    const second = await get(h, 'https://board.example.com/', headers);
+    expect(await second.text()).toContain('bad');
+    expect(calls()).toBe(1);
+  });
+
+  it('ignores a cached entry it cannot read and fetches fresh', async () => {
+    const store = new Map<string, Response>();
+    const cache = {
+      match: async (req: Request) => store.get(req.url)?.clone(),
+      put: async (req: Request, res: Response) => { store.set(req.url, res); },
+    } as unknown as Cache;
+    const { h, calls } = handler(ok, cache);
+    const headers = { 'Cf-Access-Jwt-Assertion': await sign() };
+    await get(h, 'https://board.example.com/', headers);
+    for (const key of store.keys()) store.set(key, new Response('not json'));
+    const res = await get(h, 'https://board.example.com/', headers);
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain('bad');
-    expect(puts).toHaveLength(0);
+    expect(await res.text()).toContain('#1');
+    expect(calls()).toBe(2);
   });
 
   it('shows an error line, not a bare 500, when reading GitHub throws, and does not cache it', async () => {

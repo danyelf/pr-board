@@ -139,6 +139,41 @@ describe('buildBoard', () => {
     expect(board.onClaude.find((c) => c.facts.number === 2)!.toTest).toBe('try it');
   });
 
+  describe('a status older than the latest change', () => {
+    const body = renderStatus(status({ waitingOn: 'Danyel' }));
+    const stale = (over: Partial<ReturnType<typeof facts>>) =>
+      buildBoard([facts({ number: 30, labels: ['on danyel'], body, lastActivityAt: '2026-11-05T23:00:00Z', ...over })], [], NOW).waiting[0]!.statusStale;
+
+    it('is flagged when a commit or comment came after the status was written', () => {
+      expect(stale({ statusWrittenAt: '2026-11-05T10:00:00Z', lastChangeAt: '2026-11-05T12:00:00Z' })).toBe(true);
+    });
+    it('is not flagged when the status is newer, or the same age', () => {
+      expect(stale({ statusWrittenAt: '2026-11-05T12:00:00Z', lastChangeAt: '2026-11-05T10:00:00Z' })).toBe(false);
+      expect(stale({ statusWrittenAt: '2026-11-05T12:00:00Z', lastChangeAt: '2026-11-05T12:00:00Z' })).toBe(false);
+    });
+    it('is not flagged when either time is unknown', () => {
+      expect(stale({ statusWrittenAt: null, lastChangeAt: '2026-11-05T12:00:00Z' })).toBe(false);
+      expect(stale({ statusWrittenAt: '2026-11-05T10:00:00Z', lastChangeAt: null })).toBe(false);
+    });
+    it('is not flagged when there is no status', () => {
+      expect(stale({ body: '', statusWrittenAt: '2026-11-05T10:00:00Z', lastChangeAt: '2026-11-05T12:00:00Z' })).toBe(false);
+    });
+  });
+
+  it('puts a status whose "since" is not a date last, with no waiting time', () => {
+    const odd = facts({
+      number: 40, labels: ['on danyel'], lastActivityAt: '2026-11-05T23:00:00Z',
+      body: '<!-- status -->\n**Waiting on:** Danyel, since yesterday\n**Ask:** look\n<!-- /status -->',
+    });
+    const dated = facts({
+      number: 41, labels: ['on danyel'], lastActivityAt: '2026-11-05T23:00:00Z',
+      labelEvents: [{ label: 'on danyel', action: 'added', at: '2026-11-05T10:00:00Z' }],
+    });
+    const board = buildBoard([odd, dated], [], NOW);
+    expect(board.waiting.map((c) => c.facts.number)).toEqual([41, 40]);
+    expect(board.waiting[1]!.waited).toBe('');
+  });
+
   it('passes errors and the time through', async () => {
     const board = buildBoard(await boardItems(), ['oops'], NOW);
     expect(board.errors).toEqual(['oops']);

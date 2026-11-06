@@ -15,6 +15,7 @@ interface FakeOptions {
   graphqlErrors?: Record<string, string>; // repo name -> message
   behind?: Record<string, number>;        // "base...head" -> behind_by
   status?: number;
+  shape?: (repo: string, data: any) => any; // change what GitHub sends for a repo, after the recorded data is read
 }
 
 function fake(opts: FakeOptions = {}) {
@@ -33,7 +34,10 @@ function fake(opts: FakeOptions = {}) {
         const [, alias, owner, name] = m;
         const message = opts.graphqlErrors?.[name];
         if (message) { data[alias] = null; errors.push({ path: [alias], message }); }
-        else data[alias] = answerRepo(query, opts.itemsFor ? opts.itemsFor(`${owner}/${name}`) : items);
+        else {
+          const answer = answerRepo(query, opts.itemsFor ? opts.itemsFor(`${owner}/${name}`) : items);
+          data[alias] = opts.shape ? opts.shape(`${owner}/${name}`, answer) : answer;
+        }
       }
       return Response.json(errors.length ? { data, errors } : { data });
     }
@@ -176,7 +180,153 @@ describe('fetchItems', () => {
     const { fn, calls } = fake({ itemsFor });
     const { errors } = await fetchItems('tok', NOW, fn);
     expect(calls.filter((c) => c.url.includes('/compare/'))).toHaveLength(20);
-    expect(errors).toEqual(["Didn't check 8 PRs against main"]); // 4 recorded open PRs + 24 copies, 20 checked
+    expect(errors).toEqual(["Didn't check 8 PRs against their base branch"]); // 4 recorded open PRs + 24 copies, 20 checked
+  });
+
+  it('checks the PRs that could be ready to merge first when there are too many to check all', async () => {
+    const itemsFor = () => {
+      const data = recordedRepo();
+      const open = data.pullRequests.nodes.find((p: any) => p.number === 564);
+      for (let n = 1000; n < 1024; n++) data.pullRequests.nodes.unshift({ ...structuredClone(open), number: n });
+      // 578 has had prep for merge; with the turn label it could be about to merge, and it is last in the list.
+      data.pullRequests.nodes.find((p: any) => p.number === 578).labels.nodes = [{ name: 'on danyel' }];
+      return data;
+    };
+    const { fn, calls } = fake({ itemsFor, behind: { 'main...vis-paper-list': 2 } });
+    const { items } = await fetchItems('tok', NOW, fn);
+    expect(calls.some((c) => c.url.includes('/compare/main...vis-paper-list'))).toBe(true);
+    expect(items.find((i) => i.number === 578)!.behindBase).toBe(true);
+  });
+
+  it('does not compare PRs from forks with a base, and does not count them as unchecked', async () => {
+    const itemsFor = () => {
+      const data = recordedRepo();
+      data.pullRequests.nodes.find((p: any) => p.number === 564).isCrossRepository = true;
+      return data;
+    };
+    const { fn, calls } = fake({ itemsFor });
+    const { errors } = await fetchItems('tok', NOW, fn);
+    expect(calls.some((c) => c.url.includes('/compare/main...codemap-design'))).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('skips a repo whose list of open PRs is missing, names it, and keeps the others', async () => {
+    const repos = { data: { viewer: { repositories: { nodes: [
+      { nameWithOwner: 'danyelf/torahmap', pushedAt: '2026-11-06T04:44:20Z', defaultBranchRef: { name: 'main' } },
+      { nameWithOwner: 'danyelf/second', pushedAt: '2026-11-05T04:44:20Z', defaultBranchRef: { name: 'main' } },
+    ] } } } };
+    const shape = (repo: string, data: any) => { if (repo === 'danyelf/second') data.openPrs = null; return data; };
+    const { items, errors } = await fetchItems('tok', NOW, fake({ repos, shape }).fn);
+    expect(errors).toEqual(["Couldn't read danyelf/second: GitHub sent no list of open PRs"]);
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.every((i) => i.repo === 'danyelf/torahmap')).toBe(true);
+  });
+
+  it('skips a repo when a list inside one of its PRs is missing, rather than showing part of it', async () => {
+    const shape = (_repo: string, data: any) => { data.openPrs.nodes[0].timelineItems = null; return data; };
+    const { items, errors } = await fetchItems('tok', NOW, fake({ shape }).fn);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/^Couldn't read danyelf\/torahmap: GitHub sent no label changes for danyelf\/torahmap#\d+$/);
+    expect(items).toEqual([]);
+  });
+
+  it('ignores null entries in a list', async () => {
+    const shape = (_repo: string, data: any) => {
+      data.openPrs.nodes.push(null);
+      data.openPrs.nodes[0].comments.nodes.unshift(null);
+      data.openPrs.nodes[0].commits.nodes.push(null);
+      data.onDanyel.nodes.push(null);
+      return data;
+    };
+    const { items, errors } = await fetchItems('tok', NOW, fake({ shape }).fn);
+    expect(errors).toEqual([]);
+    expect(items.find((i) => i.number === 573)).toBeDefined();
+  });
+
+  it('says so when a list inside an item or the list of repos was cut off', async () => {
+    const itemsFor = () => {
+      const data = recordedRepo();
+      const pr = data.pullRequests.nodes.find((p: any) => p.number === 564);
+      pr.labels.pageInfo = { hasNextPage: true };
+      pr.comments.pageInfo = { hasPreviousPage: true };
+      pr.timelineItems.pageInfo = { hasPreviousPage: true };
+      pr.files.pageInfo = { hasNextPage: true };
+      pr.commits.pageInfo = { hasPreviousPage: true };
+      return data;
+    };
+    const repos = { data: { viewer: { repositories: { pageInfo: { hasNextPage: true }, nodes: [
+      { nameWithOwner: 'danyelf/torahmap', pushedAt: '2026-11-06T04:44:20Z', defaultBranchRef: { name: 'main' } },
+    ] } } } };
+    const { errors } = await fetchItems('tok', NOW, fake({ itemsFor, repos }).fn);
+    expect(errors).toContain('More than 100 repositories; some recently active ones may be missing');
+    expect(errors).toContain('More than 20 labels on danyelf/torahmap#564; a turn label may be missing');
+    expect(errors).toContain('More than 100 comments on danyelf/torahmap#564; a review or prep note may be missing');
+    expect(errors).toContain('More than 100 label changes on danyelf/torahmap#564; how long it has waited may be wrong');
+    expect(errors).toContain('More than 100 files on danyelf/torahmap#564; an added design doc may be missing');
+    expect(errors).toContain('More than 100 commits on danyelf/torahmap#564; commit counts may be off');
+  });
+
+  it('does not worry about more repos when the last one it got is already outside the window', async () => {
+    const repos = { data: { viewer: { repositories: { pageInfo: { hasNextPage: true }, nodes: [
+      { nameWithOwner: 'danyelf/torahmap', pushedAt: '2026-11-06T04:44:20Z', defaultBranchRef: { name: 'main' } },
+      { nameWithOwner: 'danyelf/old', pushedAt: '2025-01-01T00:00:00Z', defaultBranchRef: { name: 'main' } },
+    ] } } } };
+    const { errors } = await fetchItems('tok', NOW, fake({ repos }).fn);
+    expect(errors).toEqual([]);
+  });
+
+  it('uses a closing issue as the linked issue only when it is in the same repo', async () => {
+    const itemsFor = (changeRepo: boolean) => () => {
+      const data = recordedRepo();
+      if (changeRepo) data.pullRequests.nodes.find((p: any) => p.number === 573).closingIssuesReferences.nodes[0].repository = { nameWithOwner: 'someone/else' };
+      return data;
+    };
+    const same = await fetchItems('tok', NOW, fake({ itemsFor: itemsFor(false) }).fn);
+    expect(same.items.find((i) => i.number === 573)!.linkedIssue).toBe(569);
+    const other = await fetchItems('tok', NOW, fake({ itemsFor: itemsFor(true) }).fn);
+    expect(other.items.find((i) => i.number === 573)!.linkedIssue).not.toBe(569);
+  });
+
+  it('takes an issue status from the last comment that has a status section, and times it', async () => {
+    const section = (ask: string) => `<!-- status -->\n**Waiting on:** Claude\n**Ask:** ${ask}\n<!-- /status -->`;
+    const comment = (body: string, createdAt: string, updatedAt: string) => ({ author: { login: 'x' }, body, url: 'https://example.com', createdAt, updatedAt });
+    const itemsFor = () => {
+      const data = recordedRepo();
+      const issue = data.issues.nodes.find((i: any) => i.number === 563);
+      issue.comments.nodes = [
+        comment(section('older'), '2026-11-03T10:00:00Z', '2026-11-03T10:00:00Z'),
+        comment(section('newer'), '2026-11-04T10:00:00Z', '2026-11-05T12:00:00Z'),
+        comment('just a note', '2026-11-05T15:00:00Z', '2026-11-05T15:00:00Z'),
+      ];
+      return data;
+    };
+    const { items } = await fetchItems('tok', NOW, fake({ itemsFor }).fn);
+    const issue = items.find((i) => i.number === 563)!;
+    expect(issue.statusCommentBody).toContain('**Ask:** newer');
+    expect(issue.statusWrittenAt).toBe('2026-11-05T12:00:00Z');
+    expect(issue.lastChangeAt).toBe('2026-11-05T15:00:00Z');
+  });
+
+  it('times a PR status by its last description edit, or its creation, and the latest change by commits and comments', async () => {
+    const itemsFor = (edited: string | null) => () => {
+      const data = recordedRepo();
+      data.pullRequests.nodes.find((p: any) => p.number === 564).lastEditedAt = edited;
+      return data;
+    };
+    const edited = (await fetchItems('tok', NOW, fake({ itemsFor: itemsFor('2026-11-05T12:00:00Z') }).fn)).items.find((i) => i.number === 564)!;
+    expect(edited.statusWrittenAt).toBe('2026-11-05T12:00:00Z');
+    const never = (await fetchItems('tok', NOW, fake({ itemsFor: itemsFor(null) }).fn)).items.find((i) => i.number === 564)!;
+    expect(never.statusWrittenAt).toBe(never.createdAt);
+    expect(Date.parse(never.lastChangeAt!)).toBeGreaterThan(Date.parse(never.createdAt));
+  });
+
+  it('fails when the query asks for a field the recording does not have', async () => {
+    const itemsFor = () => {
+      const data = recordedRepo();
+      delete data.pullRequests.nodes.find((p: any) => p.number === 564).mergeStateStatus;
+      return data;
+    };
+    await expect(fetchItems('tok', NOW, fake({ itemsFor }).fn)).rejects.toThrow(/has no mergeStateStatus/);
   });
 
   it('keeps the other repos when one fails, and names the failing repo', async () => {

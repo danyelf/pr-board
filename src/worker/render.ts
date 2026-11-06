@@ -69,6 +69,8 @@ const updated = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
 });
 
+const STALE_STATUS = 'status older than latest change';
+
 const BOX_CLASS: Record<BoxState, string> = { done: 'd', now: 'now', ready: 'ready', blocked: 'blocked', todo: '' };
 
 function link(href: string, text: string): string {
@@ -138,7 +140,7 @@ function renderCard(c: Card): string {
 
   return `<div class="card${merge.state === 'ready' ? ' ready' : ''}">
     <div class="row"><div>${ref(f)}${esc(f.title)}</div>
-      <div class="tags">${c.waited ? `<span class="age">waiting ${esc(c.waited)}</span>` : ''}${c.why ? `<span class="why">${esc(c.why)}</span>` : ''}${c.outOfSync ? '<span class="sync">label out of sync</span>' : ''}</div></div>
+      <div class="tags">${c.waited ? `<span class="age">waiting ${esc(c.waited)}</span>` : ''}${c.why ? `<span class="why">${esc(c.why)}</span>` : ''}${c.outOfSync ? '<span class="sync">label out of sync</span>' : ''}${c.statusStale ? `<span class="sync">${STALE_STATUS}</span>` : ''}</div></div>
     <div class="steps">${strip}</div>
     ${links.length ? `<div class="links">${links.join('')}</div>` : ''}
     ${parts.join('\n    ')}
@@ -156,7 +158,8 @@ function listRow(c: Card, note: string): string {
 
 function claudeRow(c: Card, now: Date): string {
   const noLabel = c.turn === 'none' ? ' · no turn label' : '';
-  return listRow(c, `last activity ${ago(c.facts.lastActivityAt, now)}${noLabel}`);
+  const stale = c.statusStale ? ` · ${STALE_STATUS}` : '';
+  return listRow(c, `last activity ${ago(c.facts.lastActivityAt, now)}${noLabel}${stale}`);
 }
 
 function quietRow(c: Card, now: Date): string {

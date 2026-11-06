@@ -74,7 +74,8 @@ export function parseStatus(text: string): Status | null {
           const m = WAITING_LINE.exec(value);
           if (m) {
             waitingOn = m[1] as WaitingOn;
-            since = m[2] ?? null;
+            // A time we can't read is no use for working out how long it has waited.
+            since = m[2] && !Number.isNaN(Date.parse(m[2])) ? m[2] : null;
           }
           break;
         }

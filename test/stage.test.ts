@@ -83,6 +83,10 @@ describe('stage strip', () => {
     expect(box(facts(), null, 'Build').note).toBe('✓');
   });
 
+  it('does not call a review current when the reviewed commit is no longer in the PR', () => {
+    expect(box(facts({ reviewSha: 'x', commitsSinceReview: null }), null, 'Build').note).toBe('✓ reviewed before a rebase');
+  });
+
   it('marks Prep done once prep for merge has run, counting commits since', () => {
     expect(box(facts({ prepDone: true, commitsSincePrep: 0 }), null, 'Prep')).toMatchObject({ state: 'done', note: '✓' });
     expect(box(facts({ prepDone: true, commitsSincePrep: 2 }), null, 'Prep').note).toBe('✓ 2 commits since');

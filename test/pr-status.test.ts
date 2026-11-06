@@ -144,6 +144,43 @@ describe('pr-status set', () => {
     expect(parseStatus(w.comments[1]!.body)?.waitingOn).toBe('Danyel');
   });
 
+  it('edits the last status comment when it is ours, even if an earlier one exists', async () => {
+    const section = (n: string) => `<!-- status -->\n**Waiting on:** Claude, since 2026-11-01T00:00:00.000Z\n**Ask:** ${n}\n<!-- /status -->`;
+    const w = world({
+      kind: 'issue',
+      comments: [
+        { id: 7, body: section('old'), user: { login: 'danyelf' } },
+        { id: 8, body: section('newer'), user: { login: 'danyelf' } },
+      ],
+    });
+    const r = await run(w, SET);
+    expect(r.calls.some((c) => c.join(' ').startsWith('api -X PATCH repos/acme/x/issues/comments/8'))).toBe(true);
+    expect(r.calls.some((c) => c.join(' ').includes('issues/comments/7'))).toBe(false);
+  });
+
+  it('posts a new status comment when the last one was written by someone else', async () => {
+    const w = world({
+      kind: 'issue',
+      comments: [
+        { id: 7, body: '<!-- status -->\n**Waiting on:** Claude\n**Ask:** mine\n<!-- /status -->', user: { login: 'danyelf' } },
+        { id: 8, body: '<!-- status -->\n**Waiting on:** nobody\n**Ask:** theirs\n<!-- /status -->', user: { login: 'bob' } },
+      ],
+    });
+    const r = await run(w, SET);
+    expect(r.code).toBe(0);
+    expect(r.calls.some((c) => c.join(' ').includes('-X PATCH repos/acme/x/issues/comments'))).toBe(false);
+    expect(w.comments).toHaveLength(3);
+    expect(parseStatus(w.comments[2]!.body)?.ask).toBe('look');
+  });
+
+  it('reads every page of comments', async () => {
+    const w = world({ kind: 'issue' });
+    const r = await run(w, SET);
+    const read = r.calls.find((c) => c[1]?.startsWith('repos/acme/x/issues/5/comments'))!;
+    expect(read).toContain('--paginate');
+    expect(read).toContain('--slurp');
+  });
+
   it('creates a status comment on an issue that has none', async () => {
     const w = world({ kind: 'issue' });
     await run(w, SET);
@@ -179,6 +216,17 @@ describe('pr-status ok and show', () => {
     expect((await run(w, ['show', 'acme/x#5'])).lines).toEqual(['null']);
     await run(w, SET);
     expect(JSON.parse((await run(w, ['show', 'acme/x#5'])).lines[0]!).waitingOn).toBe('Danyel');
+  });
+
+  it('shows the last status comment on an issue, as the board does', async () => {
+    const w = world({
+      kind: 'issue',
+      comments: [
+        { id: 1, body: '<!-- status -->\n**Waiting on:** Claude\n**Ask:** first\n<!-- /status -->', user: { login: 'danyelf' } },
+        { id: 2, body: '<!-- status -->\n**Waiting on:** nobody\n**Ask:** second\n<!-- /status -->', user: { login: 'bob' } },
+      ],
+    });
+    expect(JSON.parse((await run(w, ['show', 'acme/x#5'])).lines[0]!).ask).toBe('second');
   });
 });
 

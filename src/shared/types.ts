@@ -21,6 +21,8 @@ export interface ItemFacts {
   reviewSha: string | null; reviewUrl: string | null; commitsSinceReview: number | null;
   prepDone: boolean; commitsSincePrep: number | null;
   statusCommentBody: string | null;   // issues only
+  statusWrittenAt: string | null;     // when the status was last written: a PR's description edit, or the issue's status comment
+  lastChangeAt: string | null;        // latest commit or comment, not counting the issue's status comment
   labelEvents: LabelEvent[];
   lastActivityAt: string;             // latest of commits, comments, label changes, created/merged/closed
 }

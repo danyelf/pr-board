@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractToTest, parseStatus, renderStatus, replaceStatus } from '../src/shared/status.ts';
+import { extractToTest, parseStatus, pickStatusComment, renderStatus, replaceStatus } from '../src/shared/status.ts';
 import type { Status } from '../src/shared/types.ts';
 
 const example = `<!-- status -->
@@ -50,6 +50,14 @@ describe('parseStatus', () => {
     expect(parseStatus(`Intro\n\n${example}\n\n## Rest\nmore`)).toEqual(expected);
   });
 
+  it('drops a since that is not a date, so nothing downstream does arithmetic on it', () => {
+    const read = (since: string) => parseStatus(`<!-- status -->\n**Waiting on:** Danyel, since ${since}\n<!-- /status -->`);
+    expect(read('yesterday')?.since).toBeNull();
+    expect(read('2026-11-04T09:00:00Z.')?.since).toBeNull();
+    expect(read('2026-11-04T09:00:00Z')?.since).toBe('2026-11-04T09:00:00Z');
+    expect(read('yesterday')?.waitingOn).toBe('Danyel');
+  });
+
   it('returns null, without throwing, for missing or malformed sections', () => {
     expect(parseStatus('no markers here')).toBeNull();
     expect(parseStatus('<!-- status -->\n**Ask:** x\n<!-- /status -->')).toBeNull();
@@ -92,6 +100,18 @@ describe('replaceStatus', () => {
     expect(replaceStatus('Closes #569\n\nText', expected)).toBe(
       renderStatus(expected) + '\n\nCloses #569\n\nText',
     );
+  });
+});
+
+describe('pickStatusComment', () => {
+  const section = '<!-- status -->\n**Waiting on:** Danyel\n<!-- /status -->';
+  it('takes the last comment that has a status section', () => {
+    const comments = [{ body: 'hi' }, { body: `first ${section}` }, { body: 'chat' }, { body: `second ${section}` }, { body: 'more chat' }];
+    expect(pickStatusComment(comments)).toBe(comments[3]);
+  });
+  it('returns null when none has one', () => {
+    expect(pickStatusComment([{ body: 'hi' }, { body: '<!-- status --> never closed' }])).toBeNull();
+    expect(pickStatusComment([])).toBeNull();
   });
 });
 

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { renderStatus } from '../src/shared/status.ts';
 import { buildBoard } from '../src/worker/board.ts';
 import { renderBoard } from '../src/worker/render.ts';
-import { facts } from './helpers.ts';
+import { facts, status } from './helpers.ts';
 import { NOW, boardItems } from './board-items.ts';
 
 async function page(extra = [] as ReturnType<typeof facts>[], errors: string[] = []): Promise<string> {
@@ -24,6 +25,25 @@ describe('renderBoard', () => {
 
   it('flags a label that disagrees with the status', async () => {
     expect(await page()).toContain('label out of sync');
+  });
+
+  it('tags a waiting card, and an On Claude row, whose status is older than the latest change', async () => {
+    const body = renderStatus(status({ waitingOn: 'Danyel' }));
+    const claudeBody = renderStatus(status({ waitingOn: 'Claude' }));
+    const times = { statusWrittenAt: '2026-11-05T10:00:00Z', lastChangeAt: '2026-11-05T12:00:00Z' };
+    const html = await page([
+      facts({ number: 950, labels: ['on danyel'], body, lastActivityAt: '2026-11-05T23:00:00Z', ...times }),
+      facts({ number: 951, labels: ['in-progress'], body: claudeBody, lastActivityAt: '2026-11-05T23:00:00Z', ...times }),
+    ]);
+    const waiting = html.slice(html.indexOf('PR #950'), html.indexOf('On Claude'));
+    expect(waiting).toContain('<span class="sync">status older than latest change</span>');
+    const claude = html.slice(html.indexOf('On Claude'), html.indexOf('Quiet:'));
+    expect(claude).toMatch(/last activity [^<]* ago · status older than latest change</);
+    // A status that is up to date says nothing.
+    const fresh = renderBoard(buildBoard([
+      facts({ number: 952, labels: ['on danyel'], body, lastActivityAt: '2026-11-05T23:00:00Z', statusWrittenAt: '2026-11-05T13:00:00Z', lastChangeAt: '2026-11-05T12:00:00Z' }),
+    ], [], NOW));
+    expect(fresh).not.toContain('status older than latest change');
   });
 
   it('never calls an unlabelled item Claude working', async () => {

@@ -8,6 +8,7 @@ export interface Card {
   facts: ItemFacts;
   status: Status | null;
   statusUnreadable: boolean;          // a status section is there, but it couldn't be read
+  statusStale: boolean;               // there is a status, and a commit or comment has come since it was written
   turn: Turn;
   outOfSync: boolean;
   strip: StageBox[];
@@ -39,6 +40,12 @@ function statusOf(f: ItemFacts): Status | null {
   return parseStatus(statusText(f));
 }
 
+/** Whether something happened after the status was written; false when either time is unknown. */
+function changedSince(change: string | null, written: string | null): boolean {
+  if (change === null || written === null) return false;
+  return Date.parse(change) > Date.parse(written);
+}
+
 /** An issue hidden behind an open PR, whose labels or status say it is waiting on Danyel. */
 interface HiddenWait { issue: number; since: string | null }
 
@@ -56,6 +63,7 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
     facts: f,
     status,
     statusUnreadable: status === null && hasStatusSection(statusText(f)),
+    statusStale: status !== null && changedSince(f.lastChangeAt, f.statusWrittenAt),
     turn: carried ? 'danyel' : effective.turn,
     outOfSync: carried || effective.outOfSync,
     strip,

@@ -1,11 +1,20 @@
 import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_DANYEL, LABEL_PARKED, REPO_WINDOW_DAYS, WRITTEN_ELSEWHERE } from '../shared/names.ts';
+import { parseStatus, pickStatusComment } from '../shared/status.ts';
+import { effectiveTurn } from '../shared/turn.ts';
 import type { ItemFacts, LabelEvent } from '../shared/types.ts';
 
 const GRAPHQL_URL = 'https://api.github.com/graphql';
 const REPOS_PER_QUERY = 5;
+const MAX_REPOS = 100;
 const MAX_COMPARE_CALLS = 20;
 const OPEN_PRS_PER_REPO = 50;
 const ISSUES_PER_LABEL = 50;
+const LABELS_PER_ITEM = 20;
+const COMMENTS_PER_ITEM = 100;
+const LABEL_CHANGES_PER_ITEM = 100;
+const FILES_PER_PR = 100;
+const COMMITS_PER_PR = 100;
+const CLOSING_ISSUES_PER_PR = 5;
 // One issues connection per label, so GitHub does the filtering and each label has its own limit.
 const TURN_LABELS = [
   { label: LABEL_ON_DANYEL, alias: 'onDanyel' },
@@ -15,42 +24,76 @@ const TURN_LABELS = [
 
 const REPOS_QUERY = `query {
   viewer {
-    repositories(first: 100, ownerAffiliations: [OWNER, COLLABORATOR], orderBy: {field: PUSHED_AT, direction: DESC}) {
+    repositories(first: ${MAX_REPOS}, ownerAffiliations: [OWNER, COLLABORATOR], orderBy: {field: PUSHED_AT, direction: DESC}) {
+      pageInfo { hasNextPage }
       nodes { nameWithOwner pushedAt defaultBranchRef { name } }
     }
   }
 }`;
 
-const COMMON_FIELDS = `number title url body createdAt updatedAt closedAt
-  labels(first:20){nodes{name}}
-  comments(last:100){nodes{author{login} body url createdAt updatedAt}}
-  timelineItems(last:100, itemTypes:[LABELED_EVENT, UNLABELED_EVENT]){nodes{__typename ... on LabeledEvent{label{name} createdAt} ... on UnlabeledEvent{label{name} createdAt}}}`;
+// For connections read from the start (first:) ask hasNextPage; for ones read from the end (last:) ask hasPreviousPage.
+const COMMON_FIELDS = `number title url body createdAt closedAt
+  labels(first:${LABELS_PER_ITEM}){pageInfo{hasNextPage} nodes{name}}
+  comments(last:${COMMENTS_PER_ITEM}){pageInfo{hasPreviousPage} nodes{author{login} body url createdAt updatedAt}}
+  timelineItems(last:${LABEL_CHANGES_PER_ITEM}, itemTypes:[LABELED_EVENT, UNLABELED_EVENT]){pageInfo{hasPreviousPage} nodes{__typename ... on LabeledEvent{label{name} createdAt} ... on UnlabeledEvent{label{name} createdAt}}}`;
 
 const PR_FIELDS = `${COMMON_FIELDS}
-  isDraft merged mergedAt mergeStateStatus headRefName baseRefName
-  closingIssuesReferences(first:1){nodes{number}}
-  files(first:100){nodes{path changeType}}
-  commits(last:100){nodes{commit{oid committedDate}}}`;
+  isDraft isCrossRepository merged mergedAt lastEditedAt mergeStateStatus headRefName baseRefName
+  closingIssuesReferences(first:${CLOSING_ISSUES_PER_PR}){nodes{number repository{nameWithOwner}}}
+  files(first:${FILES_PER_PR}){pageInfo{hasNextPage} nodes{path changeType}}
+  commits(last:${COMMITS_PER_PR}){pageInfo{hasPreviousPage} nodes{commit{oid committedDate}}}`;
 
 interface RepoNode { nameWithOwner: string; pushedAt: string; defaultBranchRef: { name: string } | null }
 interface Comment { author: { login: string } | null; body: string; url: string; createdAt: string; updatedAt: string }
 interface TimelineNode { __typename: string; label?: { name: string }; createdAt?: string }
+/** A list as GitHub sends it. Any part of it can be missing or null if GitHub had a problem. */
+interface Connection<T> { pageInfo?: { hasNextPage?: boolean; hasPreviousPage?: boolean } | null; nodes?: (T | null)[] | null }
 interface RawItem {
-  number: number; title: string; url: string; body: string; createdAt: string; updatedAt?: string; closedAt: string | null;
-  labels: { nodes: { name: string }[] };
-  comments: { nodes: Comment[] };
-  timelineItems: { nodes: TimelineNode[] };
-  isDraft?: boolean; merged?: boolean; mergedAt?: string | null; mergeStateStatus?: string | null;
+  number: number; title: string; url: string; body: string | null; createdAt: string; closedAt: string | null;
+  labels: Connection<{ name: string }> | null;
+  comments: Connection<Comment> | null;
+  timelineItems: Connection<TimelineNode> | null;
+  isDraft?: boolean; isCrossRepository?: boolean; merged?: boolean; mergedAt?: string | null; lastEditedAt?: string | null;
+  mergeStateStatus?: string | null;
   headRefName?: string; baseRefName?: string;
-  closingIssuesReferences?: { nodes: { number: number }[] };
-  files?: { nodes: { path: string; changeType: string }[] };
-  commits?: { nodes: { commit: { oid: string; committedDate: string } }[] };
+  closingIssuesReferences?: Connection<{ number: number; repository: { nameWithOwner: string } | null }> | null;
+  files?: Connection<{ path: string; changeType: string }> | null;
+  commits?: Connection<{ commit: { oid: string; committedDate: string } }> | null;
 }
-interface Page { pageInfo: { hasNextPage: boolean }; nodes: RawItem[] }
-interface RepoData { openPrs: Page; onDanyel: Page; parked: Page; inProgress: Page }
+interface RepoData {
+  openPrs: Connection<RawItem> | null;
+  onDanyel: Connection<RawItem> | null;
+  parked: Connection<RawItem> | null;
+  inProgress: Connection<RawItem> | null;
+}
 interface GraphqlResponse<T> { data?: T | null; errors?: { message: string; path?: (string | number)[] }[] }
 
-interface Pending { facts: ItemFacts; base: string; head: string }
+interface Pending {
+  facts: ItemFacts; base: string; head: string;
+  fromFork: boolean;
+  /** Prep is done and it is Danyel's turn, so this PR could be one he is about to merge. */
+  couldBeReady: boolean;
+}
+
+type Report = (message: string) => void;
+
+/** The items in a list, without any null entries. Throws if GitHub sent no list at all. */
+function listOf<T>(conn: Connection<T> | null | undefined, what: string): { items: T[]; cutOff: boolean } {
+  if (!conn || !Array.isArray(conn.nodes)) throw new Error(`GitHub sent no ${what}`);
+  return {
+    items: conn.nodes.filter((n): n is T => n !== null && n !== undefined),
+    cutOff: conn.pageInfo?.hasNextPage === true || conn.pageInfo?.hasPreviousPage === true,
+  };
+}
+
+/** Like listOf, and says so when the list came back full. */
+function listOfItem<T>(
+  conn: Connection<T> | null | undefined, field: string, limit: number, where: string, whatIsLost: string, report: Report,
+): T[] {
+  const { items, cutOff } = listOf(conn, `${field} for ${where}`);
+  if (cutOff) report(`More than ${limit} ${field} on ${where}; ${whatIsLost}`);
+  return items;
+}
 
 export async function fetchItems(
   token: string,
@@ -67,10 +110,17 @@ export async function fetchItems(
   }
 
   try {
-    const reposRes = await graphql<{ viewer: { repositories: { nodes: RepoNode[] } } }>(REPOS_QUERY);
-    const nodes = reposRes.data?.viewer.repositories.nodes;
-    if (!nodes) return { items: [], errors: [reposRes.errors?.[0]?.message ?? 'GitHub sent no repositories'] };
+    const reposRes = await graphql<{ viewer: { repositories: Connection<RepoNode> } }>(REPOS_QUERY);
+    const repoList = reposRes.data?.viewer?.repositories;
+    if (!repoList || !Array.isArray(repoList.nodes)) {
+      return { items: [], errors: [reposRes.errors?.[0]?.message ?? 'GitHub sent no repositories'] };
+    }
+    const nodes = listOf(repoList, 'repositories').items;
     const recent = nodes.filter((r) => now.getTime() - Date.parse(r.pushedAt) <= REPO_WINDOW_DAYS * DAY_MS);
+    // Newest push first, so more repos only matter if the last one we got is still inside the window.
+    if (repoList.pageInfo?.hasNextPage && recent.length === nodes.length) {
+      errors.push(`More than ${MAX_REPOS} repositories; some recently active ones may be missing`);
+    }
 
     const pending: Pending[] = [];
     const openByRepo = new Map<string, Set<number>>();
@@ -98,28 +148,15 @@ ${issues.join('\n')}
         const data = res.data?.[`r${k}`];
         if (!data) return;
         const name = repo.nameWithOwner;
-        const open = new Set<number>();
-        openByRepo.set(name, open);
-
-        if (data.openPrs.pageInfo.hasNextPage) {
-          errors.push(`More than ${OPEN_PRS_PER_REPO} open PRs in ${name}; some may be missing from this page`);
-        }
-        for (const pr of data.openPrs.nodes) {
-          open.add(pr.number);
-          pending.push({ facts: prFacts(name, pr), base: pr.baseRefName ?? '', head: pr.headRefName ?? '' });
-        }
-
-        const seenIssues = new Set<number>();
-        for (const { label, alias } of TURN_LABELS) {
-          const page = data[alias];
-          if (page.pageInfo.hasNextPage) {
-            errors.push(`More than ${ISSUES_PER_LABEL} open issues labelled "${label}" in ${name}; some may be missing from this page`);
-          }
-          for (const issue of page.nodes) {
-            if (seenIssues.has(issue.number)) continue;
-            seenIssues.add(issue.number);
-            pending.push({ facts: issueFacts(name, issue), base: '', head: '' });
-          }
+        // A repo whose data is incomplete is left out whole, with a line saying so, rather than half shown.
+        const repoErrors: string[] = [];
+        try {
+          const read = readRepo(name, data, (m) => repoErrors.push(m));
+          openByRepo.set(name, read.open);
+          pending.push(...read.pending);
+          errors.push(...repoErrors);
+        } catch (e) {
+          errors.push(`Couldn't read ${name}: ${e instanceof Error ? e.message : String(e)}`);
         }
       });
     }
@@ -128,8 +165,11 @@ ${issues.join('\n')}
       if (facts.stackedOn !== null) facts.stackedOnOpen = openByRepo.get(facts.repo)?.has(facts.stackedOn) ?? false;
     }
 
-    const open = pending.filter((p) => p.facts.kind === 'pr' && p.facts.closedAt === null);
-    const toCheck = open.slice(0, MAX_COMPARE_CALLS);
+    // Only so many PRs can be compared with their base. Those that could be about to merge come first,
+    // and PRs from forks are skipped, since their branches aren't in this repo to compare.
+    const open = pending.filter((p) => p.facts.kind === 'pr' && p.facts.closedAt === null && !p.fromFork);
+    const ordered = [...open.filter((p) => p.couldBeReady), ...open.filter((p) => !p.couldBeReady)];
+    const toCheck = ordered.slice(0, MAX_COMPARE_CALLS);
     await Promise.all(toCheck.map(async (p) => {
       const range = `${p.base}...${p.head}`.split('/').map(encodeURIComponent).join('/');
       try {
@@ -141,7 +181,7 @@ ${issues.join('\n')}
         errors.push(`Couldn't compare ${p.facts.repo}#${p.facts.number} with ${p.base}`);
       }
     }));
-    if (open.length > toCheck.length) errors.push(`Didn't check ${open.length - toCheck.length} PRs against main`);
+    if (open.length > toCheck.length) errors.push(`Didn't check ${open.length - toCheck.length} PRs against their base branch`);
 
     return { items: pending.map((p) => p.facts), errors };
   } catch (e) {
@@ -152,9 +192,43 @@ ${issues.join('\n')}
 
 class HttpError extends Error {}
 
-function labelEvents(item: RawItem): LabelEvent[] {
+/** Everything wanted from one repo's answer. Throws if a list GitHub should have sent is missing. */
+function readRepo(name: string, data: RepoData, report: Report): { open: Set<number>; pending: Pending[] } {
+  const open = new Set<number>();
+  const pending: Pending[] = [];
+
+  const prs = listOf(data.openPrs, 'list of open PRs');
+  if (prs.cutOff) report(`More than ${OPEN_PRS_PER_REPO} open PRs in ${name}; some may be missing from this page`);
+  for (const pr of prs.items) {
+    open.add(pr.number);
+    const facts = prFacts(name, pr, report);
+    const turn = effectiveTurn(facts.labels, parseStatus(facts.body)).turn;
+    pending.push({
+      facts, base: pr.baseRefName ?? '', head: pr.headRefName ?? '',
+      fromFork: pr.isCrossRepository === true,
+      couldBeReady: facts.prepDone && turn === 'danyel',
+    });
+  }
+
+  const seenIssues = new Set<number>();
+  for (const { label, alias } of TURN_LABELS) {
+    const page = listOf(data[alias], `list of issues labelled "${label}"`);
+    if (page.cutOff) {
+      report(`More than ${ISSUES_PER_LABEL} open issues labelled "${label}" in ${name}; some may be missing from this page`);
+    }
+    for (const issue of page.items) {
+      if (seenIssues.has(issue.number)) continue;
+      seenIssues.add(issue.number);
+      pending.push({ facts: issueFacts(name, issue, report), base: '', head: '', fromFork: false, couldBeReady: false });
+    }
+  }
+  return { open, pending };
+}
+
+function labelEvents(item: RawItem, where: string, report: Report): LabelEvent[] {
+  const nodes = listOfItem(item.timelineItems, 'label changes', LABEL_CHANGES_PER_ITEM, where, 'how long it has waited may be wrong', report);
   const events: LabelEvent[] = [];
-  for (const n of item.timelineItems.nodes) {
+  for (const n of nodes) {
     if (!n.label || !n.createdAt) continue;
     events.push({ label: n.label.name, action: n.__typename === 'LabeledEvent' ? 'added' : 'removed', at: n.createdAt });
   }
@@ -165,6 +239,10 @@ function latest(times: string[]): string {
   return times.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
 }
 
+function latestOrNull(times: string[]): string | null {
+  return times.length > 0 ? latest(times) : null;
+}
+
 function screenshotsIn(body: string): string[] {
   const urls: string[] = [];
   for (const m of body.matchAll(/!\[[^\]]*\]\(\s*<?([^\s)>]+)/g)) urls.push(m[1]);
@@ -172,26 +250,31 @@ function screenshotsIn(body: string): string[] {
   return urls;
 }
 
-function baseFacts(repo: string, item: RawItem, kind: 'pr' | 'issue', events: LabelEvent[], extraTimes: string[]) {
+function baseFacts(repo: string, item: RawItem, kind: 'pr' | 'issue', labels: string[], events: LabelEvent[], comments: Comment[], extraTimes: string[]) {
   const times = [
     item.createdAt, ...(item.closedAt ? [item.closedAt] : []), ...extraTimes,
-    ...item.comments.nodes.map((c) => c.createdAt), ...events.map((e) => e.at),
+    ...comments.map((c) => c.createdAt), ...events.map((e) => e.at),
   ];
   return {
     repo, number: item.number, kind, title: item.title, url: item.url,
-    labels: item.labels.nodes.map((l) => l.name), body: item.body ?? '',
+    labels, body: item.body ?? '',
     createdAt: item.createdAt, closedAt: item.closedAt,
     labelEvents: events, lastActivityAt: latest(times),
   };
 }
 
-function prFacts(repo: string, pr: RawItem): ItemFacts {
-  const events = labelEvents(pr);
-  const commits = (pr.commits?.nodes ?? []).map((n) => n.commit);
-  const comments = pr.comments.nodes;
+function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
+  const where = `${repo}#${pr.number}`;
+  const events = labelEvents(pr, where, report);
+  const commits = listOfItem(pr.commits, 'commits', COMMITS_PER_PR, where, 'commit counts may be off', report).map((n) => n.commit);
+  const comments = listOfItem(pr.comments, 'comments', COMMENTS_PER_ITEM, where, 'a review or prep note may be missing', report);
+  const files = listOfItem(pr.files, 'files', FILES_PER_PR, where, 'an added design doc may be missing', report);
+  const closingRefs = listOf(pr.closingIssuesReferences, `closing issues for ${where}`).items;
+  const labels = listOfItem(pr.labels, 'labels', LABELS_PER_ITEM, where, 'a turn label may be missing', report).map((l) => l.name);
   const body = pr.body ?? '';
 
-  const closing = pr.closingIssuesReferences?.nodes[0]?.number;
+  // A closing reference can name an issue in another repo, whose number means nothing here.
+  const closing = closingRefs.find((r) => r.repository?.nameWithOwner === repo)?.number;
   const refs = body.match(WRITTEN_ELSEWHERE.refsIssue);
   const stacked = body.match(WRITTEN_ELSEWHERE.stackedOn);
 
@@ -207,6 +290,7 @@ function prFacts(repo: string, pr: RawItem): ItemFacts {
     const m = c.body.match(WRITTEN_ELSEWHERE.reviewedUpTo);
     if (m) { reviewSha = m[1]; reviewUrl = c.url; }
   }
+  // Stays null when the reviewed commit isn't among the PR's commits (the PR was rebased or force-pushed).
   let commitsSinceReview: number | null = null;
   if (reviewSha) {
     const idx = commits.findIndex((c) => c.oid.startsWith(reviewSha!));
@@ -219,33 +303,39 @@ function prFacts(repo: string, pr: RawItem): ItemFacts {
 
   const extra = [...(pr.mergedAt ? [pr.mergedAt] : []), ...commits.map((c) => c.committedDate)];
   return {
-    ...baseFacts(repo, pr, 'pr', events, extra),
+    ...baseFacts(repo, pr, 'pr', labels, events, comments, extra),
     isDraft: pr.isDraft ?? false, merged: pr.merged ?? false, mergedAt: pr.mergedAt ?? null,
     mergeState: pr.mergeStateStatus ?? null, behindBase: false,
     linkedIssue: closing ?? (refs ? Number(refs[1]) : null),
     stackedOn: stacked ? Number(stacked[1]) : null, stackedOnOpen: false,
     previewUrl,
-    addedDocs: (pr.files?.nodes ?? [])
+    addedDocs: files
       .filter((f) => f.changeType === 'ADDED' && f.path.endsWith('.md') && f.path.startsWith('docs/'))
       .map((f) => ({ path: f.path, url: `${pr.url}/files` })),
     screenshots: screenshotsIn(body),
     reviewSha, reviewUrl, commitsSinceReview,
     prepDone: prepAt !== null, commitsSincePrep,
     statusCommentBody: null,
+    statusWrittenAt: pr.lastEditedAt ?? pr.createdAt,
+    lastChangeAt: latestOrNull([...commits.map((c) => c.committedDate), ...comments.map((c) => c.createdAt)]),
   };
 }
 
-function issueFacts(repo: string, issue: RawItem): ItemFacts {
-  const events = labelEvents(issue);
-  let statusCommentBody: string | null = null;
-  for (const c of issue.comments.nodes) if (c.body.includes('<!-- status -->')) statusCommentBody = c.body;
+function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
+  const where = `${repo}#${issue.number}`;
+  const events = labelEvents(issue, where, report);
+  const comments = listOfItem(issue.comments, 'comments', COMMENTS_PER_ITEM, where, 'the status comment may be missing', report);
+  const labels = listOfItem(issue.labels, 'labels', LABELS_PER_ITEM, where, 'a turn label may be missing', report).map((l) => l.name);
+  const statusComment = pickStatusComment(comments);
   return {
-    ...baseFacts(repo, issue, 'issue', events, []),
+    ...baseFacts(repo, issue, 'issue', labels, events, comments, []),
     isDraft: false, merged: false, mergedAt: null, mergeState: null, behindBase: false,
     linkedIssue: null, stackedOn: null, stackedOnOpen: false,
     previewUrl: null, addedDocs: [], screenshots: screenshotsIn(issue.body ?? ''),
     reviewSha: null, reviewUrl: null, commitsSinceReview: null,
     prepDone: false, commitsSincePrep: null,
-    statusCommentBody,
+    statusCommentBody: statusComment?.body ?? null,
+    statusWrittenAt: statusComment?.updatedAt ?? null,
+    lastChangeAt: latestOrNull(comments.filter((c) => c !== statusComment).map((c) => c.createdAt)),
   };
 }
