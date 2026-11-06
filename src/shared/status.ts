@@ -1,19 +1,20 @@
+import { WAITING_ON, WRITTEN_ELSEWHERE, type WaitingOn } from './names.ts';
 import type { Question, Status } from './types.ts';
 
-const OPEN = '<!-- status -->';
-const CLOSE = '<!-- /status -->';
+export const STATUS_OPEN = '<!-- status -->';
+export const STATUS_CLOSE = '<!-- /status -->';
 
-const WAITING_ON = ['Danyel', 'Claude', 'nobody'] as const;
+const WAITING_LINE = new RegExp(`^(${WAITING_ON.map((w) => w.status).join('|')})(?:,\\s*since\\s+(\\S+))?$`);
 
 function findSection(text: string): { start: number; end: number; inner: string } | null {
-  const start = text.indexOf(OPEN);
+  const start = text.indexOf(STATUS_OPEN);
   if (start === -1) return null;
-  const closeAt = text.indexOf(CLOSE, start + OPEN.length);
+  const closeAt = text.indexOf(STATUS_CLOSE, start + STATUS_OPEN.length);
   if (closeAt === -1) return null;
   return {
     start,
-    end: closeAt + CLOSE.length,
-    inner: text.slice(start + OPEN.length, closeAt),
+    end: closeAt + STATUS_CLOSE.length,
+    inner: text.slice(start + STATUS_OPEN.length, closeAt),
   };
 }
 
@@ -40,11 +41,22 @@ export function hasStatusSection(text: string): boolean {
   return findSection(text) !== null;
 }
 
+/**
+ * The comment that holds an issue's status: the last one, in the order given (oldest first), that has
+ * a status section. When more than one has been written, the newest is the one in force.
+ */
+export function pickStatusComment<T extends { body: string }>(comments: T[]): T | null {
+  for (let i = comments.length - 1; i >= 0; i--) {
+    if (hasStatusSection(comments[i]!.body)) return comments[i]!;
+  }
+  return null;
+}
+
 export function parseStatus(text: string): Status | null {
   const section = findSection(text);
   if (!section) return null;
 
-  let waitingOn: Status['waitingOn'] | null = null;
+  let waitingOn: WaitingOn | null = null;
   let since: string | null = null;
   let ask = '';
   let toTest: string | null = null;
@@ -59,9 +71,9 @@ export function parseStatus(text: string): Status | null {
       const value = field[2]!.trim();
       switch (field[1]) {
         case 'Waiting on': {
-          const m = /^(Danyel|Claude|nobody)(?:,\s*since\s+(\S+))?$/.exec(value);
-          if (m && (WAITING_ON as readonly string[]).includes(m[1]!)) {
-            waitingOn = m[1] as Status['waitingOn'];
+          const m = WAITING_LINE.exec(value);
+          if (m) {
+            waitingOn = m[1] as WaitingOn;
             since = m[2] ?? null;
           }
           break;
@@ -95,7 +107,7 @@ export function parseStatus(text: string): Status | null {
  */
 export function statusValueProblem(value: string): 'line break' | 'status marker' | null {
   if (/[\r\n]/.test(value)) return 'line break';
-  if (value.includes(OPEN) || value.includes(CLOSE)) return 'status marker';
+  if (value.includes(STATUS_OPEN) || value.includes(STATUS_CLOSE)) return 'status marker';
   return null;
 }
 
@@ -113,7 +125,7 @@ export function renderStatus(s: Status): string {
     checkValue(`question ${q.n}`, q.text);
     for (const c of q.choices) checkValue(`question ${q.n} choice`, c);
   }
-  const lines = [OPEN, `**Waiting on:** ${s.waitingOn}${s.since ? `, since ${s.since}` : ''}`, `**Ask:** ${s.ask}`];
+  const lines = [STATUS_OPEN, `**Waiting on:** ${s.waitingOn}${s.since ? `, since ${s.since}` : ''}`, `**Ask:** ${s.ask}`];
   if (s.questions.length > 0) {
     lines.push('**Questions:**');
     for (const q of s.questions) {
@@ -122,7 +134,7 @@ export function renderStatus(s: Status): string {
     }
   }
   if (s.toTest) lines.push(`**To test:** ${s.toTest}`);
-  lines.push(CLOSE);
+  lines.push(STATUS_CLOSE);
   return lines.join('\n');
 }
 
@@ -134,7 +146,7 @@ export function replaceStatus(body: string, s: Status): string {
 }
 
 export function extractToTest(body: string): string | null {
-  const marker = '**To look at on the preview:**';
+  const marker = WRITTEN_ELSEWHERE.toLookAt;
   const at = body.indexOf(marker);
   if (at === -1) return null;
   const after = body.slice(at + marker.length);

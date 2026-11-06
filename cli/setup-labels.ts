@@ -1,12 +1,16 @@
+import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_DANYEL, LABEL_PARKED, REPO_WINDOW_DAYS } from '../src/shared/names.ts';
 import { flattenPages, gh } from './gh.ts';
-import type { Deps } from './gh.ts';
+import type { Deps as BaseDeps } from './gh.ts';
+
+interface Deps extends BaseDeps {
+  now: () => Date;
+}
 
 const LABELS = [
-  { name: 'on danyel', color: 'e8a33a', description: 'Waiting on Danyel: a look, an answer, or a merge' },
-  { name: 'parked', color: 'c9c6bd', description: 'Waiting on something outside Danyel and Claude' },
+  { name: LABEL_ON_DANYEL, color: 'e8a33a', description: 'Waiting on Danyel: a look, an answer, or a merge' },
+  { name: LABEL_PARKED, color: 'c9c6bd', description: 'Waiting on something outside Danyel and Claude' },
+  { name: LABEL_IN_PROGRESS, color: '4a7bd0', description: 'Claude is working on it' },
 ];
-
-const SIXTY_DAYS_MS = 60 * 24 * 60 * 60 * 1000;
 
 interface RepoSummary { full_name: string; pushed_at: string | null }
 interface RepoDetail { merge_commit_message?: string; squash_merge_commit_message?: string }
@@ -17,7 +21,7 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
   const dryRun = argv.includes('--dry-run');
   let failed = false;
   try {
-    const cutoff = deps.now().getTime() - SIXTY_DAYS_MS;
+    const cutoff = deps.now().getTime() - REPO_WINDOW_DAYS * DAY_MS;
     const repos = (flattenPages(await deps.gh(['api', 'user/repos?affiliation=owner,collaborator&sort=pushed&per_page=100', '--paginate', '--slurp'])) as RepoSummary[])
       .filter((r) => r.pushed_at && Date.parse(r.pushed_at) >= cutoff);
 
@@ -44,7 +48,7 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
         err(`${name}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    if (repos.length === 0) out('No repos pushed to in the last 60 days.');
+    if (repos.length === 0) out(`No repos pushed to in the last ${REPO_WINDOW_DAYS} days.`);
     return failed ? 1 : 0;
   } catch (e) {
     err(e instanceof Error ? e.message : String(e));
@@ -53,6 +57,5 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
 }
 
 if (import.meta.main) {
-  const { homedir } = await import('node:os');
-  process.exitCode = await main(process.argv.slice(2), { gh, now: () => new Date(), home: homedir() });
+  process.exitCode = await main(process.argv.slice(2), { gh, now: () => new Date() });
 }

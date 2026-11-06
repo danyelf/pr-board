@@ -54,7 +54,7 @@ async function run(fixture: string, setup: Setup = {}, input: Record<string, unk
   const stdin = JSON.stringify({
     session_id: 's', transcript_path: join(FIXTURES, fixture), cwd: '/Users/danyel/code/MISC/torahmap', stop_hook_active: false, hook_event_name: 'Stop', ...input,
   });
-  const code = await main([], { gh, git, now: () => new Date('2026-11-05T11:00:00Z'), home, stdin, out: (l) => out.push(l), err: (l) => errors.push(l) });
+  const code = await main({ gh, git, home, stdin, out: (l) => out.push(l), err: (l) => errors.push(l) });
   return { code, out, errors, block: out.length ? (JSON.parse(out.join('')) as { decision: string; reason: string }) : null };
 }
 
@@ -64,7 +64,7 @@ describe('status-check hook', () => {
     expect(r.code).toBe(0);
     expect(r.block?.decision).toBe('block');
     expect(r.block?.reason).toContain('danyelf/torahmap#574');
-    expect(r.block?.reason).toContain('node /Users/danyel/code/MISC/pr-board/cli/pr-status.ts set <ref> --waiting');
+    expect(r.block?.reason).toContain(`node ${join(import.meta.dirname, '..', 'cli', 'pr-status.ts')} set <ref> --waiting`);
   });
 
   it('is satisfied by a description edited this turn that has the status marker', async () => {

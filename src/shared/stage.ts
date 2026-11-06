@@ -1,5 +1,5 @@
-import type { BoxState, ItemFacts, StageBox, Status } from './types.ts';
-import { effectiveTurn, formatWait, isReadyToMerge, waitingSince } from './turn.ts';
+import type { BoxState, ItemFacts, StageBox, Status, Turn } from './types.ts';
+import { effectiveTurn, formatWait, mergeBlockers, waitingSince } from './turn.ts';
 
 function count(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? '' : 's'}`;
@@ -9,25 +9,24 @@ function box(name: StageBox['name'], state: BoxState, note = ''): StageBox {
   return { name, state, note };
 }
 
-function mergeBox(f: ItemFacts, s: Status | null, turn: string, now: Date): StageBox {
+/** The box with this name. Every strip has all six, so a missing one is a bug. */
+export function boxNamed(strip: StageBox[], name: StageBox['name']): StageBox {
+  const found = strip.find((b) => b.name === name);
+  if (!found) throw new Error(`The stage strip has no "${name}" box`);
+  return found;
+}
+
+function mergeBox(f: ItemFacts, s: Status | null, turn: Turn, now: Date): StageBox {
   if (f.merged) return box('Ready for merge', 'done');
-  if (isReadyToMerge(f, s)) {
+  const blockers = mergeBlockers(f, s, turn);
+  if (blockers.length === 0) {
     const since = waitingSince(f, s);
     return box('Ready for merge', 'ready', since ? formatWait(since, now) : '');
   }
-  const stacked = f.stackedOnOpen && f.stackedOn !== null ? `after #${f.stackedOn}` : null;
-  const rebase = f.behindBase || f.mergeState === 'BEHIND' ? 'rebase first' : null;
-  const pastPrep = f.kind === 'pr' && f.prepDone && turn === 'danyel';
-  const note = pastPrep
-    ? (f.isDraft ? 'draft' : null) ??
-      stacked ??
-      (f.mergeState === 'DIRTY' ? 'conflicts' : null) ??
-      (f.mergeState === 'UNSTABLE' || f.mergeState === 'BLOCKED' ? 'checks failing' : null) ??
-      rebase ??
-      ((f.commitsSincePrep ?? 0) > 0 ? 'commits since prep' : null) ??
-      (f.mergeState === 'UNKNOWN' ? 'GitHub still checking' : null)
-    : stacked ?? rebase;
-  return box('Ready for merge', pastPrep && note ? 'blocked' : 'todo', note ?? '');
+  // Before the merge step, only the blockers already known to be coming are worth a note, and the box stays plain.
+  const atMergeStep = !blockers.some((b) => b.notYetAtMerge);
+  const note = blockers.find((b) => (atMergeStep || b.showEarly) && b.note(f) !== null)?.note(f) ?? null;
+  return box('Ready for merge', atMergeStep && note ? 'blocked' : 'todo', note ?? '');
 }
 
 export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date()): StageBox[] {
@@ -71,11 +70,10 @@ export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date(
   return [issue, design, build, look, prep, mergeBox(f, s, turn, now)];
 }
 
-export function whyTag(f: ItemFacts, s: Status | null, now: Date = new Date()): string {
-  const strip = stageStrip(f, s, now);
-  const merge = strip[5]!;
-  const look = strip[3]!;
-  const { turn } = effectiveTurn(f.labels, s);
+/** The short reason a card is where it is. `strip` and `turn` are the ones already worked out for the item. */
+export function whyTag(s: Status | null, strip: StageBox[], turn: Turn): string {
+  const merge = boxNamed(strip, 'Ready for merge');
+  const look = boxNamed(strip, 'Your look');
   const questions = s?.questions.length ?? 0;
   if (merge.state === 'ready') return 'Ready to merge';
   if (merge.state === 'blocked') return `Can't merge yet: ${merge.note}`;

@@ -1,4 +1,5 @@
 import type { ItemFacts, StageBox, Status, Turn } from '../shared/types.ts';
+import { DAY_MS } from '../shared/names.ts';
 import { extractToTest, hasStatusSection, parseStatus } from '../shared/status.ts';
 import { stageStrip, whyTag } from '../shared/stage.ts';
 import { effectiveTurn, formatWait, waitingSince } from '../shared/turn.ts';
@@ -24,8 +25,7 @@ export interface Board {
   generatedAt: string;
 }
 
-const DAY = 24 * 3_600_000;
-const QUIET_AFTER = 3 * DAY;
+const QUIET_AFTER = 3 * DAY_MS;
 
 function isOpen(f: ItemFacts): boolean {
   return !f.merged && f.closedAt === null;
@@ -46,7 +46,8 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
   const status = statusOf(f);
   const effective = effectiveTurn(f.labels, status);
   const own = waitingSince(f, status);
-  const why = whyTag(f, status, now);
+  const strip = stageStrip(f, status, now);
+  const why = whyTag(status, strip, effective.turn);
   // The PR stands in for an issue that is waiting on Danyel, so the PR waits too. Unless the PR
   // already says so itself, its labels are out of step with that.
   const carried = hidden !== undefined && effective.turn !== 'danyel';
@@ -57,7 +58,7 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
     statusUnreadable: status === null && hasStatusSection(statusText(f)),
     turn: carried ? 'danyel' : effective.turn,
     outOfSync: carried || effective.outOfSync,
-    strip: stageStrip(f, status, now),
+    strip,
     why: carried && !why ? `Issue #${hidden.issue} is waiting on you` : why,
     waitingSince: since,
     waited: since ? formatWait(since, now) : '',

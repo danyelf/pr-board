@@ -5,7 +5,7 @@ description: Use when handing a PR or issue back to Danyel, asking him a questio
 
 # Keeping a PR's status current
 
-Danyel's PR Board reads a status section at the top of each PR description (or, for an issue with no PR yet, in one comment). You keep it current with one command. The absolute path is:
+Danyel's PR Board reads a status section at the top of each PR description (or, for an issue with no PR yet, in one comment). You keep it current with one command. Below, `pr-status` stands for this, whose absolute path is the only place it is written out:
 
 `node /Users/danyel/code/MISC/pr-board/cli/pr-status.ts`
 
@@ -14,7 +14,7 @@ Danyel's PR Board reads a status section at the top of each PR description (or, 
 Run `set` whenever the turn changes (you hand it to Danyel, he hands it back, or it is stuck on something outside you both) and whenever the ask changes.
 
 ```
-node /Users/danyel/code/MISC/pr-board/cli/pr-status.ts set <owner/repo#N | #N> \
+pr-status set <owner/repo#N | #N> \
   --waiting danyel|claude|nobody \
   --ask "what you need from him, in one line" \
   --question "Colour of the button? (**red** | green)" \
@@ -30,7 +30,7 @@ node /Users/danyel/code/MISC/pr-board/cli/pr-status.ts set <owner/repo#N | #N> \
 When a turn changed nothing about the ask (you touched the PR but the status is still right), say so instead:
 
 ```
-node /Users/danyel/code/MISC/pr-board/cli/pr-status.ts ok <owner/repo#N>
+pr-status ok <owner/repo#N>
 ```
 
 `show <ref>` prints the current status as JSON. A Stop hook blocks the end of a turn when you changed a PR or issue and did neither.

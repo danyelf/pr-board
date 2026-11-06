@@ -1,14 +1,18 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { flattenPages, gh, git, isNotFound } from '../cli/gh.ts';
-import type { Deps, Gh } from '../cli/gh.ts';
+import { LABEL_ON_DANYEL, LABEL_PARKED } from '../src/shared/names.ts';
+import { hasStatusSection } from '../src/shared/status.ts';
+import { currentRepo, flattenPages, gh, git, refString } from '../cli/gh.ts';
+import type { Deps, Gh, Ref } from '../cli/gh.ts';
 
 export interface HookDeps extends Deps {
   git: Gh;
+  /** The home folder, where the list of "status is still right" notes is kept. */
+  home: string;
   stdin: string;
 }
 
-interface Touched { owner: string; repo: string; n: number; kind: 'pr' | 'issue' | 'unknown' }
+interface Touched extends Ref { kind: 'pr' | 'issue' | 'unknown' }
 
 interface Entry {
   type?: string;
@@ -19,11 +23,11 @@ interface Entry {
   message?: { content?: unknown };
 }
 
-interface ToolUse { id: string; command: string; cwd: string; at: number }
+interface ToolUse { id: string; command: string; cwd: string }
 
-const STATUS_MARKER = '<!-- status -->';
-const TURN_LABELS = new Set(['on danyel', 'parked']);
-const COMMANDS = '/Users/danyel/code/MISC/pr-board/cli/pr-status.ts';
+const TURN_LABELS = new Set([LABEL_ON_DANYEL, LABEL_PARKED]);
+/** The status command Claude is told to run; it sits next to this hook's folder. */
+const PR_STATUS_SCRIPT = join(import.meta.dirname, '..', 'cli', 'pr-status.ts');
 const VALUE_FLAGS = new Set(['-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--title', '-a', '--assignee', '-l', '--label', '-m', '--milestone', '-B', '--base', '-H', '--head', '-r', '--reviewer', '-p', '--project']);
 
 function contentParts(entry: Entry): Record<string, unknown>[] {
@@ -93,34 +97,23 @@ function flagValue(tokens: string[], names: string[]): string | null {
   return null;
 }
 
-/** First argument after the subcommand that looks like a number or a GitHub URL, skipping flag values. */
-function targetArg(tokens: string[]): string | null {
+/** The arguments after `gh pr|issue <subcommand>` that are not flags or the values of flags. */
+function positionalArgs(tokens: string[]): string[] {
+  const found: string[] = [];
   for (let i = 3; i < tokens.length; i++) {
     const t = tokens[i]!;
-    if (VALUE_FLAGS.has(t)) {
-      i++;
-      continue;
-    }
-    if (t.startsWith('-')) continue;
-    if (/^\d+$/.test(t) || /github\.com\/[^/]+\/[^/]+\/(pull|issues)\/\d+/.test(t)) return t;
+    if (VALUE_FLAGS.has(t)) i++;
+    else if (!t.startsWith('-')) found.push(t);
   }
-  return null;
+  return found;
 }
 
-/** First argument after the subcommand that is not a flag or a flag's value. */
-function firstPositional(tokens: string[]): string | null {
-  for (let i = 3; i < tokens.length; i++) {
-    const t = tokens[i]!;
-    if (VALUE_FLAGS.has(t)) {
-      i++;
-      continue;
-    }
-    if (!t.startsWith('-')) return t;
-  }
-  return null;
-}
+const URL_PATTERN = /github\.com\/([^/\s]+)\/([^/\s]+)\/(pull|issues)\/(\d+)/;
 
-const URL_PATTERN =/github\.com\/([^/\s]+)\/([^/\s]+)\/(pull|issues)\/(\d+)/;
+/** Whether an argument names an item: a number, or the address of a PR or issue. */
+function namesAnItem(arg: string): boolean {
+  return /^\d+$/.test(arg) || URL_PATTERN.test(arg);
+}
 
 function fromUrl(url: string): Touched | null {
   const m = URL_PATTERN.exec(url);
@@ -140,18 +133,18 @@ function resultText(entries: Entry[], toolUseId: string): string {
   return '';
 }
 
-async function repoOf(deps: HookDeps, cwd: string, cache: Map<string, string>): Promise<{ owner: string; repo: string }> {
-  let name = cache.get(cwd);
-  if (!name) {
-    name = (await deps.gh(['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'], { cwd })).trim();
-    cache.set(cwd, name);
+type Repo = { owner: string; repo: string };
+
+async function repoOf(deps: HookDeps, cwd: string, cache: Map<string, Repo>): Promise<Repo> {
+  let repo = cache.get(cwd);
+  if (!repo) {
+    repo = await currentRepo(deps.gh, cwd);
+    cache.set(cwd, repo);
   }
-  const [owner, repo] = name.split('/');
-  if (!owner || !repo) throw new Error(`Couldn't tell which repo ${cwd} belongs to`);
-  return { owner, repo };
+  return repo;
 }
 
-async function touchedBy(use: ToolUse, entries: Entry[], deps: HookDeps, cache: Map<string, string>): Promise<Touched[]> {
+async function touchedBy(use: ToolUse, entries: Entry[], deps: HookDeps, cache: Map<string, Repo>): Promise<Touched[]> {
   const found: Touched[] = [];
   let cwd = use.cwd;
   for (const tokens of splitCommands(use.command)) {
@@ -173,7 +166,8 @@ async function touchedBy(use: ToolUse, entries: Entry[], deps: HookDeps, cache: 
       }
       const editing = kind === 'pr' ? ['comment', 'edit', 'review'] : ['comment', 'edit'];
       if (!sub || !editing.includes(sub)) continue;
-      const target = targetArg(t);
+      const positional = positionalArgs(t);
+      const target = positional.find(namesAnItem) ?? null;
       const url = target ? fromUrl(target) : null;
       if (url) {
         found.push(url);
@@ -185,7 +179,7 @@ async function touchedBy(use: ToolUse, entries: Entry[], deps: HookDeps, cache: 
       let n = target ? Number(target) : NaN;
       if (!target && kind === 'pr') {
         // No number given: gh means the PR of the current branch, or of the branch named.
-        const branch = firstPositional(t);
+        const branch = positional[0];
         const viewArgs = ['pr', 'view', ...(branch ? [branch] : []), ...(repoFlag ? ['-R', repoFlag] : []), '--json', 'number', '-q', '.number'];
         n = Number((await deps.gh(viewArgs, { cwd })).trim());
       }
@@ -237,7 +231,7 @@ async function checkedRefs(home: string): Promise<{ ref: string; at: number }[]>
 }
 
 async function isUpdated(item: Touched, turnStart: number, deps: HookDeps, checked: { ref: string; at: number }[]): Promise<boolean> {
-  const ref = `${item.owner}/${item.repo}#${item.n}`;
+  const ref = refString(item);
   if (checked.some((c) => c.ref === ref && c.at >= turnStart)) return true;
 
   const base = `repos/${item.owner}/${item.repo}/issues/${item.n}`;
@@ -259,13 +253,13 @@ async function isUpdated(item: Touched, turnStart: number, deps: HookDeps, check
       data: { repository: { pullRequest: { lastEditedAt: string | null; body: string } } };
     };
     const pr = res.data.repository.pullRequest;
-    return pr.lastEditedAt !== null && Date.parse(pr.lastEditedAt) >= turnStart && pr.body.includes(STATUS_MARKER);
+    return pr.lastEditedAt !== null && Date.parse(pr.lastEditedAt) >= turnStart && hasStatusSection(pr.body);
   }
   const comments = flattenPages(await deps.gh(['api', `${base}/comments?per_page=100`, '--paginate', '--slurp'])) as { body: string; updated_at: string }[];
-  return comments.some((c) => c.body.includes(STATUS_MARKER) && Date.parse(c.updated_at) >= turnStart);
+  return comments.some((c) => hasStatusSection(c.body) && Date.parse(c.updated_at) >= turnStart);
 }
 
-export async function main(_argv: string[], deps: HookDeps): Promise<number> {
+export async function main(deps: HookDeps): Promise<number> {
   const out = deps.out ?? ((l) => console.log(l));
   const err = deps.err ?? ((l) => console.error(l));
   try {
@@ -291,16 +285,16 @@ export async function main(_argv: string[], deps: HookDeps): Promise<number> {
       for (const p of contentParts(e)) {
         const command = (p.input as { command?: unknown } | undefined)?.command;
         if (p.type === 'tool_use' && p.name === 'Bash' && typeof command === 'string') {
-          uses.push({ id: String(p.id), command, cwd: e.cwd ?? input.cwd ?? process.cwd(), at });
+          uses.push({ id: String(p.id), command, cwd: e.cwd ?? input.cwd ?? process.cwd() });
         }
       }
     }
 
-    const cache = new Map<string, string>();
+    const cache = new Map<string, Repo>();
     const touched = new Map<string, Touched>();
     for (const use of uses) {
       for (const item of await touchedBy(use, entries, deps, cache)) {
-        const ref = `${item.owner}/${item.repo}#${item.n}`;
+        const ref = refString(item);
         const known = touched.get(ref);
         if (!known || known.kind === 'unknown') touched.set(ref, item);
       }
@@ -316,7 +310,7 @@ export async function main(_argv: string[], deps: HookDeps): Promise<number> {
 
     out(JSON.stringify({
       decision: 'block',
-      reason: `You changed ${missing.join(', ')} this turn but didn't update their status. Run: node ${COMMANDS} set <ref> --waiting … (or "ok <ref>" if the status is still right).`,
+      reason: `You changed ${missing.join(', ')} this turn but didn't update their status. Run: node ${PR_STATUS_SCRIPT} set <ref> --waiting … (or "ok <ref>" if the status is still right).`,
     }));
     return 0;
   } catch (e) {
@@ -329,5 +323,5 @@ if (import.meta.main) {
   const { homedir } = await import('node:os');
   let stdin = '';
   for await (const chunk of process.stdin) stdin += chunk;
-  process.exitCode = await main([], { gh, git, now: () => new Date(), home: homedir(), stdin });
+  process.exitCode = await main({ gh, git, home: homedir(), stdin });
 }

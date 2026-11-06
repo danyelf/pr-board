@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { stageStrip, whyTag } from '../src/shared/stage.ts';
+import { boxNamed, stageStrip, whyTag } from '../src/shared/stage.ts';
+import { effectiveTurn } from '../src/shared/turn.ts';
+import type { StageBox } from '../src/shared/types.ts';
 import { facts, status } from './helpers.ts';
 
 const now = new Date('2026-11-05T12:00:00-08:00');
 const states = (f: ReturnType<typeof facts>, s: ReturnType<typeof status> | null) => stageStrip(f, s, now).map((b) => b.state);
-const box = (f: ReturnType<typeof facts>, s: ReturnType<typeof status> | null, name: string) =>
-  stageStrip(f, s, now).find((b) => b.name === name)!;
+const box = (f: ReturnType<typeof facts>, s: ReturnType<typeof status> | null, name: StageBox['name']) =>
+  boxNamed(stageStrip(f, s, now), name);
+const why = (f: ReturnType<typeof facts>, s: ReturnType<typeof status> | null) =>
+  whyTag(s, stageStrip(f, s, now), effectiveTurn(f.labels, s).turn);
 
 const pr573 = () => facts({
   number: 573, linkedIssue: 569,
@@ -28,7 +32,7 @@ describe('stage strip', () => {
     expect(box(f, s, 'Build').note).toBe('✓ reviewed, 1 commit since');
     expect(box(f, s, 'Your look').note).toBe('');
     expect(box(f, s, 'Ready for merge').note).toBe('rebase first');
-    expect(whyTag(f, s, now)).toBe('Needs your look');
+    expect(why(f, s)).toBe('Needs your look');
   });
 
   it('shows 574 stacked on an open PR with two questions', () => {
@@ -36,14 +40,14 @@ describe('stage strip', () => {
     const s = status({}, 2);
     expect(box(f, s, 'Your look').note).toBe('2 questions');
     expect(box(f, s, 'Ready for merge')).toEqual({ name: 'Ready for merge', state: 'todo', note: 'after #573' });
-    expect(whyTag(f, s, now)).toBe('2 decisions + your look');
+    expect(why(f, s)).toBe('2 decisions + your look');
   });
 
   it('says one question and one decision in the singular', () => {
     const f = facts({ number: 575, labels: ['on danyel'] });
     const s = status({}, 1);
     expect(box(f, s, 'Your look').note).toBe('1 question');
-    expect(whyTag(f, s, now)).toBe('1 decision + your look');
+    expect(why(f, s)).toBe('1 decision + your look');
   });
 
   describe('578 after prep', () => {
@@ -53,11 +57,11 @@ describe('stage strip', () => {
     });
     it('is ready to merge', () => {
       expect(states(f(), status())).toEqual(['done', 'todo', 'done', 'done', 'done', 'ready']);
-      expect(whyTag(f(), status(), now)).toBe('Ready to merge');
+      expect(why(f(), status())).toBe('Ready to merge');
     });
     it('is blocked by failing checks', () => {
       expect(box(f({ mergeState: 'UNSTABLE' }), status(), 'Ready for merge')).toMatchObject({ state: 'blocked', note: 'checks failing' });
-      expect(whyTag(f({ mergeState: 'UNSTABLE' }), status(), now)).toBe("Can't merge yet: checks failing");
+      expect(why(f({ mergeState: 'UNSTABLE' }), status())).toBe("Can't merge yet: checks failing");
     });
     it('is blocked by being a draft', () => {
       expect(box(f({ isDraft: true }), status(), 'Ready for merge')).toMatchObject({ state: 'blocked', note: 'draft' });
@@ -103,13 +107,12 @@ describe('stage strip', () => {
 
   it('marks everything done on a merged PR', () => {
     const f = facts({ merged: true, reviewSha: 'x' });
-    const s = states(f, null);
-    expect(s[3]).toBe('done');
-    expect(s[5]).toBe('done');
+    expect(box(f, null, 'Your look').state).toBe('done');
+    expect(box(f, null, 'Ready for merge').state).toBe('done');
   });
 
   it('says Parked for a parked item', () => {
-    expect(whyTag(facts({ labels: ['parked'] }), null, now)).toBe('Parked');
-    expect(whyTag(facts({ labels: ['in-progress'] }), null, now)).toBe('');
+    expect(why(facts({ labels: ['parked'] }), null)).toBe('Parked');
+    expect(why(facts({ labels: ['in-progress'] }), null)).toBe('');
   });
 });

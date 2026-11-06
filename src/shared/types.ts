@@ -1,7 +1,9 @@
+import type { WaitingOn } from './names.ts';
+
 export type Turn = 'danyel' | 'claude' | 'nobody' | 'none';
 export interface Question { n: number; text: string; choices: string[]; defaultChoice: string | null }
 export interface Status {
-  waitingOn: 'Danyel' | 'Claude' | 'nobody';
+  waitingOn: WaitingOn;
   since: string | null;          // ISO 8601 with offset
   ask: string;
   questions: Question[];

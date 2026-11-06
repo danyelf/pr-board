@@ -1,18 +1,15 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { parseStatus, renderStatus, replaceStatus, statusValueProblem } from '../src/shared/status.ts';
+import { LABEL_ON_DANYEL, LABEL_PARKED, WAITING_ON, type WaitingOption } from '../src/shared/names.ts';
+import { STATUS_CLOSE, STATUS_OPEN, parseStatus, pickStatusComment, renderStatus, replaceStatus, statusValueProblem } from '../src/shared/status.ts';
 import type { Question, Status } from '../src/shared/types.ts';
-import { flattenPages, gh, isNotFound } from './gh.ts';
-import type { Deps, Gh } from './gh.ts';
+import { currentRepo, flattenPages, gh, isNotFound, refString } from './gh.ts';
+import type { Deps as BaseDeps, Gh, Ref } from './gh.ts';
 
-export interface Ref { owner: string; repo: string; n: number }
-
-const STATUS_MARKER = '<!-- status -->';
-const LABEL_ON_DANYEL = 'on danyel';
-const LABEL_PARKED = 'parked';
-
-export function refString(r: Ref): string {
-  return `${r.owner}/${r.repo}#${r.n}`;
+export interface Deps extends BaseDeps {
+  now: () => Date;
+  /** The home folder, where the list of "status is still right" notes is kept. */
+  home: string;
 }
 
 export async function parseRef(text: string, gh: Gh): Promise<Ref> {
@@ -20,14 +17,11 @@ export async function parseRef(text: string, gh: Gh): Promise<Ref> {
   if (full) return { owner: full[1]!, repo: full[2]!, n: Number(full[3]) };
   const short = /^#(\d+)$/.exec(text);
   if (!short) throw new Error(`Can't read "${text}" as a reference; use owner/repo#N or #N`);
-  const name = (await gh(['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'])).trim();
-  const [owner, repo] = name.split('/');
-  if (!owner || !repo) throw new Error(`Couldn't work out the repo for ${text} from the current directory`);
-  return { owner, repo, n: Number(short[1]) };
+  return { ...(await currentRepo(gh)), n: Number(short[1]) };
 }
 
 interface SetOptions {
-  waiting: 'danyel' | 'claude' | 'nobody';
+  waiting: WaitingOption;
   ask: string;
   questions: string[];
   toTest: string | null;
@@ -56,16 +50,18 @@ function parseSetArgs(args: string[]): SetOptions {
     else if (flag === '--to-test') opts.toTest = need();
     else throw new Error(`Unknown option ${flag}`);
   }
-  if (waiting !== 'danyel' && waiting !== 'claude' && waiting !== 'nobody') {
-    throw new Error('--waiting must be danyel, claude or nobody');
+  const chosen = WAITING_ON.find((w) => w.option === waiting);
+  if (!chosen) {
+    const options = WAITING_ON.map((w) => w.option);
+    throw new Error(`--waiting must be ${options.slice(0, -1).join(', ')} or ${options.at(-1)}`);
   }
-  opts.waiting = waiting;
+  opts.waiting = chosen.option;
   return opts;
 }
 
 /** Parses "text (**a** | b)" through the shared status parser so the format has one definition. */
 function buildQuestions(texts: string[]): Question[] {
-  const section = [STATUS_MARKER, '**Waiting on:** nobody', '**Questions:**', ...texts.map((t, i) => `${i + 1}. ${t}`), '<!-- /status -->'].join('\n');
+  const section = [STATUS_OPEN, '**Waiting on:** nobody', '**Questions:**', ...texts.map((t, i) => `${i + 1}. ${t}`), STATUS_CLOSE].join('\n');
   const parsed = parseStatus(section);
   const questions = parsed?.questions ?? [];
   for (const q of questions) {
@@ -76,10 +72,8 @@ function buildQuestions(texts: string[]): Question[] {
   return questions;
 }
 
-const WAITING_NAME = { danyel: 'Danyel', claude: 'Claude', nobody: 'nobody' } as const;
-
 function nextStatus(opts: SetOptions, questions: Question[], previous: Status | null, now: Date): Status {
-  const waitingOn = WAITING_NAME[opts.waiting];
+  const waitingOn = WAITING_ON.find((w) => w.option === opts.waiting)!.status;
   const since = previous && previous.waitingOn === waitingOn && previous.since ? previous.since : now.toISOString();
   return { waitingOn, since, ask: opts.ask, questions, toTest: opts.toTest };
 }
@@ -94,17 +88,21 @@ async function writeStatus(gh: Gh, ref: Ref, opts: SetOptions, questions: Questi
     return;
   }
   const login = (await gh(['api', 'user', '-q', '.login'])).trim();
-  const comments = flattenPages(await gh(['api', `${base}/issues/${ref.n}/comments?per_page=100`])) as {
-    id: number; body: string; user: { login: string };
-  }[];
-  const mine = comments.find((c) => c.user.login === login && c.body.includes(STATUS_MARKER));
-  if (mine) {
-    const status = nextStatus(opts, questions, parseStatus(mine.body), now);
-    await gh(['api', '-X', 'PATCH', `${base}/issues/comments/${mine.id}`, '-f', `body=${replaceStatus(mine.body, status)}`]);
+  const comments = await issueComments<{ id: number; body: string; user: { login: string } | null }>(gh, ref);
+  // The board reads the last status comment. Edit it if it is ours; otherwise a new one becomes the last.
+  const current = pickStatusComment(comments);
+  const status = nextStatus(opts, questions, current ? parseStatus(current.body) : null, now);
+  if (current && current.user?.login === login) {
+    await gh(['api', '-X', 'PATCH', `${base}/issues/comments/${current.id}`, '-f', `body=${replaceStatus(current.body, status)}`]);
   } else {
-    const status = nextStatus(opts, questions, null, now);
     await gh(['api', '-X', 'POST', `${base}/issues/${ref.n}/comments`, '-f', `body=${renderStatus(status)}`]);
   }
+}
+
+/** Every comment on the item, oldest first, however many pages there are. */
+async function issueComments<T extends { body: string }>(gh: Gh, ref: Ref): Promise<T[]> {
+  const url = `repos/${ref.owner}/${ref.repo}/issues/${ref.n}/comments?per_page=100`;
+  return flattenPages(await gh(['api', url, '--paginate', '--slurp'])) as T[];
 }
 
 /** Returns the names of labels that were wanted but don't exist in the repo. */
@@ -148,8 +146,7 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
       const item = JSON.parse(await deps.gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}`])) as { pull_request?: unknown; body?: string | null };
       let text = item.body ?? '';
       if (!item.pull_request) {
-        const comments = flattenPages(await deps.gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}/comments?per_page=100`])) as { body: string }[];
-        text = comments.find((c) => c.body.includes(STATUS_MARKER))?.body ?? '';
+        text = pickStatusComment(await issueComments(deps.gh, ref))?.body ?? '';
       }
       out(JSON.stringify(parseStatus(text), null, 2));
       return 0;

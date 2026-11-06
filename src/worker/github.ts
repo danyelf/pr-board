@@ -1,18 +1,17 @@
+import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_DANYEL, LABEL_PARKED, REPO_WINDOW_DAYS, WRITTEN_ELSEWHERE } from '../shared/names.ts';
 import type { ItemFacts, LabelEvent } from '../shared/types.ts';
 
 const GRAPHQL_URL = 'https://api.github.com/graphql';
-const REPO_WINDOW_DAYS = 60;
 const REPOS_PER_QUERY = 5;
 const MAX_COMPARE_CALLS = 20;
 const OPEN_PRS_PER_REPO = 50;
 const ISSUES_PER_LABEL = 50;
 // One issues connection per label, so GitHub does the filtering and each label has its own limit.
 const TURN_LABELS = [
-  { label: 'on danyel', alias: 'onDanyel' },
-  { label: 'parked', alias: 'parked' },
-  { label: 'in-progress', alias: 'inProgress' },
+  { label: LABEL_ON_DANYEL, alias: 'onDanyel' },
+  { label: LABEL_PARKED, alias: 'parked' },
+  { label: LABEL_IN_PROGRESS, alias: 'inProgress' },
 ] as const;
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 const REPOS_QUERY = `query {
   viewer {
@@ -193,19 +192,19 @@ function prFacts(repo: string, pr: RawItem): ItemFacts {
   const body = pr.body ?? '';
 
   const closing = pr.closingIssuesReferences?.nodes[0]?.number;
-  const refs = body.match(/Refs #(\d+)/);
-  const stacked = body.match(/Stacked on #(\d+)/i);
+  const refs = body.match(WRITTEN_ELSEWHERE.refsIssue);
+  const stacked = body.match(WRITTEN_ELSEWHERE.stackedOn);
 
   let previewUrl: string | null = null;
   for (const c of comments) {
-    const m = c.body.match(/href='(https:\/\/[^']+)'>Branch Preview URL/);
+    const m = c.body.match(WRITTEN_ELSEWHERE.previewLink);
     if (m) previewUrl = m[1];
   }
 
   let reviewSha: string | null = null;
   let reviewUrl: string | null = null;
   for (const c of comments) {
-    const m = c.body.match(/Reviewed up to `([0-9a-f]{7,40})`/);
+    const m = c.body.match(WRITTEN_ELSEWHERE.reviewedUpTo);
     if (m) { reviewSha = m[1]; reviewUrl = c.url; }
   }
   let commitsSinceReview: number | null = null;
@@ -215,7 +214,7 @@ function prFacts(repo: string, pr: RawItem): ItemFacts {
   }
 
   let prepAt: string | null = null;
-  for (const c of comments) if (c.body.includes('🤖 Claude: prep for merge')) prepAt = c.createdAt;
+  for (const c of comments) if (c.body.includes(WRITTEN_ELSEWHERE.prepForMerge)) prepAt = c.createdAt;
   const commitsSincePrep = prepAt === null ? null : commits.filter((c) => Date.parse(c.committedDate) > Date.parse(prepAt!)).length;
 
   const extra = [...(pr.mergedAt ? [pr.mergedAt] : []), ...commits.map((c) => c.committedDate)];

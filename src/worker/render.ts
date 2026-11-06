@@ -1,5 +1,7 @@
 import type { Board, Card } from './board.ts';
 import type { BoxState, ItemFacts } from '../shared/types.ts';
+import { DAY_MS } from '../shared/names.ts';
+import { boxNamed } from '../shared/stage.ts';
 import { formatWait } from '../shared/turn.ts';
 
 const CSS = `
@@ -94,7 +96,7 @@ function byProject(cards: Card[], draw: (c: Card) => string): string {
 
 function renderCard(c: Card): string {
   const f = c.facts;
-  const merge = c.strip[5]!;
+  const merge = boxNamed(c.strip, 'Ready for merge');
   const strip = c.strip
     .map((b) => `<span class="${BOX_CLASS[b.state]}">${esc(b.name)}${b.note ? `<small>${esc(b.note)}</small>` : ''}</span>`)
     .join('');
@@ -147,15 +149,20 @@ function ago(iso: string, now: Date): string {
   return `${formatWait(iso, now)} ago`;
 }
 
+/** A one-line row: the item, then a short note on the right. */
+function listRow(c: Card, note: string): string {
+  return `<div class="quiet">${ref(c.facts)}<span class="t">${esc(c.facts.title)}</span><span class="age">${esc(note)}</span></div>`;
+}
+
 function claudeRow(c: Card, now: Date): string {
-  const note = c.turn === 'none' ? ' · no turn label' : '';
-  return `<div class="quiet">${ref(c.facts)}<span class="t">${esc(c.facts.title)}</span><span class="age">last activity ${esc(ago(c.facts.lastActivityAt, now))}${note}</span></div>`;
+  const noLabel = c.turn === 'none' ? ' · no turn label' : '';
+  return listRow(c, `last activity ${ago(c.facts.lastActivityAt, now)}${noLabel}`);
 }
 
 function quietRow(c: Card, now: Date): string {
-  const days = Math.floor((now.getTime() - new Date(c.facts.lastActivityAt).getTime()) / 86_400_000);
-  const why = c.turn === 'nobody' ? 'parked' : `no activity for ${days} days${c.turn === 'none' ? ' · no turn label' : ''}`;
-  return `<div class="quiet">${ref(c.facts)}<span class="t">${esc(c.facts.title)}</span><span class="age">${esc(why)}</span></div>`;
+  const days = Math.floor((now.getTime() - new Date(c.facts.lastActivityAt).getTime()) / DAY_MS);
+  const noLabel = c.turn === 'none' ? ' · no turn label' : '';
+  return listRow(c, c.turn === 'nobody' ? 'parked' : `no activity for ${days} days${noLabel}`);
 }
 
 export function renderBoard(b: Board): string {
