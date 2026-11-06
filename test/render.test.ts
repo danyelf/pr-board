@@ -92,6 +92,28 @@ describe('renderBoard', () => {
     expect(html).toContain('href="https://github.com/danyelf/torahmap/pull/905"');
   });
 
+  it('links every number to GitHub and says whether it is a PR or an issue', () => {
+    const html = renderBoard(buildBoard([
+      facts({ number: 910, labels: ['on danyel'], url: 'https://github.com/danyelf/torahmap/pull/910', lastActivityAt: '2026-11-05T23:00:00Z' }),
+      facts({ number: 911, labels: ['in-progress'], url: 'https://github.com/danyelf/torahmap/pull/911', lastActivityAt: '2026-11-05T23:00:00Z' }),
+      facts({ number: 912, kind: 'issue', labels: ['parked'], url: 'https://github.com/danyelf/torahmap/issues/912', lastActivityAt: '2026-11-05T23:00:00Z' }),
+    ], [], NOW));
+    expect(html).toMatch(/<a class="num" href="https:\/\/github.com\/danyelf\/torahmap\/pull\/910">PR #910<\/a>/);
+    expect(html).toMatch(/<a class="num" href="https:\/\/github.com\/danyelf\/torahmap\/pull\/911">PR #911<\/a>/);
+    expect(html).toMatch(/<a class="num" href="https:\/\/github.com\/danyelf\/torahmap\/issues\/912">Issue #912<\/a>/);
+  });
+
+  it('groups each section by project, in the order of each project\'s first item', () => {
+    const html = renderBoard(buildBoard([
+      facts({ repo: 'danyelf/torahmap', number: 920, labels: ['in-progress'], lastActivityAt: '2026-11-05T23:50:00Z' }),
+      facts({ repo: 'danyelf/pr-board', number: 2, labels: ['in-progress'], lastActivityAt: '2026-11-05T23:40:00Z' }),
+      facts({ repo: 'danyelf/torahmap', number: 921, labels: ['in-progress'], lastActivityAt: '2026-11-05T23:30:00Z' }),
+    ], [], NOW));
+    const claude = html.slice(html.indexOf('On Claude'), html.indexOf('Quiet:'));
+    const order = [...claude.matchAll(/class="proj"[^>]*>([^<]+)<|>(PR #\d+)</g)].map((m) => m[1] ?? m[2]);
+    expect(order).toEqual(['torahmap', 'PR #920', 'PR #921', 'pr-board', 'PR #2']);
+  });
+
   it('limits screenshots to four thumbnails, 96 px wide', async () => {
     const shots = Array.from({ length: 6 }, (_, i) => `https://example.com/shot${i}.png`);
     const html = await page([facts({ number: 906, labels: ['on danyel'], screenshots: shots, lastActivityAt: '2026-11-05T23:00:00Z' })]);

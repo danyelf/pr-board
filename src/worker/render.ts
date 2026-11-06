@@ -16,7 +16,9 @@ const CSS = `
   .card.ready { border-left-color:var(--ok); }
   .row { display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap; }
   .row > div { min-width:0; overflow-wrap:anywhere; }
-  .num { font-weight:700; margin-right:6px; color:inherit; text-decoration:none; }
+  .num { font-weight:700; margin-right:6px; white-space:nowrap; text-decoration:underline; text-decoration-color:#b7c6e2; text-underline-offset:2px; }
+  .num:hover { text-decoration-color:currentColor; }
+  .proj { font-size:12px; font-weight:600; color:var(--mute); margin:12px 0 6px; }
   .tags { display:flex; gap:6px; align-items:baseline; flex-wrap:wrap; }
   .why { font-size:12px; font-weight:600; padding:2px 8px; border-radius:20px; background:var(--waitbg); color:#8a5a10; white-space:nowrap; }
   .ready .why { background:#e4f3e8; color:#245e36; }
@@ -76,6 +78,20 @@ function issueUrl(f: ItemFacts): string | null {
   return f.linkedIssue === null ? null : `https://github.com/${f.repo}/issues/${f.linkedIssue}`;
 }
 
+/** The item's number as a link to it on GitHub, saying whether it is a PR or an issue. */
+function ref(f: ItemFacts): string {
+  return `<a class="num" href="${url(f.url)}">${f.kind === 'pr' ? 'PR' : 'Issue'} #${f.number}</a>`;
+}
+
+/** One small heading per project, in the order each project's first item comes in the list. */
+function byProject(cards: Card[], draw: (c: Card) => string): string {
+  const groups = new Map<string, Card[]>();
+  for (const c of cards) groups.set(c.facts.repo, [...(groups.get(c.facts.repo) ?? []), c]);
+  return [...groups]
+    .map(([repo, group]) => `<div class="proj" title="${esc(repo)}">${esc(repo.split('/').pop() ?? repo)}</div>\n${group.map(draw).join('\n')}`)
+    .join('\n');
+}
+
 function renderCard(c: Card): string {
   const f = c.facts;
   const merge = c.strip[5]!;
@@ -119,7 +135,7 @@ function renderCard(c: Card): string {
   }
 
   return `<div class="card${merge.state === 'ready' ? ' ready' : ''}">
-    <div class="row"><div><a class="num" href="${url(f.url)}">#${f.number}</a>${esc(f.title)}</div>
+    <div class="row"><div>${ref(f)}${esc(f.title)}</div>
       <div class="tags">${c.waited ? `<span class="age">waiting ${esc(c.waited)}</span>` : ''}${c.why ? `<span class="why">${esc(c.why)}</span>` : ''}${c.outOfSync ? '<span class="sync">label out of sync</span>' : ''}</div></div>
     <div class="steps">${strip}</div>
     ${links.length ? `<div class="links">${links.join('')}</div>` : ''}
@@ -133,13 +149,13 @@ function ago(iso: string, now: Date): string {
 
 function claudeRow(c: Card, now: Date): string {
   const note = c.turn === 'none' ? ' · no turn label' : '';
-  return `<div class="quiet"><b>#${c.facts.number}</b><span class="t">${esc(c.facts.title)}</span><span class="age">last activity ${esc(ago(c.facts.lastActivityAt, now))}${note}</span></div>`;
+  return `<div class="quiet">${ref(c.facts)}<span class="t">${esc(c.facts.title)}</span><span class="age">last activity ${esc(ago(c.facts.lastActivityAt, now))}${note}</span></div>`;
 }
 
 function quietRow(c: Card, now: Date): string {
   const days = Math.floor((now.getTime() - new Date(c.facts.lastActivityAt).getTime()) / 86_400_000);
   const why = c.turn === 'nobody' ? 'parked' : `no activity for ${days} days${c.turn === 'none' ? ' · no turn label' : ''}`;
-  return `<div class="quiet"><b>#${c.facts.number}</b><span class="t">${esc(c.facts.title)}</span><span class="age">${esc(why)}</span></div>`;
+  return `<div class="quiet">${ref(c.facts)}<span class="t">${esc(c.facts.title)}</span><span class="age">${esc(why)}</span></div>`;
 }
 
 export function renderBoard(b: Board): string {
@@ -149,9 +165,9 @@ export function renderBoard(b: Board): string {
   const nothingWaiting = b.errors.length
     ? esc("Couldn't read everything from GitHub, so this list may be incomplete.")
     : 'Nothing is waiting on you.';
-  const waiting = b.waiting.length ? b.waiting.map(renderCard).join('\n') : `<div class="empty">${nothingWaiting}</div>`;
-  const claude = b.onClaude.length ? b.onClaude.map((c) => claudeRow(c, now)).join('\n') : '<div class="empty">Nothing in progress.</div>';
-  const quiet = b.quiet.length ? b.quiet.map((c) => quietRow(c, now)).join('\n') : '<div class="empty">Nothing quiet.</div>';
+  const waiting = b.waiting.length ? byProject(b.waiting, renderCard) : `<div class="empty">${nothingWaiting}</div>`;
+  const claude = b.onClaude.length ? byProject(b.onClaude, (c) => claudeRow(c, now)) : '<div class="empty">Nothing in progress.</div>';
+  const quiet = b.quiet.length ? byProject(b.quiet, (c) => quietRow(c, now)) : '<div class="empty">Nothing quiet.</div>';
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>PR Board</title><style>${CSS}</style></head>
