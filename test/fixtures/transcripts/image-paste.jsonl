@@ -1,0 +1,4 @@
+{"type":"user","timestamp":"2026-11-05T08:00:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"user","content":"old request"}}
+{"type":"assistant","timestamp":"2026-11-05T08:01:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"assistant","content":[{"type":"tool_use","id":"t0","name":"Bash","input":{"command":"gh pr comment 500 --body hi"}}]}}
+{"type":"user","timestamp":"2026-11-05T10:00:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},{"type":"text","text":"look at this screenshot"}]}}
+{"type":"assistant","timestamp":"2026-11-05T10:01:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"gh pr comment 574 --body hi"}}]}}
