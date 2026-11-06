@@ -1,0 +1,4 @@
+{"type":"user","timestamp":"2026-11-05T10:00:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"user","content":"patch"}}
+{"type":"assistant","timestamp":"2026-11-05T10:01:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cd /somewhere/else && gh api -X PATCH repos/acme/y/pulls/9 -f body=x"}}]}}
+{"type":"assistant","timestamp":"2026-11-05T10:02:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"node /Users/danyel/code/MISC/pr-board/cli/pr-status.ts set acme/z#3 --waiting danyel"}}]}}
+{"type":"assistant","timestamp":"2026-11-05T10:03:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"assistant","content":[{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"gh pr comment 7 -R acme/q --body hi"}}]}}
