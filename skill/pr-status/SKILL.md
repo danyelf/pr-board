@@ -24,6 +24,7 @@ node /Users/danyel/code/MISC/pr-board/cli/pr-status.ts set <owner/repo#N | #N> \
 - `--waiting danyel` puts the `on danyel` label on; `nobody` marks it `parked`; `claude` clears both.
 - Every `--question` needs choices with exactly one in bold as the default, like `(**leave** | change)`. The command refuses a question without one.
 - Put the test protocol (what to open, what to try, what should happen) in `--to-test`.
+- Each of `--ask`, `--to-test` and `--question` is one line. The command refuses line breaks, so write several steps as `1) … 2) … 3) …` on one line.
 - Questions are replaced each time: repeat `--question` for every question that is still open.
 
 When a turn changed nothing about the ask (you touched the PR but the status is still right), say so instead:

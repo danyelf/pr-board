@@ -88,7 +88,31 @@ export function parseStatus(text: string): Status | null {
   return { waitingOn, since, ask, questions, toTest };
 }
 
+/**
+ * Why a value can't go into the status section as written, or null if it can. Each field is one line,
+ * so a line break would cut the value short when read back, and the next line could pose as another
+ * field (a stray "**Waiting on:**" changes whose turn it is). A marker would end the section early.
+ */
+export function statusValueProblem(value: string): 'line break' | 'status marker' | null {
+  if (/[\r\n]/.test(value)) return 'line break';
+  if (value.includes(OPEN) || value.includes(CLOSE)) return 'status marker';
+  return null;
+}
+
+function checkValue(field: string, value: string): void {
+  const problem = statusValueProblem(value);
+  if (problem === 'line break') throw new Error(`The status ${field} must be one line: "${value}"`);
+  if (problem === 'status marker') throw new Error(`The status ${field} can't contain a status marker: "${value}"`);
+}
+
 export function renderStatus(s: Status): string {
+  checkValue('ask', s.ask);
+  if (s.since) checkValue('since', s.since);
+  if (s.toTest) checkValue('test protocol', s.toTest);
+  for (const q of s.questions) {
+    checkValue(`question ${q.n}`, q.text);
+    for (const c of q.choices) checkValue(`question ${q.n} choice`, c);
+  }
   const lines = [OPEN, `**Waiting on:** ${s.waitingOn}${s.since ? `, since ${s.since}` : ''}`, `**Ask:** ${s.ask}`];
   if (s.questions.length > 0) {
     lines.push('**Questions:**');
