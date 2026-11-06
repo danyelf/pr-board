@@ -78,14 +78,23 @@ function nextStatus(opts: SetOptions, questions: Question[], previous: Status | 
   return { waitingOn, since, ask: opts.ask, questions, toTest: opts.toTest };
 }
 
-async function writeStatus(gh: Gh, ref: Ref, opts: SetOptions, questions: Question[], now: Date): Promise<void> {
+/** A PR that has just been handed to Danyel, and who opened it; null otherwise. */
+type HandedOver = { author: string | null } | null;
+
+async function writeStatus(gh: Gh, ref: Ref, opts: SetOptions, questions: Question[], now: Date): Promise<HandedOver> {
   const base = `repos/${ref.owner}/${ref.repo}`;
-  const item = JSON.parse(await gh(['api', `${base}/issues/${ref.n}`])) as { pull_request?: unknown; body?: string | null };
+  const item = JSON.parse(await gh(['api', `${base}/issues/${ref.n}`])) as {
+    pull_request?: unknown;
+    body?: string | null;
+    user?: { login: string } | null;
+  };
   if (item.pull_request) {
     const body = item.body ?? '';
-    const status = nextStatus(opts, questions, parseStatus(body), now);
+    const previous = parseStatus(body);
+    const status = nextStatus(opts, questions, previous, now);
     await gh(['api', '-X', 'PATCH', `${base}/pulls/${ref.n}`, '-f', `body=${replaceStatus(body, status)}`]);
-    return;
+    const handedOver = opts.waiting === 'danyel' && previous?.waitingOn !== status.waitingOn;
+    return handedOver ? { author: item.user?.login ?? null } : null;
   }
   const login = (await gh(['api', 'user', '-q', '.login'])).trim();
   const comments = await issueComments<{ id: number; body: string; user: { login: string } | null }>(gh, ref);
@@ -96,6 +105,27 @@ async function writeStatus(gh: Gh, ref: Ref, opts: SetOptions, questions: Questi
     await gh(['api', '-X', 'PATCH', `${base}/issues/comments/${current.id}`, '-f', `body=${replaceStatus(current.body, status)}`]);
   } else {
     await gh(['api', '-X', 'POST', `${base}/issues/${ref.n}/comments`, '-f', `body=${renderStatus(status)}`]);
+  }
+  return null;
+}
+
+/**
+ * Asks the repo's owner to review, so GitHub notifies them. The board is for one person, whose
+ * repos these are, so the owner is the person to ask. Returns a complaint, or null when all is well.
+ */
+async function requestOwnerReview(gh: Gh, ref: Ref, author: string | null): Promise<{ problem: string; failed: boolean } | null> {
+  if (author === ref.owner) return null; // GitHub won't ask someone to review their own PR.
+  const base = `repos/${ref.owner}/${ref.repo}`;
+  try {
+    const ownerType = (await gh(['api', base, '-q', '.owner.type'])).trim();
+    if (ownerType !== 'User') {
+      return { problem: `Didn't ask for a review: ${ref.owner}/${ref.repo} belongs to an organization, not a person`, failed: false };
+    }
+    await gh(['api', '-X', 'POST', `${base}/pulls/${ref.n}/requested_reviewers`, '-f', `reviewers[]=${ref.owner}`]);
+    return null;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { problem: `Couldn't ask ${ref.owner} to review ${refString(ref)}: ${message}`, failed: true };
   }
 }
 
@@ -161,12 +191,14 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
 
     const opts = parseSetArgs(rest);
     const questions = buildQuestions(opts.questions);
-    await writeStatus(deps.gh, ref, opts, questions, deps.now());
+    const handedOver = await writeStatus(deps.gh, ref, opts, questions, deps.now());
     const missing = await syncLabels(deps.gh, ref, opts.waiting);
     for (const name of missing) {
       err(`Label "${name}" doesn't exist in ${ref.owner}/${ref.repo}; run cli/setup-labels.ts`);
     }
-    return missing.length > 0 ? 1 : 0;
+    const review = handedOver ? await requestOwnerReview(deps.gh, ref, handedOver.author) : null;
+    if (review) err(review.problem);
+    return missing.length > 0 || review?.failed ? 1 : 0;
   } catch (e) {
     err(e instanceof Error ? e.message : String(e));
     return 1;
