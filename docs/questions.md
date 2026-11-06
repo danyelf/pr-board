@@ -29,7 +29,7 @@ Nothing below has been run. Each needs your OK. They are in the order to do them
 
    No merge-setting warnings. To do it for real: `node cli/setup-labels.ts`.
 
-6. **Turn on the Stop hook?** (**yes** | wait) Add a second entry to the `Stop` hooks in `~/.claude/settings.json`:
+6. **Turn on the Stop hook?** (**yes, after merging this branch and pulling the main checkout** | wait) The hook file lives in the main checkout, which has no `hooks/` folder until the merge. Add a second entry to the `Stop` hooks in `~/.claude/settings.json`:
 
    ```json
    {"type":"command","command":"/Users/danyel/.local/state/fnm_multishells/15884_1793769790861/bin/node /Users/danyel/code/MISC/pr-board/hooks/status-check.ts"}
@@ -37,7 +37,7 @@ Nothing below has been run. Each needs your OK. They are in the order to do them
 
    That node path (from `command -v node`) is a temporary fnm shell path and will stop working. Use a stable Node 24 path instead (for example the fnm default alias, or whatever `fnm exec --using=24 which node` prints). The hook needs Node 24 because it runs the TypeScript directly.
 
-7. **Install the skill?** (**yes** | wait) `ln -s /Users/danyel/code/MISC/pr-board/skill/pr-status ~/.claude/skills/pr-status`. One thing to know: the skill and the hook both name `/Users/danyel/code/MISC/pr-board/cli/pr-status.ts` by absolute path, so they point at this checkout. If the repo moves or the main checkout isn't where the merged code ends up, they need updating.
+7. **Install the skill?** (**yes, after merging this branch and pulling the main checkout** | wait) `ln -s /Users/danyel/code/MISC/pr-board/skill/pr-status ~/.claude/skills/pr-status`. Until the merge, the main checkout has no `skill/` folder, so the link would point at nothing. The skill and the hook both name `/Users/danyel/code/MISC/pr-board/cli/pr-status.ts` by absolute path, which is the main checkout, not a worktree. If the repo moves, both the skill and the hook need editing.
 
 8. **Shall I do the one-off pass over open items?** (**yes, as a proposal only** | skip) For each open PR and issue I would propose `on danyel` or `parked` and why, and wait for your approval before touching any label. There is no script for this; the build has no command for a bulk pass. Once you approve an item I would apply it with `node /Users/danyel/code/MISC/pr-board/cli/pr-status.ts set <owner/repo#N> --waiting danyel|nobody --ask "…"`, which also writes the status section. Until then every open item shows on the page as having no turn label, which is deliberate: the page never claims "Claude working" without a label saying so.
 
