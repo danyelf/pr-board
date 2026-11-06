@@ -1,0 +1,12 @@
+name = "pr-board"
+main = "src/worker/index.ts"
+compatibility_date = "2026-11-05"
+workers_dev = false
+
+# Route to confirm with Danyel before the first deploy:
+# routes = [{ pattern = "board.danyelfisher.info", custom_domain = true }]
+
+[vars]
+ACCESS_TEAM_DOMAIN = "REPLACE-ME.cloudflareaccess.com"
+ACCESS_AUD = "REPLACE-WITH-ACCESS-APPLICATION-AUD-TAG"
+ALLOWED_EMAIL = "danyel@gmail.com"
