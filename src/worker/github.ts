@@ -2,11 +2,9 @@ import type { ItemFacts, LabelEvent } from '../shared/types.ts';
 
 const GRAPHQL_URL = 'https://api.github.com/graphql';
 const REPO_WINDOW_DAYS = 60;
-const CLOSED_WINDOW_DAYS = 7;
 const REPOS_PER_QUERY = 5;
 const MAX_COMPARE_CALLS = 20;
 const OPEN_PRS_PER_REPO = 50;
-const CLOSED_PRS_PER_REPO = 20;
 const ISSUES_PER_LABEL = 50;
 // One issues connection per label, so GitHub does the filtering and each label has its own limit.
 const TURN_LABELS = [
@@ -50,7 +48,7 @@ interface RawItem {
   commits?: { nodes: { commit: { oid: string; committedDate: string } }[] };
 }
 interface Page { pageInfo: { hasNextPage: boolean }; nodes: RawItem[] }
-interface RepoData { openPrs: Page; closedPrs: Page; onDanyel: Page; parked: Page; inProgress: Page }
+interface RepoData { openPrs: Page; onDanyel: Page; parked: Page; inProgress: Page }
 interface GraphqlResponse<T> { data?: T | null; errors?: { message: string; path?: (string | number)[] }[] }
 
 interface Pending { facts: ItemFacts; base: string; head: string }
@@ -85,7 +83,6 @@ export async function fetchItems(
           `  ${alias}: issues(first: ${ISSUES_PER_LABEL}, states: OPEN, labels: ["${label}"], orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage } nodes { ${COMMON_FIELDS} } }`);
         return `r${k}: repository(owner: "${owner}", name: "${name}") {
   openPrs: pullRequests(first: ${OPEN_PRS_PER_REPO}, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage } nodes { ${PR_FIELDS} } }
-  closedPrs: pullRequests(first: ${CLOSED_PRS_PER_REPO}, states: [MERGED, CLOSED], orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage } nodes { ${PR_FIELDS} } }
 ${issues.join('\n')}
 }`;
       });
@@ -102,8 +99,6 @@ ${issues.join('\n')}
         const data = res.data?.[`r${k}`];
         if (!data) return;
         const name = repo.nameWithOwner;
-        const withinWindow = (iso: string | null | undefined) =>
-          iso != null && now.getTime() - Date.parse(iso) <= CLOSED_WINDOW_DAYS * DAY_MS;
         const open = new Set<number>();
         openByRepo.set(name, open);
 
@@ -112,18 +107,6 @@ ${issues.join('\n')}
         }
         for (const pr of data.openPrs.nodes) {
           open.add(pr.number);
-          pending.push({ facts: prFacts(name, pr), base: pr.baseRefName ?? '', head: pr.headRefName ?? '' });
-        }
-
-        // Closed PRs only feed the timeline. The list is newest-updated first, so if its last entry
-        // is already older than the window, nothing in the window was left out.
-        const closed = data.closedPrs.nodes;
-        const lastClosed = closed[closed.length - 1];
-        if (data.closedPrs.pageInfo.hasNextPage && withinWindow(lastClosed?.updatedAt ?? lastClosed?.closedAt)) {
-          errors.push(`More than ${CLOSED_PRS_PER_REPO} recently closed PRs in ${name}; the timeline may be missing some`);
-        }
-        for (const pr of closed) {
-          if (!withinWindow(pr.closedAt)) continue;
           pending.push({ facts: prFacts(name, pr), base: pr.baseRefName ?? '', head: pr.headRefName ?? '' });
         }
 

@@ -1,6 +1,5 @@
 import type { Board, Card } from './board.ts';
 import type { BoxState, ItemFacts } from '../shared/types.ts';
-import type { Lane, SegKind, Timeline } from '../shared/timeline.ts';
 import { formatWait } from '../shared/turn.ts';
 
 const CSS = `
@@ -43,23 +42,6 @@ const CSS = `
   .quiet { display:flex; gap:10px; align-items:baseline; font-size:13px; padding:7px 12px; border:1px solid var(--line); border-radius:6px; background:#f6f5f1; margin-bottom:6px; }
   .quiet .t { min-width:0; overflow-wrap:anywhere; }
   .quiet .age { margin-left:auto; text-align:right; }
-  .tlwrap { border:1px solid var(--line); border-radius:8px; background:#fff; padding:10px 12px 12px; margin-bottom:14px; }
-  .tlscroll { overflow-x:auto; padding-bottom:4px; }
-  .tlin { min-width:620px; }
-  .tl { position:relative; margin-left:112px; }
-  .axis { position:relative; height:16px; font-size:10.5px; color:var(--mute); }
-  .axis span { position:absolute; top:0; white-space:nowrap; }
-  .fold { position:absolute; top:16px; bottom:0; background:repeating-linear-gradient(90deg,#f3f1ec 0 2px,#fff 2px 5px); border-left:1px dashed #d4d1c8; border-right:1px dashed #d4d1c8; }
-  .fold em { position:absolute; top:6px; left:50%; transform:translateX(-50%); writing-mode:vertical-rl; font-size:9.5px; color:#8a877e; background:#fff; padding:2px 0; font-style:normal; white-space:nowrap; }
-  .lane { position:relative; height:17px; margin:2px 0; }
-  .lane .lab { position:absolute; left:-112px; width:106px; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#45443f; }
-  .lane .bar { position:absolute; top:3px; height:11px; border-radius:3px; overflow:hidden; font-size:9px; line-height:11px; color:#fff; white-space:nowrap; padding-left:3px; }
-  .lane.count { height:20px; border-top:1px solid var(--line); margin-top:6px; padding-top:2px; }
-  .lane.count .bar { top:3px; height:14px; background:var(--ink); border-radius:2px; line-height:14px; text-align:center; padding:0; font-size:10px; }
-  .w { background:var(--work); } .wt { background:var(--wait); } .dn { background:var(--done); } .rd { background:var(--ok); } .ul { background:#e4e2dc; }
-  .id { background:repeating-linear-gradient(45deg,#d8d5cc 0 4px,#ecebe5 4px 8px); }
-  .legend { display:flex; gap:14px; font-size:11.5px; color:var(--mute); margin-top:10px; flex-wrap:wrap; }
-  .legend b { display:inline-block; width:12px; height:9px; border-radius:2px; margin-right:4px; vertical-align:middle; }
   @media (max-width:480px) {
     .steps span { font-size:9.5px; padding:4px 1px; }
     .steps span small { font-size:8.5px; }
@@ -160,45 +142,6 @@ function quietRow(c: Card, now: Date): string {
   return `<div class="quiet"><b>#${c.facts.number}</b><span class="t">${esc(c.facts.title)}</span><span class="age">${esc(why)}</span></div>`;
 }
 
-const SEG_CLASS: Record<SegKind, string> = { working: 'w', waiting: 'wt', ready: 'rd', parked: 'id', merged: 'dn', unlabelled: 'ul' };
-
-function pct(n: number): string {
-  return `${(n * 100).toFixed(2)}%`;
-}
-
-function renderLane(l: Lane): string {
-  const bars = l.segments
-    .map((s) => `<div class="bar ${SEG_CLASS[s.kind]}" style="left:${pct(s.start)};width:${pct(s.end - s.start)}">${s.trueLength ? esc(s.trueLength) : ''}</div>`)
-    .join('');
-  return `<div class="lane"><a class="lab" href="${url(l.url)}" title="${esc(l.label)}">${esc(l.label)}</a>${bars}</div>`;
-}
-
-function renderTimeline(t: Timeline): string {
-  // Where two labels would overlap, keep the later one.
-  const readable = t.ticks.filter((k, i) => i === t.ticks.length - 1 || t.ticks[i + 1]!.at - k.at >= 0.08);
-  const axis = readable.map((k) => `<span style="left:${pct(k.at)}">${esc(k.text)}</span>`).join('');
-  const folds = t.cuts
-    .map((c) => `<div class="fold" style="left:${pct(c.at)};width:${pct(c.width)}"><em>${esc(c.length)}</em></div>`)
-    .join('');
-  const lanes = t.lanes.map(renderLane).join('');
-  const max = Math.max(1, ...t.openCount.map((o) => o.n));
-  const counts = t.openCount
-    .slice(0, -1)
-    .map((o, i) => {
-      const next = t.openCount[i + 1]!;
-      const width = next.at - o.at;
-      if (width <= 0 || o.n === 0) return '';
-      return `<div class="bar" style="left:${pct(o.at)};width:${pct(width)};opacity:${(0.35 + 0.65 * (o.n / max)).toFixed(2)}">${width > 0.03 ? o.n : ''}</div>`;
-    })
-    .join('');
-  const legend = `<div class="legend">
-      <span><b class="w"></b>Claude working</span><span><b class="wt"></b>waiting on you</span><span><b class="rd"></b>ready to merge</span><span><b class="dn"></b>quick, merged</span><span><b class="id"></b>parked</span><span><b class="ul"></b>no turn label</span><span><b style="background:repeating-linear-gradient(90deg,#f3f1ec 0 2px,#fff 2px 5px);border:1px dashed #d4d1c8"></b>stretch with no activity, cut short</span><span><b style="background:var(--ink)"></b>how many were open</span></div>`;
-  return `<div class="tlwrap"><div class="tlscroll"><div class="tlin"><div class="tl">
-      <div class="axis">${axis}</div>${folds}${lanes}
-      <div class="lane count"><span class="lab">Open at once</span>${counts}</div>
-    </div></div></div>${legend}</div>`;
-}
-
 export function renderBoard(b: Board): string {
   const now = new Date(b.generatedAt);
   const errors = b.errors.map((e) => `<div class="err">${esc(e)}</div>`).join('');
@@ -221,7 +164,5 @@ export function renderBoard(b: Board): string {
   ${claude}
   <div class="sec">Quiet: nobody is working on these</div>
   ${quiet}
-  <div class="sec">The last 7 days (Pacific time)</div>
-  ${renderTimeline(b.timeline)}
 </div></body></html>`;
 }

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fetchItems } from '../src/worker/github.ts';
 import { renderStatus } from '../src/shared/status.ts';
 import type { ItemFacts } from '../src/shared/types.ts';
-import { answerRepo } from './github-fake.ts';
+import { answerRepo, recordedRepo } from './github-fake.ts';
 import { status } from './helpers.ts';
 
 export const NOW = new Date('2026-11-06T00:00:00Z');
@@ -12,7 +12,7 @@ function fixture(name: string): any {
 }
 
 function fakeFetch(): typeof fetch {
-  const items = fixture('graphql-items.json').data.r0;
+  const items = recordedRepo();
   return (async (input: any, init?: any) => {
     const url = String(input);
     if (url === 'https://api.github.com/graphql') {
@@ -32,14 +32,14 @@ export async function boardItems(): Promise<ItemFacts[]> {
   const { items } = await fetchItems('tok', NOW, fakeFetch());
   const get = (n: number) => items.find((i) => i.number === n)!;
 
-  // The recording was made after these three merged. Wind them back to the moment the board is built for.
+  // The recording was made after #573, #574 and #578 merged. Wind activity back to the moment the board is built for.
   for (const i of items) {
     i.activityTimes = i.activityTimes.filter((t) => Date.parse(t) <= NOW.getTime());
     i.lastActivityAt = i.activityTimes.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a), i.createdAt);
     i.labelEvents = i.labelEvents.filter((e) => Date.parse(e.at) <= NOW.getTime());
   }
   for (const n of [573, 574, 578]) {
-    Object.assign(get(n), { merged: false, mergedAt: null, closedAt: null, mergeState: 'CLEAN' });
+    Object.assign(get(n), { mergeState: 'CLEAN' });
   }
 
   const section = (since: string, extra: Partial<ReturnType<typeof status>> = {}) =>

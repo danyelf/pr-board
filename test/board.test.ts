@@ -31,11 +31,10 @@ describe('buildBoard', () => {
     expect(all.find((c) => c.facts.number === 563)).toBeUndefined();
   });
 
-  it('gives an issue no timeline lane while an open PR stands for it', () => {
+  it('shows only the PR while an open PR stands for an issue', () => {
     const issue = facts({ number: 10, kind: 'issue', labels: ['in-progress'], lastActivityAt: '2026-11-05T20:00:00Z' });
     const pr = facts({ number: 11, linkedIssue: 10, labels: ['in-progress'], createdAt: '2026-11-05T10:00:00Z', lastActivityAt: '2026-11-05T21:00:00Z' });
     const board = buildBoard([issue, pr], [], NOW);
-    expect(board.timeline.lanes.map((l) => l.label.split(' ')[0])).toEqual(['#11']);
     expect(board.onClaude.map((c) => c.facts.number)).toEqual([11]);
   });
 
@@ -44,7 +43,6 @@ describe('buildBoard', () => {
     const pr = facts({ number: 11, linkedIssue: 10, merged: true, mergedAt: '2026-11-05T21:00:00Z', closedAt: '2026-11-05T21:00:00Z', createdAt: '2026-11-05T10:00:00Z' });
     const board = buildBoard([issue, pr], [], NOW);
     expect(board.waiting.map((c) => c.facts.number)).toEqual([10]);
-    expect(board.timeline.lanes.map((l) => l.label.split(' ')[0]).sort()).toEqual(['#10', '#11']);
   });
 
   it("carries a hidden issue's wait onto its open PR, flagged out of sync", () => {
@@ -61,9 +59,6 @@ describe('buildBoard', () => {
     expect(card.waitingSince).toBe('2026-11-05T12:00:00Z');
     expect(card.why).toBe('Issue #10 is waiting on you');
     expect([...board.onClaude, ...board.quiet]).toEqual([]);
-
-    const lane = board.timeline.lanes.find((l) => l.label.startsWith('#11 '))!;
-    expect(lane.segments[lane.segments.length - 1]!.kind).toBe('waiting');
   });
 
   it("carries an issue's wait when only its status comment says so", () => {
@@ -144,10 +139,9 @@ describe('buildBoard', () => {
     expect(board.onClaude.find((c) => c.facts.number === 2)!.toTest).toBe('try it');
   });
 
-  it('passes errors and the time through, and builds a timeline', async () => {
+  it('passes errors and the time through', async () => {
     const board = buildBoard(await boardItems(), ['oops'], NOW);
     expect(board.errors).toEqual(['oops']);
     expect(board.generatedAt).toBe(NOW.toISOString());
-    expect(board.timeline.lanes.length).toBeGreaterThan(0);
   });
 });

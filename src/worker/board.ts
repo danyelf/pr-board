@@ -1,7 +1,6 @@
 import type { ItemFacts, StageBox, Status, Turn } from '../shared/types.ts';
 import { extractToTest, hasStatusSection, parseStatus } from '../shared/status.ts';
 import { stageStrip, whyTag } from '../shared/stage.ts';
-import { buildTimeline, type Timeline } from '../shared/timeline.ts';
 import { effectiveTurn, formatWait, waitingSince } from '../shared/turn.ts';
 
 export interface Card {
@@ -21,7 +20,6 @@ export interface Board {
   waiting: Card[];
   onClaude: Card[];
   quiet: Card[];
-  timeline: Timeline;
   errors: string[];
   generatedAt: string;
 }
@@ -118,9 +116,5 @@ export function buildBoard(items: ItemFacts[], errors: string[], now: Date): Boa
   onClaude.sort((a, b) => time(b.facts.lastActivityAt) - time(a.facts.lastActivityAt));
   quiet.sort((a, b) => time(b.facts.lastActivityAt) - time(a.facts.lastActivityAt));
 
-  const timelineItems = items.filter((f) => !hasPr(f));
-
-  const alsoWaiting = new Map([...hiddenWaits].map(([k, w]) => [k, w.since]));
-
-  return { waiting, onClaude, quiet, timeline: buildTimeline(timelineItems, now, 7, alsoWaiting), errors, generatedAt: now.toISOString() };
+  return { waiting, onClaude, quiet, errors, generatedAt: now.toISOString() };
 }

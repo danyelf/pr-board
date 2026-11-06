@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fetchItems } from '../src/worker/github.ts';
-import { answerRepo } from './github-fake.ts';
+import { answerRepo, recordedRepo } from './github-fake.ts';
 
 const NOW = new Date('2026-11-06T06:00:00Z');
 
@@ -19,7 +19,7 @@ interface FakeOptions {
 
 function fake(opts: FakeOptions = {}) {
   const calls: { url: string; method: string }[] = [];
-  const items = fixture('graphql-items.json').data.r0;
+  const items = recordedRepo();
   const fn = (async (input: any, init?: any) => {
     const url = String(input);
     calls.push({ url, method: init?.method ?? 'GET' });
@@ -63,7 +63,7 @@ describe('fetchItems', () => {
     expect(p573.commitsSincePrep).toBeNull();
 
     expect(get(574).stackedOn).toBe(573);
-    expect(get(574).stackedOnOpen).toBe(false);
+    expect(get(574).stackedOnOpen).toBe(true);
 
     const p578 = get(578);
     expect(p578.prepDone).toBe(true);
@@ -72,8 +72,6 @@ describe('fetchItems', () => {
     expect(p578.reviewSha).toBe('629776d');
     expect(p578.commitsSinceReview).toBe(3);
 
-    expect(get(576).merged).toBe(true);
-    expect(get(576).mergedAt).not.toBeNull();
     expect(get(564).merged).toBe(false);
     expect(get(564).mergeState).toBe('BLOCKED');
     expect(get(564).addedDocs).toEqual([
@@ -93,21 +91,30 @@ describe('fetchItems', () => {
     expect(times).toEqual([...times].sort((a, b) => a - b));
   });
 
-  it('drops issues without a turn label, and PRs closed more than 7 days ago', async () => {
+  it('drops issues without a turn label', async () => {
     const itemsFor = () => {
-      const data = fixture('graphql-items.json').data.r0;
-      const old = structuredClone(data.pullRequests.nodes.find((p: any) => p.number === 576));
-      old.number = 1; old.closedAt = '2026-10-01T00:00:00Z'; old.mergedAt = '2026-10-01T00:00:00Z';
-      data.pullRequests.nodes.push(old);
+      const data = recordedRepo();
       const plain = structuredClone(data.issues.nodes[0]);
       plain.number = 2; plain.labels.nodes = [{ name: 'P2' }];
       data.issues.nodes.push(plain);
       return data;
     };
     const { items } = await fetchItems('tok', NOW, fake({ itemsFor }).fn);
-    expect(items.find((i) => i.number === 1)).toBeUndefined();
     expect(items.find((i) => i.number === 2)).toBeUndefined();
     expect(items.find((i) => i.number === 563)).toBeDefined();
+  });
+
+  it('reads no closed or merged PRs, even ones closed today', async () => {
+    const itemsFor = () => {
+      const data = recordedRepo();
+      const today = structuredClone(data.pullRequests.nodes.find((p: any) => p.number === 576));
+      today.number = 1; today.closedAt = '2026-11-06T00:00:00Z'; today.mergedAt = '2026-11-06T00:00:00Z';
+      data.pullRequests.nodes.unshift(today);
+      return data;
+    };
+    const { items } = await fetchItems('tok', NOW, fake({ itemsFor }).fn);
+    expect(items.find((i) => i.number === 1)).toBeUndefined();
+    expect(items.filter((i) => i.kind === 'pr' && (i.merged || i.closedAt !== null))).toEqual([]);
   });
 
   it('skips repos not pushed within 60 days', async () => {
@@ -120,13 +127,13 @@ describe('fetchItems', () => {
   it('computes lastActivityAt as the latest activity time', async () => {
     const { items } = await fetchItems('tok', NOW, fake().fn);
     const p578 = items.find((i) => i.number === 578)!;
-    expect(p578.activityTimes).toContain('2026-11-06T00:19:40Z');
-    expect(p578.lastActivityAt).toBe('2026-11-06T00:26:11Z');
+    expect(p578.activityTimes.length).toBeGreaterThan(1);
+    expect(p578.lastActivityAt).toBe('2026-11-06T00:19:40Z');
   });
 
   it('marks stackedOnOpen when the base PR is still open', async () => {
     const itemsFor = () => {
-      const data = fixture('graphql-items.json').data.r0;
+      const data = recordedRepo();
       const p574 = data.pullRequests.nodes.find((p: any) => p.number === 574);
       p574.body = 'Stacked on #564';
       return data;
@@ -135,18 +142,30 @@ describe('fetchItems', () => {
     expect(items.find((i) => i.number === 574)!.stackedOnOpen).toBe(true);
   });
 
+  it('does not mark stackedOnOpen when the base PR has merged', async () => {
+    const itemsFor = () => {
+      const data = recordedRepo();
+      const p574 = data.pullRequests.nodes.find((p: any) => p.number === 574);
+      p574.body = 'Stacked on #576';
+      return data;
+    };
+    const { items } = await fetchItems('tok', NOW, fake({ itemsFor }).fn);
+    expect(items.find((i) => i.number === 574)!.stackedOn).toBe(576);
+    expect(items.find((i) => i.number === 574)!.stackedOnOpen).toBe(false);
+  });
+
   it('flags an open PR whose base has moved ahead', async () => {
     const { fn, calls } = fake({ behind: { 'main...codemap-design': 3 } });
     const { items } = await fetchItems('tok', NOW, fn);
     expect(items.find((i) => i.number === 564)!.behindBase).toBe(true);
     expect(items.find((i) => i.number === 573)!.behindBase).toBe(false);
-    expect(calls.filter((c) => c.url.includes('/compare/'))).toHaveLength(1);
+    expect(calls.filter((c) => c.url.includes('/compare/'))).toHaveLength(items.length - items.filter((i) => i.kind === 'issue').length);
     expect(calls.every((c) => c.method === 'POST' || c.method === 'GET')).toBe(true);
   });
 
   it('checks at most 20 PRs against their base and says how many it skipped', async () => {
     const itemsFor = () => {
-      const data = fixture('graphql-items.json').data.r0;
+      const data = recordedRepo();
       const open = data.pullRequests.nodes.find((p: any) => p.number === 564);
       for (let n = 1000; n < 1024; n++) {
         const copy = structuredClone(open);
@@ -158,7 +177,7 @@ describe('fetchItems', () => {
     const { fn, calls } = fake({ itemsFor });
     const { errors } = await fetchItems('tok', NOW, fn);
     expect(calls.filter((c) => c.url.includes('/compare/'))).toHaveLength(20);
-    expect(errors).toEqual(["Didn't check 5 PRs against main"]);
+    expect(errors).toEqual(["Didn't check 8 PRs against main"]); // 4 recorded open PRs + 24 copies, 20 checked
   });
 
   it('keeps the other repos when one fails, and names the failing repo', async () => {
@@ -191,7 +210,7 @@ describe('fetchItems', () => {
 
   it('keeps an old open PR that 30 newer merged PRs would push out, and sees what it is stacked on', async () => {
     const itemsFor = () => {
-      const data = fixture('graphql-items.json').data.r0;
+      const data = recordedRepo();
       const merged = data.pullRequests.nodes.find((p: any) => p.number === 576);
       const open = data.pullRequests.nodes.find((p: any) => p.number === 564);
       const stacked = structuredClone(open);
@@ -203,12 +222,12 @@ describe('fetchItems', () => {
     const { items, errors } = await fetchItems('tok', NOW, fake({ itemsFor }).fn);
     expect(items.find((i) => i.number === 564)).toBeDefined();
     expect(items.find((i) => i.number === 3000)!.stackedOnOpen).toBe(true);
-    expect(errors).toContain('More than 20 recently closed PRs in danyelf/torahmap; the timeline may be missing some');
+    expect(errors.filter((e) => /closed/.test(e))).toEqual([]);
   });
 
   it('finds a labelled issue behind 50 newer unlabelled ones, and lists an issue with two turn labels once', async () => {
     const itemsFor = () => {
-      const data = fixture('graphql-items.json').data.r0;
+      const data = recordedRepo();
       const labelled = data.issues.nodes.find((i: any) => i.number === 563);
       labelled.labels.nodes.push({ name: 'on danyel' });
       const newer = Array.from({ length: 50 }, (_, k) => {
@@ -227,7 +246,7 @@ describe('fetchItems', () => {
 
   it('says so on the page when a list comes back full', async () => {
     const itemsFor = () => {
-      const data = fixture('graphql-items.json').data.r0;
+      const data = recordedRepo();
       const open = data.pullRequests.nodes.find((p: any) => p.number === 564);
       const issue = data.issues.nodes.find((i: any) => i.number === 563);
       for (let k = 0; k < 50; k++) data.pullRequests.nodes.push({ ...structuredClone(open), number: 5000 + k });
