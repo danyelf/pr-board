@@ -5,7 +5,15 @@ const REPO_WINDOW_DAYS = 60;
 const CLOSED_WINDOW_DAYS = 7;
 const REPOS_PER_QUERY = 5;
 const MAX_COMPARE_CALLS = 20;
-const TURN_LABELS = ['in-progress', 'on danyel', 'parked'];
+const OPEN_PRS_PER_REPO = 50;
+const CLOSED_PRS_PER_REPO = 20;
+const ISSUES_PER_LABEL = 50;
+// One issues connection per label, so GitHub does the filtering and each label has its own limit.
+const TURN_LABELS = [
+  { label: 'on danyel', alias: 'onDanyel' },
+  { label: 'parked', alias: 'parked' },
+  { label: 'in-progress', alias: 'inProgress' },
+] as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const REPOS_QUERY = `query {
@@ -16,7 +24,7 @@ const REPOS_QUERY = `query {
   }
 }`;
 
-const COMMON_FIELDS = `number title url body createdAt closedAt
+const COMMON_FIELDS = `number title url body createdAt updatedAt closedAt
   labels(first:20){nodes{name}}
   comments(last:100){nodes{author{login} body url createdAt updatedAt}}
   timelineItems(last:100, itemTypes:[LABELED_EVENT, UNLABELED_EVENT]){nodes{__typename ... on LabeledEvent{label{name} createdAt} ... on UnlabeledEvent{label{name} createdAt}}}`;
@@ -31,7 +39,7 @@ interface RepoNode { nameWithOwner: string; pushedAt: string; defaultBranchRef: 
 interface Comment { author: { login: string } | null; body: string; url: string; createdAt: string; updatedAt: string }
 interface TimelineNode { __typename: string; label?: { name: string }; createdAt?: string }
 interface RawItem {
-  number: number; title: string; url: string; body: string; createdAt: string; closedAt: string | null;
+  number: number; title: string; url: string; body: string; createdAt: string; updatedAt?: string; closedAt: string | null;
   labels: { nodes: { name: string }[] };
   comments: { nodes: Comment[] };
   timelineItems: { nodes: TimelineNode[] };
@@ -41,7 +49,8 @@ interface RawItem {
   files?: { nodes: { path: string; changeType: string }[] };
   commits?: { nodes: { commit: { oid: string; committedDate: string } }[] };
 }
-interface RepoData { pullRequests: { nodes: RawItem[] }; issues: { nodes: RawItem[] } }
+interface Page { pageInfo: { hasNextPage: boolean }; nodes: RawItem[] }
+interface RepoData { openPrs: Page; closedPrs: Page; onDanyel: Page; parked: Page; inProgress: Page }
 interface GraphqlResponse<T> { data?: T | null; errors?: { message: string; path?: (string | number)[] }[] }
 
 interface Pending { facts: ItemFacts; base: string; head: string }
@@ -72,9 +81,12 @@ export async function fetchItems(
       const batch = recent.slice(i, i + REPOS_PER_QUERY);
       const aliases = batch.map((repo, k) => {
         const [owner, name] = repo.nameWithOwner.split('/');
+        const issues = TURN_LABELS.map(({ label, alias }) =>
+          `  ${alias}: issues(first: ${ISSUES_PER_LABEL}, states: OPEN, labels: ["${label}"], orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage } nodes { ${COMMON_FIELDS} } }`);
         return `r${k}: repository(owner: "${owner}", name: "${name}") {
-  pullRequests(first: 30, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ${PR_FIELDS} } }
-  issues(first: 50, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ${COMMON_FIELDS} } }
+  openPrs: pullRequests(first: ${OPEN_PRS_PER_REPO}, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage } nodes { ${PR_FIELDS} } }
+  closedPrs: pullRequests(first: ${CLOSED_PRS_PER_REPO}, states: [MERGED, CLOSED], orderBy: {field: UPDATED_AT, direction: DESC}) { pageInfo { hasNextPage } nodes { ${PR_FIELDS} } }
+${issues.join('\n')}
 }`;
       });
       const res = await graphql<Record<string, RepoData | null>>(`query {\n${aliases.join('\n')}\n}`);
@@ -89,17 +101,43 @@ export async function fetchItems(
       batch.forEach((repo, k) => {
         const data = res.data?.[`r${k}`];
         if (!data) return;
+        const name = repo.nameWithOwner;
+        const withinWindow = (iso: string | null | undefined) =>
+          iso != null && now.getTime() - Date.parse(iso) <= CLOSED_WINDOW_DAYS * DAY_MS;
         const open = new Set<number>();
-        openByRepo.set(repo.nameWithOwner, open);
-        for (const pr of data.pullRequests.nodes) {
-          const closedRecently = pr.closedAt !== null && now.getTime() - Date.parse(pr.closedAt) <= CLOSED_WINDOW_DAYS * DAY_MS;
-          if (pr.closedAt === null) open.add(pr.number);
-          else if (!closedRecently) continue;
-          pending.push({ facts: prFacts(repo.nameWithOwner, pr), base: pr.baseRefName ?? '', head: pr.headRefName ?? '' });
+        openByRepo.set(name, open);
+
+        if (data.openPrs.pageInfo.hasNextPage) {
+          errors.push(`More than ${OPEN_PRS_PER_REPO} open PRs in ${name}; some may be missing from this page`);
         }
-        for (const issue of data.issues.nodes) {
-          if (!issue.labels.nodes.some((l) => TURN_LABELS.includes(l.name))) continue;
-          pending.push({ facts: issueFacts(repo.nameWithOwner, issue), base: '', head: '' });
+        for (const pr of data.openPrs.nodes) {
+          open.add(pr.number);
+          pending.push({ facts: prFacts(name, pr), base: pr.baseRefName ?? '', head: pr.headRefName ?? '' });
+        }
+
+        // Closed PRs only feed the timeline. The list is newest-updated first, so if its last entry
+        // is already older than the window, nothing in the window was left out.
+        const closed = data.closedPrs.nodes;
+        const lastClosed = closed[closed.length - 1];
+        if (data.closedPrs.pageInfo.hasNextPage && withinWindow(lastClosed?.updatedAt ?? lastClosed?.closedAt)) {
+          errors.push(`More than ${CLOSED_PRS_PER_REPO} recently closed PRs in ${name}; the timeline may be missing some`);
+        }
+        for (const pr of closed) {
+          if (!withinWindow(pr.closedAt)) continue;
+          pending.push({ facts: prFacts(name, pr), base: pr.baseRefName ?? '', head: pr.headRefName ?? '' });
+        }
+
+        const seenIssues = new Set<number>();
+        for (const { label, alias } of TURN_LABELS) {
+          const page = data[alias];
+          if (page.pageInfo.hasNextPage) {
+            errors.push(`More than ${ISSUES_PER_LABEL} open issues labelled "${label}" in ${name}; some may be missing from this page`);
+          }
+          for (const issue of page.nodes) {
+            if (seenIssues.has(issue.number)) continue;
+            seenIssues.add(issue.number);
+            pending.push({ facts: issueFacts(name, issue), base: '', head: '' });
+          }
         }
       });
     }
