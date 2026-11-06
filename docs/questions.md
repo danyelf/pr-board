@@ -32,10 +32,10 @@ Nothing below has been run. Each needs your OK. They are in the order to do them
 6. **Turn on the Stop hook?** (**yes, after merging this branch and pulling the main checkout** | wait) The hook file lives in the main checkout, which has no `hooks/` folder until the merge. Add a second entry to the `Stop` hooks in `~/.claude/settings.json`:
 
    ```json
-   {"type":"command","command":"/Users/danyel/.local/state/fnm_multishells/15884_1793769790861/bin/node /Users/danyel/code/MISC/pr-board/hooks/status-check.ts"}
+   {"type":"command","command":"<stable node path> /Users/danyel/code/MISC/pr-board/hooks/status-check.ts"}
    ```
 
-   That node path (from `command -v node`) is a temporary fnm shell path and will stop working. Use a stable Node 24 path instead (for example the fnm default alias, or whatever `fnm exec --using=24 which node` prints). The hook needs Node 24 because it runs the TypeScript directly.
+   Replace `<stable node path>` before saving; the line as written won't run. Get a stable Node 24 path from `fnm exec --using=24 which node`. Don't use what `command -v node` prints in an ordinary shell: under fnm that is a temporary per-shell path, and once that shell is gone the hook stops running without any warning, so cards go stale. The hook needs Node 24 because it runs the TypeScript directly.
 
 7. **Install the skill?** (**yes, after merging this branch and pulling the main checkout** | wait) `ln -s /Users/danyel/code/MISC/pr-board/skill/pr-status ~/.claude/skills/pr-status`. Until the merge, the main checkout has no `skill/` folder, so the link would point at nothing. The skill and the hook both name `/Users/danyel/code/MISC/pr-board/cli/pr-status.ts` by absolute path, which is the main checkout, not a worktree. If the repo moves, both the skill and the hook need editing.
 
