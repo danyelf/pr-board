@@ -1,0 +1,216 @@
+# PR Board: design
+
+Date: 2026-11-05. Status: draft for review.
+
+## Why this exists
+
+Danyel works with Claude Code on several pull requests at once, across several repos (Torahmap is the busiest). Each piece of work moves through the same steps:
+
+1. Discuss an idea and file an issue.
+2. Pick an issue; brainstorm and design; open a PR.
+3. Build in the PR.
+4. Design-iterate on the PR (screenshots, mockups, Danyel's look at the preview).
+5. Sometimes reset and rebuild the PR.
+6. After Danyel approves, Claude rebases and self-reviews ("prep for merge").
+7. Danyel merges (or Claude rebases first and then he merges).
+
+Along the way Claude asks Danyel for decisions, mostly at steps 1, 2 and 4, and on whether to push ahead with something big.
+
+The problem: the state of each PR lives in chat scrollback. When something urgent comes in, the other PRs scroll out of sight, and Danyel has to ask "what's the state of 573?" or "what questions do I have to answer?". On 2026-11-05, for example:
+
+- #573 and #574 had been reviewed by Claude and were waiting on Danyel's look for 1 day 16 hours. Nothing in the terminal said so.
+- #564 had been waiting on Danyel for three days for a look at the preview and an answer about a colour tint. That ask existed only as the last message of a separate session. Its issue carried only the `in-progress` label, which said it had been picked up but not that it was waiting on Danyel.
+
+### Goals
+
+- Stop Danyel having to ask for the state of a PR or for his open questions.
+- Show what work and which decisions are waiting on him, and for how long.
+- Let him answer a question by clicking into the PR on a page, rather than typing "574: Q1 fix it" into a terminal.
+- Show how many things are running at once, alongside his own activity.
+- Keep the screenshots, design docs and preview links for each PR within reach.
+- Work from the laptop (main use) and the phone.
+
+### Non-goals
+
+- A general product for other people. This is Danyel's tool, across his repos.
+- Replacing Claude Code's Agent View or Remote Control. Those are organised around sessions; this is organised around PRs.
+- A terminal app. Danyel doesn't like them (that rules out Claude Squad-style tools).
+- Per-repo stage names. One fixed set for now.
+
+### Anti-goals (failure even if it works)
+
+- The page says something is fine when it is actually waiting on Danyel. Stale or wrong state is worse than no page.
+- The page lectures him about his own absence, for example by showing a big empty day because he was away.
+- The tool burns tokens while nothing is happening.
+- Everything breaks when Claude Code upgrades. GitHub holds the state; everything else must be cheap to throw away and rebuild.
+
+## Prior art (researched 2026-11-05)
+
+- **Claude Code Agent View** (`claude agents`) groups sessions by Needs input / Working / Ready for review, and you can reply from it. It is per session, and Danyel mostly works in one long-running main session that handles 6–7 PRs, so it shows little.
+- **Remote Control** lets claude.ai/code or the phone reply into a running local session. There is no public API for a custom page to send into it.
+- **Conductor**, **Nimbalyst** (formerly Crystal), **Vibe Kanban** and others: none tracks per-PR stage, pending decisions, test protocol or timeline for existing CLI sessions.
+- Danyel's own earlier tools: `~/code/MISC/26-02-claudemon` (a terminal dashboard of sessions fed by hooks) and `~/code/MISC/claude-ui` (an Electron app that captures clicks on UI elements). Neither is organised by PR.
+
+## The core idea
+
+**The PR is what we track, and GitHub holds its state.** The issue stands in until a PR exists. Claude writes down whose turn it is and what the ask is, on GitHub, every time it hands work back. The page reads GitHub. Everything that isn't on GitHub (the page, the hooks, the activity history) is disposable.
+
+## What lives where
+
+| What | Where |
+|---|---|
+| Whose turn it is | A GitHub label on the live item (issue before a PR exists, then the PR) |
+| History of whose turn it was | GitHub's issue/PR timeline events for label added/removed |
+| The ask, the questions, the test protocol | A status section at the top of the PR description; before a PR exists, one comment on the issue that Claude keeps editing |
+| Danyel's answers | Comments on the PR (or issue), posted from his account, danyelf |
+| Reviews, commits, merges, checks | GitHub, as today |
+| Danyel's activity (times and PR numbers only) | Cloudflare D1, the only state the app owns. Rebuildable from the Mac. |
+| Where the last activity upload stopped | A small marker file on the Mac |
+
+### Turn labels
+
+- `in-progress` (existing, unchanged): the item has been picked up, by Claude or anyone else. Danyel finds this useful as-is.
+- `on danyel` (new): it's Danyel's turn. A look, an answer, or a merge.
+- `parked` (new): waiting on something outside the two of them (for example #411, waiting on a licence question).
+
+Whose turn it is: `on danyel` means Danyel's; `parked` means nobody's; otherwise, if it's `in-progress`, it's whoever picked it up. When Claude hands an item back it adds `on danyel`; when Danyel answers, the Worker removes it. Created in every repo the tool covers.
+
+The existing `review pending` label keeps its current meaning. Priority and map labels are untouched.
+
+The stage is **not** a label. The page infers it (see below).
+
+### The status section
+
+At the top of the PR description, between markers, so it can be found and replaced by a program:
+
+```
+<!-- status -->
+**Waiting on:** Danyel, since 2026-11-02 16:40 PT
+**Ask:** look at the preview, and answer one question
+**Questions:**
+1. Does the tint over the code dull the colours enough to change the shell?  (leave | change)
+**To test:** pin a verse, leave the mouse on it, press Escape: the popup stays up, unpinned.
+<!-- /status -->
+```
+
+- Questions are numbered and each lists its choices, so the page can draw buttons. A question with no listed choices gets a text box only.
+- The page always offers a free-text "note back" as well.
+- On issues with no PR yet, the same block goes in a single Claude comment on the issue, edited in place. Claude does not rewrite Danyel's own issue text.
+- Merge commits in Torahmap use the PR title only (checked: `merge_commit_message: PR_TITLE`), so the status section doesn't leak into git history. Check this per repo.
+
+The exact field set (for example, whether "To test" moves here from the existing "To look at on the preview:" paragraph or is read from there) is left to the builder, as long as the page can show all of it.
+
+### Stage, inferred
+
+One fixed set of stage names: **Issue · Design · Build · Claude review · Your look · Merge**. Each box lights up independently for what has actually happened, because the steps don't always come in order (#573 was reviewed before Danyel looked).
+
+The facts to read:
+
+- Issue exists; PR exists; linked by `Closes #N` / `Refs #N`.
+- Design: a design doc in the PR (for example under `docs/plans/` or `docs/superpowers/specs/`), or mockups in the description.
+- Claude review: a `danyel-claude` comment beginning `Reviewed up to \`<sha>\``. Stale if there are commits after that sha that aren't fixes from that review (the builder decides how to judge this; showing "N commits since review" is acceptable).
+- Prep for merge: a `🤖 Claude: prep for merge` comment.
+- Your look: the turn label is `on danyel` and the ask is a look or questions.
+- Merge: merged; or blocked ("after #573" when the PR body says it is stacked on another; "rebase first" when behind main).
+
+## Keeping the record honest: the status hook
+
+A Claude Code `Stop` hook on the Mac. When Claude finishes a turn in which it pushed to a PR's branch, commented on a PR or issue, or opened one, the hook checks that the status section and turn label on that item were updated during the turn. If not, it blocks the stop with a message telling Claude to update them.
+
+- Which items a turn touched is found from the commands Claude ran (`gh pr …`, `gh issue …`, `git push`). This is the most fragile piece. If it misses, the result is a stale card, not a broken system.
+- Claude's working instructions (global `CLAUDE.md` or a skill) should also say to keep the status section and label current; the hook is the check, not the only reminder.
+
+## Answers getting back to Claude
+
+1. Danyel clicks choices on a card and presses **Send answers** (or types a note). The Worker posts one comment from danyelf on the PR, in a form a program can read (for example `Answers: 1 fix it here; 2 leave it`, plus the note), and removes the `on danyel` label.
+2. **Whichever Claude session is open picks it up.** A session that hands a PR to Danyel starts a background watcher script. It checks GitHub about once a minute for new answer comments not yet picked up. It exits only when it finds one, and waits about a minute after the first new answer to collect the rest. Exiting wakes the session (Claude Code re-invokes a session when its background command finishes). Claude acts on the answers, then restarts the watcher.
+   - The watcher costs no tokens while it waits. It must never exit on a timer or a repeated error, because each exit is a paid wake-up.
+   - Only one session may pick up a given answer. The builder decides how it is claimed (for example, an acknowledgement comment or reaction on the answer).
+3. **If nobody picks it up**, the always-on service on the Mac (below) starts a fresh session in that PR's worktree with `claude -p "<the answers>"`. A fresh session has no chat memory, so it relies on the status section. The builder picks the grace period before this happens; a few minutes is the intent.
+
+## Danyel's activity
+
+- The timeline shows when Danyel was typing to Claude, and a mark on a PR's row whenever he said something about it.
+- Source: Claude Code session history on the Mac (`~/.claude/projects/**.jsonl`). Only Danyel's own typed messages count, not tool output or messages from subagents. A message is linked to a PR by the numbers in it (`576:`, `#576`, `merged 576`) and, where clear, by branch names. Some messages will not link to anything; that's fine.
+- **Sent in batches, only when there's something new.** The always-on service watches the history folder for changes. When something changes it uploads new records at most once every 10 minutes. Nothing is sent while Danyel is away.
+- Only the time, session ID and PR numbers (with repo) leave the Mac, never message text.
+- The first run backfills a few weeks so the timeline has history.
+- The session history format is internal to Claude Code and may change. This row is allowed to break; the rest of the page must work without it.
+
+## The page
+
+Hosted on Cloudflare as a Worker, behind Cloudflare Access with Danyel's Google login. It reads GitHub directly, so it works from the laptop or phone with the Mac off (except the activity row going stale and fresh sessions not starting).
+
+Repos covered: every repo the GitHub token Danyel provides can see. No list to maintain; the token decides.
+
+Top to bottom:
+
+1. **Waiting on you**, oldest wait first. One card per item:
+   - number, title, a short "why" tag (`Only your look is left`, `2 decisions + your look`, `Ready to merge`), how long it has waited
+   - the stage strip, with the box that needs Danyel lit in amber (green when it's ready to merge)
+   - links: Preview, PR, Claude's review, Issue, and Merge on GitHub when ready
+   - the test protocol
+   - each question with buttons for its choices, a free-text note box, and **Send answers**
+   - files: screenshots in the PR description (as thumbnails) and design docs the PR adds
+2. **On Claude**: items Claude is working on (a compact row each; not in the mockups yet, the builder decides the look).
+3. **Quiet**: `parked` items and anything with no activity for a few days, one row each, saying what it's waiting on.
+4. **Timeline**: one row per PR open in the window, plus a **You** row on top.
+   - Bars: blue when Claude is working (`in-progress` without `on danyel`), amber when waiting on Danyel, green when ready to merge, grey hatched when parked or quiet, grey for quick merged ones. Use label history for these; fall back to open→merged where there's no history.
+   - Dots on a PR's row where Danyel said something about it.
+   - **Real clock time**, except that any gap of 24 hours or more with no activity is cut down to a narrow break mark. A bar crossing a cut gap carries its true length as a label ("waited 1 d 16 h").
+   - A "how many open at once" strip under the rows.
+   - Times in Pacific time.
+
+The mockups from this conversation (`board-v3.html` in the scratchpad: cards with stage strip, quiet rows, timeline A) show the intended look. Timeline B (away time squeezed out) was rejected in favour of real time with the 24-hour cut.
+
+## The always-on service on the Mac
+
+One small background service started with the Mac at login. It does two jobs:
+
+- Uploads Danyel's activity to the Worker (above).
+- Starts a fresh Claude session for answers nobody picked up (above).
+
+## Decided by Danyel
+
+- The PR is the thing tracked, not the session.
+- Claude writes the state down on GitHub; a hook checks it did.
+- Turn labels are welcome (more labels are fine).
+- Covers every repo where Claude opens PRs for him.
+- One fixed set of stage names for now.
+- Real clock time, with gaps of 24 hours or more cut out.
+- Answers reach whichever session is open within about a minute via a background watcher; otherwise a fresh session starts.
+- Hosted on Cloudflare so it works on the phone; the laptop is the main use.
+- Activity uploads batch every 10 minutes at most, and only when there's something new.
+- Code lives in `~/code/MISC/pr-board`.
+- `in-progress` stays, meaning "picked up" by anyone.
+- The page covers every repo the token he provides can see; the token type doesn't change the design.
+
+## Claude's calls (not yet confirmed by Danyel)
+
+- Two new labels, `on danyel` and `parked`, alongside the existing `in-progress`.
+- Status section at the top of the PR description, not a comment stream; on issues, one comment edited in place.
+- No stage labels; stage is inferred.
+- Cloudflare Access with Google login; Danyel's answers posted as danyelf via a token stored as a Worker secret; Claude's own posts stay as danyel-claude.
+- D1 for activity.
+- Repos found by searching for the turn labels.
+- A third answer choice, "New issue", offered alongside Leave it / Fix it here where it fits.
+
+## Details settled after the builder review (Claude's calls)
+
+- **The page only links to merge.** "Merge on GitHub" is a link. The page never merges.
+- **Answers nobody has picked up are shown as such.** When a session picks up an answer it adds a reaction (👀) to the answer comment; that is the claim. If an answer has no claim after 10 minutes, the card moves back to the top section as "Answered, not picked up", so the page never claims Claude is working when nothing is. The Mac service sends the Worker a heartbeat every 10 minutes while the Mac is awake; if the heartbeat is older than 30 minutes, the page shows a small "Mac offline: answers will wait" note.
+- **Each watcher watches only what its own session handed back.** A session records the items it labelled `on danyel` and watches only those. The always-on service is the only thing that watches everything, and only for answers still unclaimed after its grace period (5 minutes).
+- **Finding the worktree for a fresh session.** The Mac service has a small config file mapping each repo to its local clone. It finds the PR's worktree by branch name in `git worktree list`. If none exists, it creates one under the repo's `.claude/worktrees/<branch>`, the existing convention.
+- **How the hook knows the status was updated.** At the end of a turn that touched an item, the hook compares the item's description `updatedAt` and its latest label event with the turn's start time. Claude may leave the status unchanged on purpose by running a small helper command that records "status checked, still correct" for that item, so the hook doesn't block a turn that legitimately changed nothing about the ask.
+- **Answers to out-of-date questions.** Each answer comment carries a short fingerprint of the status section it answered. If Claude has changed the questions since, the session sees the mismatch and asks again rather than applying answers to the wrong numbers.
+- **The review conventions already exist.** `Reviewed up to \`<sha>\`` and `🤖 Claude: prep for merge` come from the global `prep-for-merge` skill (`~/.claude/skills/prep-for-merge/SKILL.md`), so they apply in every repo. Design docs are recognised as `.md` files the PR adds under `docs/`.
+- **Starting labels.** A one-off pass where Claude reads each open item and its last session and proposes which ones get `on danyel` or `parked`. Danyel approves the list before any label changes (for example, #564 would get `on danyel`).
+- **Which repos.** Whatever the token sees (Danyel decided). Today that is mainly `danyelf/torahmap` and `danyelf/danyelfisher.info`.
+
+## Left to the builder
+
+- Languages and frameworks for the Worker, the page, the hook and the Mac service (Cloudflare Workers + D1 are fixed).
+- Caching of GitHub reads, within GitHub's rate limits.
+- The exact answer-comment format and how a session claims an answer.
+- How "commits since review" is judged.
+- The look of the "On Claude" section and the phone layout.
