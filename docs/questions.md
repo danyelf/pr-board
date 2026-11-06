@@ -8,15 +8,15 @@ Collected while building part 1 (a board you can read). Newest at the bottom. Ea
 
 ## Go-live steps prepared by the build
 
-Nothing below has been run. Each needs your OK. They are in the order to do them, and the same steps are in `README.md` under "Going live". Each question has its default in bold.
+Nothing below has been run. Each needs your OK. They are in the order to do them. The steps themselves are written out once, in `README.md` under "Going live"; each question here names its step and gives only the decision and my default, in bold.
 
-2. **Make the GitHub token for the Worker?** (**yes** | wait) In GitHub (Settings, Developer settings, Fine-grained tokens), create a token with repository access set to all repositories and read-only access to metadata, contents, issues and pull requests. Then store it: `pnpm exec wrangler secret put GITHUB_TOKEN` (it prompts for the value, so it never lands in a file or your shell history). The Worker covers every repo this token can see where you are owner or collaborator and which was pushed to in the last 60 days. I haven't created a token or set a secret.
+2. **Make the GitHub token for the Worker?** (**yes** | wait) README step 1. I haven't created a token or set a secret.
 
-3. **Which hostname, and shall I set up the login gate?** (**board.danyelfisher.info** | another name) `wrangler.toml` has the route commented out, with `board.danyelfisher.info` as the suggestion. In the Cloudflare dashboard (Zero Trust, Access, Applications) add a self-hosted application for that hostname, with Google as the login method and a policy allowing only danyel@gmail.com. Then put the team domain (like `yourteam.cloudflareaccess.com`) and the application's AUD tag into `wrangler.toml` as `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`, replacing the two `REPLACE-…` placeholders, and uncomment the line `routes = [{ pattern = "board.danyelfisher.info", custom_domain = true }]` with your chosen name. `ALLOWED_EMAIL` is already `danyel@gmail.com`. The Worker refuses every request that lacks a valid Access token for that application and email. Please don't deploy before this step: with the placeholders in place the page would simply refuse everyone, which is safe but useless.
+3. **Which hostname, and shall I set up the login gate?** (**board.danyelfisher.info** | another name) README step 2. `wrangler.toml` has the route commented out, with `board.danyelfisher.info` as the suggestion. I haven't changed anything in Cloudflare.
 
-4. **Deploy?** (**yes, after 2 and 3** | wait) `pnpm exec wrangler deploy`. `workers_dev` is off, so the page is reachable only through the route from question 3.
+4. **Deploy?** (**yes, after 2 and 3** | wait) README step 3.
 
-5. **Create the two new labels?** (**yes** | wait) `node cli/setup-labels.ts` creates `on danyel` and `parked` in every repo your `gh` account can see (owner or collaborator, pushed to in the last 60 days). It runs as whichever account `gh` is logged in as, which may see different repos than the Worker's token. It also warns about any repo whose merge settings copy the PR description into commit messages (the status section would leak into history). The dry run, which only reads (`node cli/setup-labels.ts --dry-run`), printed:
+5. **Create the three labels?** (**yes** | wait) README step 4. The dry run, which only reads (`node cli/setup-labels.ts --dry-run`), printed this when only two labels were wanted (`in-progress` is now checked too):
 
    ```
    danyelf/torahmap: would create "on danyel"
@@ -27,19 +27,13 @@ Nothing below has been run. Each needs your OK. They are in the order to do them
    danyelf/ieeevis-scrape: would create "parked"
    ```
 
-   No merge-setting warnings. To do it for real: `node cli/setup-labels.ts`.
+   No merge-setting warnings.
 
-6. **Turn on the Stop hook?** (**yes, after merging this branch and pulling the main checkout** | wait) The hook file lives in the main checkout, which has no `hooks/` folder until the merge. Add a second entry to the `Stop` hooks in `~/.claude/settings.json`:
+6. **Turn on the Stop hook?** (**yes, after merging this branch and pulling the main checkout** | wait) README step 5. The hook file lives in the main checkout, which has no `hooks/` folder until the merge.
 
-   ```json
-   {"type":"command","command":"<stable node path> /Users/danyel/code/MISC/pr-board/hooks/status-check.ts"}
-   ```
+7. **Install the skill?** (**yes, after merging this branch and pulling the main checkout** | wait) README step 6. Until the merge, the main checkout has no `skill/` folder, so the link would point at nothing.
 
-   Replace `<stable node path>` before saving; the line as written won't run. Get a stable Node 24 path from `fnm exec --using=24 which node`. Don't use what `command -v node` prints in an ordinary shell: under fnm that is a temporary per-shell path, and once that shell is gone the hook stops running without any warning, so cards go stale. The hook needs Node 24 because it runs the TypeScript directly.
-
-7. **Install the skill?** (**yes, after merging this branch and pulling the main checkout** | wait) `ln -s /Users/danyel/code/MISC/pr-board/skill/pr-status ~/.claude/skills/pr-status`. Until the merge, the main checkout has no `skill/` folder, so the link would point at nothing. The skill and the hook both name `/Users/danyel/code/MISC/pr-board/cli/pr-status.ts` by absolute path, which is the main checkout, not a worktree. If the repo moves, both the skill and the hook need editing.
-
-8. **Shall I do the one-off pass over open items?** (**yes, as a proposal only** | skip) For each open PR and issue I would propose `on danyel` or `parked` and why, and wait for your approval before touching any label. There is no script for this; the build has no command for a bulk pass. Once you approve an item I would apply it with `node /Users/danyel/code/MISC/pr-board/cli/pr-status.ts set <owner/repo#N> --waiting danyel|nobody --ask "…"`, which also writes the status section. Until then every open item shows on the page as having no turn label, which is deliberate: the page never claims "Claude working" without a label saying so.
+8. **Shall I do the one-off pass over open items?** (**yes, as a proposal only** | skip) README step 7. For each open PR and issue I would propose `on danyel` or `parked` and why, and wait for your approval before touching any label. Until then every open item shows on the page as having no turn label, which is deliberate: the page never claims "Claude working" without a label saying so.
 
 ## Design questions the build turned up
 

@@ -10,7 +10,7 @@ Danyel works in auto mode with an allowlist of simple commands (`git …`, `pnpm
 - Edit files with the Edit/Write tools, not `sed -i`, heredocs, or inline `python3 - <<EOF` scripts (Danyel's rules forbid Python heredocs anyway).
 - Append to a report with the Edit tool, not `cat >> file <<EOF`.
 - One simple command per call beats a long `&&` chain.
-- Keep every command on one line. A commit message with line breaks inside `-m "…"` prompts; put the attribution lines in `--trailer` flags instead: `git -C /abs/path commit --author="Claude (for Danyel) <danyel@gmail.com>" -m "Subject" --trailer "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" --trailer "Claude-Session: <session url>"`.
+- Keep every command on one line. A commit message with line breaks inside `-m "…"` prompts; put the attribution lines in `--trailer` flags instead: `git -C /abs/path commit --author="Claude (for Danyel) <danyel@gmail.com>" -m "Subject" --trailer "Co-Authored-By: <the current model's name> <noreply@anthropic.com>" --trailer "Claude-Session: <session url>"`.
 
 ## Conventions
 
