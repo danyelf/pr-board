@@ -223,6 +223,13 @@ One small background service started with the Mac at login. It does three jobs:
 - **Starting labels.** A one-off pass where Claude reads each open item and its last session and proposes which ones get `on danyel` or `parked`. Danyel approves the list before any label changes (for example, #564 would get `on danyel`).
 - **Which repos.** Whatever the token sees (Danyel decided). Today that is mainly `danyelf/torahmap` and `danyelf/danyelfisher.info`.
 
+## To settle before answering is built
+
+These came out of the review of part 1 and must be decided when the page starts posting answers.
+
+- **Two records of whose turn it is.** Both the turn label and the status section's `Waiting on:` line say whose turn it is, and they are written one after the other, not together. Today that's safe: if either says Danyel, the card counts as waiting on him and says "label out of sync". But the plan above has the Worker remove `on danyel` when Danyel answers, while the description still says `Waiting on: Danyel` until Claude rewrites it. The card would then stay in "Waiting on you", flagged out of sync, which is the opposite of what answering should do. Options: the Worker only posts the answer, and the board shows "answered, not yet picked up" from an answer newer than the wait; or the label becomes the only record of whose turn it is, and the status section only holds the ask, questions and test steps.
+- **Store the status as data as well as text.** The board reads the status section with text matching. For example, a question's choices are the last bracketed group containing a `|`. Answering needs exact question numbers and the fingerprint above. Since Claude always writes the section through `pr-status`, that command could also write the same content as data (JSON) inside the status markers: people read the text, and the Worker reads the data.
+
 ## Left to the builder
 
 - Languages and frameworks for the Worker, the page, the hook and the Mac service (Cloudflare Workers + D1 are fixed).

@@ -9,7 +9,7 @@ interface Deps extends BaseDeps {
 const LABELS = [
   { name: LABEL_ON_DANYEL, color: 'e8a33a', description: 'Waiting on Danyel: a look, an answer, or a merge' },
   { name: LABEL_PARKED, color: 'c9c6bd', description: 'Waiting on something outside Danyel and Claude' },
-  { name: LABEL_IN_PROGRESS, color: '4a7bd0', description: 'Claude is working on it' },
+  { name: LABEL_IN_PROGRESS, color: '4a7bd0', description: 'Picked up: someone is working on it' },
 ];
 
 interface RepoSummary { full_name: string; pushed_at: string | null }

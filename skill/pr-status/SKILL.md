@@ -5,9 +5,11 @@ description: Use when handing a PR or issue back to Danyel, asking him a questio
 
 # Keeping a PR's status current
 
-Danyel's PR Board reads a status section at the top of each PR description (or, for an issue with no PR yet, in one comment). You keep it current with one command. Below, `pr-status` stands for this, whose absolute path is the only place it is written out:
+Danyel's PR Board reads a status section at the top of each PR description (or, for an issue with no PR yet, in one comment). You keep it current with one command:
 
 `node /Users/danyel/code/MISC/pr-board/cli/pr-status.ts`
+
+There is no `pr-status` program on the path. In the examples below, `pr-status` is short for that whole command, so type the full `node …` line.
 
 ## When to run it
 
