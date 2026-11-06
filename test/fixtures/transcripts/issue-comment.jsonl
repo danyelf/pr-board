@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-11-05T10:00:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"user","content":"issue note"}}
+{"type":"assistant","timestamp":"2026-11-05T10:01:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"gh issue comment 12 --body hi"}}]}}

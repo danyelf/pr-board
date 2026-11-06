@@ -85,7 +85,7 @@ At the top of the PR description, between markers, so it can be found and replac
 
 ```
 <!-- status -->
-**Waiting on:** Danyel, since 2026-11-02 16:40 PT
+**Waiting on:** Danyel, since 2026-11-02T16:40:00-08:00
 **Ask:** look at the preview, and answer one question
 **Questions:**
 1. Does the tint over the code dull the colours enough to change the shell?  (**leave** | change)
@@ -104,16 +104,18 @@ The exact field set (for example, whether "To test" moves here from the existing
 
 ### Stage, inferred
 
-One fixed set of stage names: **Issue · Design · Build · Claude review · Your look · Merge**. Each box lights up independently for what has actually happened, because the steps don't always come in order (#573 was reviewed before Danyel looked).
+One fixed set of stage names, in the order the work happens: **Issue · Design · Build · Your look · Prep · Ready for merge**.
+
+Danyel has two turns. The first is **Your look**: he tries the PR and answers its questions, and if it's right he says "looks good, prep for merge". Claude then runs **Prep**, a careful review that also rebases and fixes what it finds. The second turn is **Ready for merge**: Danyel goes to the PR on GitHub, approves it and merges it. Claude never merges.
 
 The facts to read:
 
 - Issue exists; PR exists; linked by `Closes #N` / `Refs #N`.
 - Design: a design doc in the PR (for example under `docs/plans/` or `docs/superpowers/specs/`), or mockups in the description.
-- Claude review: a `danyel-claude` comment beginning `Reviewed up to \`<sha>\``. Stale if there are commits after that sha that aren't fixes from that review (the builder decides how to judge this; showing "N commits since review" is acceptable).
-- Prep for merge: a `🤖 Claude: prep for merge` comment.
-- Your look: the turn label is `on danyel` and the ask is a look or questions.
-- Merge: merged; or blocked ("after #573" when the PR body says it is stacked on another; "rebase first" when behind main).
+- Build: the PR exists. A code review Claude posted before Prep (a `danyel-claude` comment beginning `Reviewed up to \`<sha>\``) shows as a note on Build, "✓ reviewed", with "N commits since" when there are commits after that sha.
+- Your look: the turn label is `on danyel` and the ask is a look or questions. Done once Prep has run, because Prep only runs after Danyel's go-ahead.
+- Prep: a `🤖 Claude: prep for merge` comment, with "N commits since" when there are commits after it.
+- Ready for merge: ready when Prep is done with nothing since and GitHub says it can merge; blocked with a reason ("after #573" when the PR body says it is stacked on another, "rebase first" when behind main, "checks failing", and so on); done once merged.
 
 ## Keeping the record honest: the status hook
 
@@ -123,6 +125,12 @@ A Claude Code `Stop` hook on the Mac. When Claude finishes a turn in which it pu
 - Claude's working instructions (global `CLAUDE.md` or a skill) should also say to keep the status section and label current; the hook is the check, not the only reminder.
 
 ## Answers getting back to Claude
+
+**The look is itself a question.** Every card at the Your look stage asks it, after any questions Claude wrote, even when Claude wrote none:
+
+> How does it look? (**looks good, prep for merge** | needs changes | file an issue)
+
+Every Your look card also has a free-text note box, so "the tint is too strong, otherwise good" has somewhere to go on a card with no questions. "Looks good, prep for merge" is what moves the PR from Your look to Prep. "Needs changes" sends the note back to Claude and the PR stays before Prep. Because the answer is posted as a comment, the board can show that the look happened, rather than guessing it from Prep having run.
 
 1. Danyel clicks choices on a card and presses **Send answers** (or types a note). The Worker posts one comment from danyelf on the PR, in a form a program can read (for example `Answers: 1 fix it here; 2 leave it`, plus the note), and removes the `on danyel` label.
 2. **Whichever Claude session is open picks it up.** A session that hands a PR to Danyel starts a background watcher script. It checks GitHub about once a minute for new answer comments not yet picked up. It exits only when it finds one, and waits about a minute after the first new answer to collect the rest. Exiting wakes the session (Claude Code re-invokes a session when its background command finishes). Claude acts on the answers, then restarts the watcher.
@@ -148,11 +156,11 @@ Repos covered: every repo the GitHub token Danyel provides can see. No list to m
 Top to bottom:
 
 1. **Waiting on you**, oldest wait first. One card per item:
-   - number, title, a short "why" tag (`Only your look is left`, `2 decisions + your look`, `Ready to merge`), how long it has waited
+   - number, title, a short "why" tag (`Needs your look`, `2 decisions + your look`, `Ready to merge`), how long it has waited
    - the stage strip, with the box that needs Danyel lit in amber (green when it's ready to merge)
    - links: Preview, PR, Claude's review, Issue, and Merge on GitHub when ready
    - the test protocol
-   - each question with buttons for its choices, a free-text note box, and **Send answers**
+   - each question with buttons for its choices, then the look question (looks good, prep for merge · needs changes · file an issue), a free-text note box, and **Send answers**
    - files: screenshots in the PR description (as thumbnails) and design docs the PR adds
    - At the very top of the page, a **File an issue** button: title, a few lines, optional screenshot (the phone matters here). It only files the issue; no work starts.
 2. **On Claude**: items Claude is working on (a compact row each; not in the mockups yet, the builder decides the look).
@@ -214,6 +222,13 @@ One small background service started with the Mac at login. It does three jobs:
 - **The review conventions already exist.** `Reviewed up to \`<sha>\`` and `🤖 Claude: prep for merge` come from the global `prep-for-merge` skill (`~/.claude/skills/prep-for-merge/SKILL.md`), so they apply in every repo. Design docs are recognised as `.md` files the PR adds under `docs/`.
 - **Starting labels.** A one-off pass where Claude reads each open item and its last session and proposes which ones get `on danyel` or `parked`. Danyel approves the list before any label changes (for example, #564 would get `on danyel`).
 - **Which repos.** Whatever the token sees (Danyel decided). Today that is mainly `danyelf/torahmap` and `danyelf/danyelfisher.info`.
+
+## To settle before answering is built
+
+These came out of the review of part 1 and must be decided when the page starts posting answers.
+
+- **Two records of whose turn it is.** Both the turn label and the status section's `Waiting on:` line say whose turn it is, and they are written one after the other, not together. Today that's safe: if either says Danyel, the card counts as waiting on him and says "label out of sync". But the plan above has the Worker remove `on danyel` when Danyel answers, while the description still says `Waiting on: Danyel` until Claude rewrites it. The card would then stay in "Waiting on you", flagged out of sync, which is the opposite of what answering should do. Options: the Worker only posts the answer, and the board shows "answered, not yet picked up" from an answer newer than the wait; or the label becomes the only record of whose turn it is, and the status section only holds the ask, questions and test steps.
+- **Store the status as data as well as text.** The board reads the status section with text matching. For example, a question's choices are the last bracketed group containing a `|`. Answering needs exact question numbers and the fingerprint above. Since Claude always writes the section through `pr-status`, that command could also write the same content as data (JSON) inside the status markers: people read the text, and the Worker reads the data.
 
 ## Left to the builder
 
