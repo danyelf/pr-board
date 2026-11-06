@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fetchItems } from '../src/worker/github.ts';
 import { renderStatus } from '../src/shared/status.ts';
 import type { ItemFacts } from '../src/shared/types.ts';
+import { answerRepo } from './github-fake.ts';
 import { status } from './helpers.ts';
 
 export const NOW = new Date('2026-11-06T00:00:00Z');
@@ -18,7 +19,7 @@ function fakeFetch(): typeof fetch {
       const query: string = JSON.parse(init.body).query;
       if (query.includes('viewer')) return Response.json(fixture('graphql-repos.json'));
       const data: Record<string, any> = {};
-      for (const m of query.matchAll(/(r\d+): repository\(/g)) data[m[1]!] = items;
+      for (const m of query.matchAll(/(r\d+): repository\(/g)) data[m[1]!] = answerRepo(query, items);
       return Response.json({ data });
     }
     if (/\/compare\//.test(url)) return Response.json({ behind_by: 0 });

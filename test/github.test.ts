@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fetchItems } from '../src/worker/github.ts';
+import { answerRepo } from './github-fake.ts';
 
 const NOW = new Date('2026-11-06T06:00:00Z');
 
@@ -32,7 +33,7 @@ function fake(opts: FakeOptions = {}) {
         const [, alias, owner, name] = m;
         const message = opts.graphqlErrors?.[name];
         if (message) { data[alias] = null; errors.push({ path: [alias], message }); }
-        else data[alias] = opts.itemsFor ? opts.itemsFor(`${owner}/${name}`) : items;
+        else data[alias] = answerRepo(query, opts.itemsFor ? opts.itemsFor(`${owner}/${name}`) : items);
       }
       return Response.json(errors.length ? { data, errors } : { data });
     }
@@ -186,6 +187,60 @@ describe('fetchItems', () => {
     const { items, errors } = await fetchItems('tok', NOW, fake({ status: 401 }).fn);
     expect(items).toEqual([]);
     expect(errors).toEqual(['GitHub said 401 Bad']);
+  });
+
+  it('keeps an old open PR that 30 newer merged PRs would push out, and sees what it is stacked on', async () => {
+    const itemsFor = () => {
+      const data = fixture('graphql-items.json').data.r0;
+      const merged = data.pullRequests.nodes.find((p: any) => p.number === 576);
+      const open = data.pullRequests.nodes.find((p: any) => p.number === 564);
+      const stacked = structuredClone(open);
+      stacked.number = 3000; stacked.body = 'Stacked on #564';
+      const newer = Array.from({ length: 30 }, (_, k) => ({ ...structuredClone(merged), number: 2000 + k }));
+      data.pullRequests.nodes = [stacked, ...newer, ...data.pullRequests.nodes];
+      return data;
+    };
+    const { items, errors } = await fetchItems('tok', NOW, fake({ itemsFor }).fn);
+    expect(items.find((i) => i.number === 564)).toBeDefined();
+    expect(items.find((i) => i.number === 3000)!.stackedOnOpen).toBe(true);
+    expect(errors).toContain('More than 20 recently closed PRs in danyelf/torahmap; the timeline may be missing some');
+  });
+
+  it('finds a labelled issue behind 50 newer unlabelled ones, and lists an issue with two turn labels once', async () => {
+    const itemsFor = () => {
+      const data = fixture('graphql-items.json').data.r0;
+      const labelled = data.issues.nodes.find((i: any) => i.number === 563);
+      labelled.labels.nodes.push({ name: 'on danyel' });
+      const newer = Array.from({ length: 50 }, (_, k) => {
+        const copy = structuredClone(labelled);
+        copy.number = 4000 + k; copy.labels.nodes = [{ name: 'P2' }];
+        return copy;
+      });
+      data.issues.nodes = [...newer, ...data.issues.nodes];
+      return data;
+    };
+    const { items, errors } = await fetchItems('tok', NOW, fake({ itemsFor }).fn);
+    expect(items.filter((i) => i.number === 563)).toHaveLength(1);
+    expect(items.some((i) => i.number >= 4000 && i.number < 4100)).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('says so on the page when a list comes back full', async () => {
+    const itemsFor = () => {
+      const data = fixture('graphql-items.json').data.r0;
+      const open = data.pullRequests.nodes.find((p: any) => p.number === 564);
+      const issue = data.issues.nodes.find((i: any) => i.number === 563);
+      for (let k = 0; k < 50; k++) data.pullRequests.nodes.push({ ...structuredClone(open), number: 5000 + k });
+      for (let k = 0; k < 51; k++) {
+        const copy = structuredClone(issue);
+        copy.number = 6000 + k; copy.labels.nodes = [{ name: 'on danyel' }];
+        data.issues.nodes.push(copy);
+      }
+      return data;
+    };
+    const { errors } = await fetchItems('tok', NOW, fake({ itemsFor }).fn);
+    expect(errors).toContain('More than 50 open PRs in danyelf/torahmap; some may be missing from this page');
+    expect(errors).toContain('More than 50 open issues labelled "on danyel" in danyelf/torahmap; some may be missing from this page');
   });
 
   it('sends the token and user agent', async () => {
