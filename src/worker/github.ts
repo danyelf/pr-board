@@ -182,7 +182,7 @@ function baseFacts(repo: string, item: RawItem, kind: 'pr' | 'issue', events: La
     repo, number: item.number, kind, title: item.title, url: item.url,
     labels: item.labels.nodes.map((l) => l.name), body: item.body ?? '',
     createdAt: item.createdAt, closedAt: item.closedAt,
-    labelEvents: events, activityTimes: times, lastActivityAt: latest(times),
+    labelEvents: events, lastActivityAt: latest(times),
   };
 }
 

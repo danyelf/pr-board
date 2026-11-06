@@ -2,7 +2,7 @@
 
 PR Board is a single web page that lists the pull requests (PRs) and issues Danyel has in flight across his GitHub repos, and says whose turn each one is. Danyel works with Claude Code on several PRs at once, and the state of each one used to live in chat scrollback. Now Claude writes down whose turn it is, what it needs from him, and how to test the change, on GitHub itself. The page only reads GitHub, so if it breaks or is thrown away, nothing is lost. The full reasoning is in `docs/superpowers/specs/2026-11-05-pr-board-design.md`.
 
-The page is a Cloudflare Worker (a small program that Cloudflare runs for you) behind Cloudflare Access (Cloudflare's login gate, here set to let in only danyel@gmail.com through Google sign-in). It shows each item as a card with a stage strip, who it is waiting on, the questions to answer (each with a default in bold), and a timeline. Its one rule is that it never shows something as fine when it is waiting on Danyel: if the labels and the status section disagree, the card says "label out of sync" and counts as waiting on him. This is part 1, a board you can read. Answering questions from the page is not built yet.
+The page is a Cloudflare Worker (a small program that Cloudflare runs for you) behind Cloudflare Access (Cloudflare's login gate, here set to let in only danyel@gmail.com through Google sign-in). It shows each item as a card with a stage strip, who it is waiting on, the questions to answer (each with a default in bold). Its one rule is that it never shows something as fine when it is waiting on Danyel: if the labels and the status section disagree, the card says "label out of sync" and counts as waiting on him. This is part 1, a board you can read. Answering questions from the page is not built yet.
 
 ## Run the tests
 
@@ -46,7 +46,7 @@ Before steps 5 and 6, merge this branch and pull the main checkout (`/Users/dany
 ## Where things are
 
 - `src/worker/` the Worker: GitHub reading, the Access check, page rendering.
-- `src/shared/` the rules for whose turn it is, stages, the status section and the timeline.
+- `src/shared/` the rules for whose turn it is, stages, and the status section.
 - `cli/` `pr-status.ts` (Claude writes the status) and `setup-labels.ts`.
 - `hooks/status-check.ts` the Stop hook. `skill/pr-status/` the skill.
 - `test/` the tests, with recorded GitHub responses under `test/fixtures/`.

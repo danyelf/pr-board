@@ -20,8 +20,7 @@ export interface ItemFacts {
   prepDone: boolean; commitsSincePrep: number | null;
   statusCommentBody: string | null;   // issues only
   labelEvents: LabelEvent[];
-  activityTimes: string[];            // commits, comments, label events, created/merged/closed
-  lastActivityAt: string;
+  lastActivityAt: string;             // latest of commits, comments, label changes, created/merged/closed
 }
 export type BoxState = 'done' | 'now' | 'ready' | 'blocked' | 'todo';
 export interface StageBox { name: 'Issue' | 'Design' | 'Build' | 'Your look' | 'Prep' | 'Ready for merge'; state: BoxState; note: string }

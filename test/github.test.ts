@@ -127,7 +127,6 @@ describe('fetchItems', () => {
   it('computes lastActivityAt as the latest activity time', async () => {
     const { items } = await fetchItems('tok', NOW, fake().fn);
     const p578 = items.find((i) => i.number === 578)!;
-    expect(p578.activityTimes.length).toBeGreaterThan(1);
     expect(p578.lastActivityAt).toBe('2026-11-06T00:19:40Z');
   });
 

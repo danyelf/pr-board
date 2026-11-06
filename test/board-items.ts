@@ -34,8 +34,7 @@ export async function boardItems(): Promise<ItemFacts[]> {
 
   // The recording was made after #573, #574 and #578 merged. Wind activity back to the moment the board is built for.
   for (const i of items) {
-    i.activityTimes = i.activityTimes.filter((t) => Date.parse(t) <= NOW.getTime());
-    i.lastActivityAt = i.activityTimes.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a), i.createdAt);
+    if (Date.parse(i.lastActivityAt) > NOW.getTime()) i.lastActivityAt = NOW.toISOString();
     i.labelEvents = i.labelEvents.filter((e) => Date.parse(e.at) <= NOW.getTime());
   }
   for (const n of [573, 574, 578]) {

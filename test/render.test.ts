@@ -53,10 +53,6 @@ describe('renderBoard', () => {
     expect(await page([], ["Couldn't read danyelf/broken"])).toContain("Couldn&#39;t read danyelf/broken");
   });
 
-  it('has no timeline section', async () => {
-    expect(await page([])).not.toContain('The last 7 days');
-  });
-
   it('says nothing is waiting only when GitHub was read in full', () => {
     expect(renderBoard(buildBoard([], [], NOW))).toContain('Nothing is waiting on you.');
   });
