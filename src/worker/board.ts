@@ -2,7 +2,7 @@ import type { ItemFacts, StageBox, Status, Turn } from '../shared/types.ts';
 import { extractToTest, parseStatus } from '../shared/status.ts';
 import { stageStrip, whyTag } from '../shared/stage.ts';
 import { buildTimeline, type Timeline } from '../shared/timeline.ts';
-import { effectiveTurn, formatWait, turnOf, waitingSince } from '../shared/turn.ts';
+import { effectiveTurn, formatWait, waitingSince } from '../shared/turn.ts';
 
 export interface Card {
   facts: ItemFacts;
@@ -39,13 +39,12 @@ function statusOf(f: ItemFacts): Status | null {
 function makeCard(f: ItemFacts, now: Date): Card {
   const status = statusOf(f);
   const effective = effectiveTurn(f.labels, status);
-  const labelSaysOtherwise = status?.waitingOn === 'Danyel' && turnOf(f.labels) !== 'danyel';
   const since = waitingSince(f, status);
   return {
     facts: f,
     status,
     turn: effective.turn,
-    outOfSync: effective.outOfSync || labelSaysOtherwise,
+    outOfSync: effective.outOfSync,
     strip: stageStrip(f, status, now),
     why: whyTag(f, status, now),
     waitingSince: since,
@@ -60,12 +59,12 @@ function time(iso: string): number {
 
 export function buildBoard(items: ItemFacts[], errors: string[], now: Date): Board {
   const open = items.filter(isOpen);
-  const closedByPr = new Set(
-    open.filter((f) => f.kind === 'pr' && f.linkedIssue !== null).map((f) => `${f.repo}#${f.linkedIssue}`),
+  // An issue stands in only until its PR exists, whether that PR is still open or already merged.
+  const standsInFor = new Set(
+    items.filter((f) => f.kind === 'pr' && f.linkedIssue !== null && (f.merged || f.closedAt === null)).map((f) => `${f.repo}#${f.linkedIssue}`),
   );
-  const cards = open
-    .filter((f) => !(f.kind === 'issue' && closedByPr.has(`${f.repo}#${f.number}`)))
-    .map((f) => makeCard(f, now));
+  const hasPr = (f: ItemFacts) => f.kind === 'issue' && standsInFor.has(`${f.repo}#${f.number}`);
+  const cards = open.filter((f) => !hasPr(f)).map((f) => makeCard(f, now));
 
   const waiting: Card[] = [];
   const onClaude: Card[] = [];
@@ -88,5 +87,7 @@ export function buildBoard(items: ItemFacts[], errors: string[], now: Date): Boa
   onClaude.sort((a, b) => time(b.facts.lastActivityAt) - time(a.facts.lastActivityAt));
   quiet.sort((a, b) => time(b.facts.lastActivityAt) - time(a.facts.lastActivityAt));
 
-  return { waiting, onClaude, quiet, timeline: buildTimeline(items, now), errors, generatedAt: now.toISOString() };
+  const timelineItems = items.filter((f) => !hasPr(f));
+
+  return { waiting, onClaude, quiet, timeline: buildTimeline(timelineItems, now), errors, generatedAt: now.toISOString() };
 }

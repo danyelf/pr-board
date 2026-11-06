@@ -50,7 +50,7 @@ const CSS = `
   .axis { position:relative; height:16px; font-size:10.5px; color:var(--mute); }
   .axis span { position:absolute; top:0; white-space:nowrap; }
   .fold { position:absolute; top:16px; bottom:0; background:repeating-linear-gradient(90deg,#f3f1ec 0 2px,#fff 2px 5px); border-left:1px dashed #d4d1c8; border-right:1px dashed #d4d1c8; }
-  .fold em { position:absolute; top:-15px; left:50%; transform:translateX(-50%); font-size:9.5px; color:#a3a097; font-style:normal; white-space:nowrap; }
+  .fold em { position:absolute; top:6px; left:50%; transform:translateX(-50%); writing-mode:vertical-rl; font-size:9.5px; color:#8a877e; background:#fff; padding:2px 0; font-style:normal; white-space:nowrap; }
   .lane { position:relative; height:17px; margin:2px 0; }
   .lane .lab { position:absolute; left:-112px; width:106px; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#45443f; }
   .lane .bar { position:absolute; top:3px; height:11px; border-radius:3px; overflow:hidden; font-size:9px; line-height:11px; color:#fff; white-space:nowrap; padding-left:3px; }
@@ -173,7 +173,9 @@ function renderLane(l: Lane): string {
 }
 
 function renderTimeline(t: Timeline): string {
-  const axis = t.ticks.map((k) => `<span style="left:${pct(k.at)}">${esc(k.text)}</span>`).join('');
+  // Where two labels would overlap, keep the later one.
+  const readable = t.ticks.filter((k, i) => i === t.ticks.length - 1 || t.ticks[i + 1]!.at - k.at >= 0.08);
+  const axis = readable.map((k) => `<span style="left:${pct(k.at)}">${esc(k.text)}</span>`).join('');
   const folds = t.cuts
     .map((c) => `<div class="fold" style="left:${pct(c.at)};width:${pct(c.width)}"><em>${esc(c.length)}</em></div>`)
     .join('');

@@ -116,6 +116,15 @@ describe('worker', () => {
     expect(puts).toHaveLength(0);
   });
 
+  it('shows an error line, not a bare 500, when reading GitHub throws, and does not cache it', async () => {
+    const { cache, puts } = fakeCache();
+    const h = makeHandler({ fetchItems: async () => { throw new Error('Unterminated string'); }, cache, getKey, now: () => NOW });
+    const res = await get(h, 'https://board.example.com/', { 'Cf-Access-Jwt-Assertion': await sign() });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('Couldn&#39;t read GitHub: Unterminated string');
+    expect(puts).toHaveLength(0);
+  });
+
   it('answers other paths with 404', async () => {
     const res = await get(handler(ok).h, 'http://localhost:8787/nope', {}, { ...env, ALLOW_LOCAL: '1' });
     expect(res.status).toBe(404);

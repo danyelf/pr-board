@@ -16,7 +16,8 @@ const TURN_OF_WAITING_ON: Record<Status['waitingOn'], Turn> = {
 export function effectiveTurn(labels: string[], s: Status | null): { turn: Turn; outOfSync: boolean } {
   const fromLabels = turnOf(labels);
   const turn: Turn = fromLabels === 'danyel' || s?.waitingOn === 'Danyel' ? 'danyel' : fromLabels;
-  const outOfSync = s !== null && fromLabels !== 'none' && TURN_OF_WAITING_ON[s.waitingOn] !== fromLabels;
+  const statusSaysDanyel = s?.waitingOn === 'Danyel' && fromLabels !== 'danyel';
+  const outOfSync = s !== null && (statusSaysDanyel || (fromLabels !== 'none' && TURN_OF_WAITING_ON[s.waitingOn] !== fromLabels));
   return { turn, outOfSync };
 }
 

@@ -29,7 +29,12 @@ export function makeHandler(deps: Deps): Handler {
     const hit = await deps.cache?.match(key);
     if (hit) return (await hit.json()) as { items: ItemFacts[]; errors: string[] };
 
-    const fresh = await deps.fetchItems(env.GITHUB_TOKEN, at);
+    let fresh: { items: ItemFacts[]; errors: string[] };
+    try {
+      fresh = await deps.fetchItems(env.GITHUB_TOKEN, at);
+    } catch (e) {
+      return { items: [], errors: [`Couldn't read GitHub: ${e instanceof Error ? e.message : String(e)}`] };
+    }
     if (deps.cache && fresh.errors.length === 0) {
       await deps.cache.put(
         key,
