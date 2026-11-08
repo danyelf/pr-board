@@ -16,6 +16,11 @@ export const LOOK_KEY = 'look';
 
 export const NOTE_MAX = 2000;
 
+/** The form field the page uses for question n; the look is LOOK_KEY and the note is "note". */
+export function questionField(n: number): string {
+  return `q${n}`;
+}
+
 const ANSWER_OPEN = '<!-- pr-board answer ';
 const ANSWER_CLOSE = ' -->';
 

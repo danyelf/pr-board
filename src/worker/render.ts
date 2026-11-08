@@ -1,5 +1,6 @@
 import type { Board, Card } from './board.ts';
 import type { BoxState, ItemFacts } from '../shared/types.ts';
+import { LOOK_CHOICES, LOOK_DEFAULT, LOOK_KEY, LOOK_QUESTION, NOTE_MAX, choicesFor, questionField } from '../shared/answer.ts';
 import { DAY_MS } from '../shared/names.ts';
 import { boxNamed } from '../shared/stage.ts';
 import { formatWait } from '../shared/turn.ts';
@@ -40,8 +41,16 @@ const CSS = `
   .detail b { color:var(--ink); }
   .q { margin:6px 0 0; padding:0; list-style:none; } .q li { margin-bottom:8px; }
   .choices { display:flex; gap:6px; margin-top:4px; flex-wrap:wrap; }
-  .btn { font:inherit; font-size:12px; padding:4px 10px; border:1px solid #cfccc3; border-radius:5px; background:#fff; color:var(--ink); cursor:not-allowed; }
+  .btn { font:inherit; font-size:12px; padding:4px 10px; border:1px solid #cfccc3; border-radius:5px; background:#fff; color:var(--ink); cursor:pointer; }
   .btn.default { font-weight:700; border:2px solid var(--ink); padding:3px 9px; }
+  .btn:disabled { cursor:not-allowed; opacity:.55; }
+  label.btn { display:inline-flex; align-items:center; gap:5px; }
+  label.btn input { margin:0; accent-color:var(--ink); }
+  label.btn:has(input:checked) { background:#efede7; }
+  .answer textarea { display:block; width:100%; min-height:3.2em; margin-top:8px; font:inherit; font-size:12.5px; padding:6px 8px; border:1px solid #cfccc3; border-radius:5px; }
+  .answer .sendrow { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; margin-top:8px; }
+  .btn.send { font-weight:600; background:var(--ink); color:#fff; border-color:var(--ink); }
+  .ok { margin:6px 0 0; padding:6px 10px; border:1px solid #b9dcc3; background:#e9f5ec; color:#245e36; border-radius:6px; font-size:12.5px; }
   .shots { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
   .shots img { width:96px; height:auto; border:1px solid var(--line); border-radius:4px; display:block; }
   .quiet { display:flex; gap:10px; align-items:baseline; font-size:13px; padding:7px 12px; border:1px solid var(--line); border-radius:6px; background:#f6f5f1; margin-bottom:6px; }
@@ -97,7 +106,50 @@ function byProject(cards: Card[], draw: (c: Card) => string): string {
     .join('\n');
 }
 
-function renderCard(c: Card): string {
+export interface RenderOptions {
+  /** Whether the Worker can post answers. Without it the answer controls show, but Send is disabled. */
+  answering: boolean;
+  /** The item whose answers were just sent, to say so at the top. */
+  sent?: string | null;
+}
+
+/** One choice of a question: a radio button that looks like a button, the default checked and in bold. */
+function choice(name: string, value: string, isDefault: boolean): string {
+  return `<label class="btn${isDefault ? ' default' : ''}"><input type="radio" name="${esc(name)}" value="${esc(value)}"${isDefault ? ' checked' : ''}><span>${esc(value)}</span></label>`;
+}
+
+/** The questions, the look question when the card asks it, a note box and Send, as one form posted to /answer. */
+function answerForm(c: Card, answering: boolean): string {
+  const questions = c.status?.questions ?? [];
+  if (questions.length === 0 && !c.asksLook) return '';
+  const parts = [
+    '<form class="answer" method="post" action="/answer">',
+    `<input type="hidden" name="repo" value="${esc(c.facts.repo)}">`,
+    `<input type="hidden" name="number" value="${c.facts.number}">`,
+    `<input type="hidden" name="fingerprint" value="${esc(c.fingerprint)}">`,
+  ];
+  if (questions.length > 0) {
+    const qs = questions
+      .map((q) => {
+        const choices = choicesFor(q).map((v) => choice(questionField(q.n), v, v === q.defaultChoice)).join('');
+        return `<li>${q.n}. ${esc(q.text)}<div class="choices">${choices}</div></li>`;
+      })
+      .join('');
+    parts.push(`<div class="detail"><b>Left for you to decide:</b><ol class="q">${qs}</ol></div>`);
+  }
+  if (c.asksLook) {
+    const choices = LOOK_CHOICES.map((v) => choice(LOOK_KEY, v, v === LOOK_DEFAULT)).join('');
+    parts.push(`<div class="detail"><b>${esc(LOOK_QUESTION)}</b><div class="choices">${choices}</div></div>`);
+  }
+  parts.push(`<textarea name="note" maxlength="${NOTE_MAX}" placeholder="A note back (optional)" aria-label="A note back"></textarea>`);
+  parts.push(answering
+    ? '<div class="sendrow"><button type="submit" class="btn send">Send answers</button></div>'
+    : `<div class="sendrow"><button type="submit" class="btn send" disabled>Send answers</button><span class="age">${esc("Answering isn't set up yet: the Worker has no token to post with.")}</span></div>`);
+  parts.push('</form>');
+  return parts.join('\n    ');
+}
+
+function renderCard(c: Card, opts: RenderOptions): string {
   const f = c.facts;
   const merge = boxNamed(c.strip, 'Ready for merge');
   const strip = c.strip
@@ -112,25 +164,14 @@ function renderCard(c: Card): string {
   if (issue) links.push(link(issue, 'Issue'));
   for (const d of f.addedDocs) links.push(link(d.url, `Design doc ${d.path.split('/').pop() ?? ''}`.trim()));
   if (merge.state === 'ready') links.push(link(f.url, 'Merge on GitHub'));
+  if (c.answerUrl) links.push(link(c.answerUrl, 'Your answers'));
 
   const parts: string[] = [];
   if (c.statusUnreadable) parts.push(`<div class="detail age">${esc("The status section couldn't be read")}</div>`);
   else if (c.status === null) parts.push('<div class="detail age">No status written yet</div>');
-  if (c.status && c.status.questions.length > 0) {
-    const qs = c.status.questions
-      .map((q) => {
-        const buttons = [...q.choices, 'file an issue']
-          .map((choice) => {
-            const cls = choice === q.defaultChoice ? 'btn default' : 'btn';
-            return `<button type="button" class="${cls}" disabled title="Answering comes next">${esc(choice)}</button>`;
-          })
-          .join('');
-        return `<li>${q.n}. ${esc(q.text)}<div class="choices">${buttons}</div></li>`;
-      })
-      .join('');
-    parts.push(`<div class="detail"><b>Left for you to decide:</b><ol class="q">${qs}</ol></div>`);
-  }
   if (c.toTest) parts.push(`<div class="detail"><b>To test:</b> ${esc(c.toTest)}</div>`);
+  // Once answered, the answers are on GitHub; asking again here would only send them twice.
+  if (c.answerState === null) parts.push(answerForm(c, opts.answering));
   if (f.screenshots.length > 0) {
     const shots = f.screenshots
       .slice(0, 4)
@@ -158,7 +199,13 @@ function listRow(c: Card, note: string): string {
   return `<div class="quiet">${ref(c.facts)}<span class="t">${esc(c.facts.title)}</span><span class="age">${esc(note)}</span></div>`;
 }
 
+const ANSWER_ROW_NOTE: Record<'awaiting-pickup' | 'picked-up', string> = {
+  'awaiting-pickup': 'answered, waiting for Claude to pick it up',
+  'picked-up': 'Claude picked up your answers',
+};
+
 function claudeRow(c: Card, now: Date): string {
+  if (c.answerState === 'awaiting-pickup' || c.answerState === 'picked-up') return listRow(c, ANSWER_ROW_NOTE[c.answerState]);
   const noLabel = c.turn === 'none' ? ' · no turn label' : '';
   const stale = c.statusStale ? ` · ${STALE_STATUS}` : '';
   return listRow(c, `last activity ${ago(c.facts.lastActivityAt, now)}${noLabel}${stale}`);
@@ -170,14 +217,15 @@ function quietRow(c: Card, now: Date): string {
   return listRow(c, c.turn === 'nobody' ? 'parked' : `no activity for ${days} days${noLabel}`);
 }
 
-export function renderBoard(b: Board): string {
+export function renderBoard(b: Board, opts: RenderOptions = { answering: false }): string {
   const now = new Date(b.generatedAt);
-  const errors = b.errors.map((e) => `<div class="err">${esc(e)}</div>`).join('');
+  const sent = opts.sent ? `<div class="ok">${esc(`Sent your answers on ${opts.sent}.`)}</div>` : '';
+  const errors = sent + b.errors.map((e) => `<div class="err">${esc(e)}</div>`).join('');
   // With anything unread, an empty list proves nothing, so never offer the reassuring line.
   const nothingWaiting = b.errors.length
     ? esc("Couldn't read everything from GitHub, so this list may be incomplete.")
     : 'Nothing is waiting on you.';
-  const waiting = b.waiting.length ? byProject(b.waiting, renderCard) : `<div class="empty">${nothingWaiting}</div>`;
+  const waiting = b.waiting.length ? byProject(b.waiting, (c) => renderCard(c, opts)) :`<div class="empty">${nothingWaiting}</div>`;
   const claude = b.onClaude.length ? byProject(b.onClaude, (c) => claudeRow(c, now)) : '<div class="empty">Nothing in progress.</div>';
   const quiet = b.quiet.length ? byProject(b.quiet, (c) => quietRow(c, now)) : '<div class="empty">Nothing quiet.</div>';
 
