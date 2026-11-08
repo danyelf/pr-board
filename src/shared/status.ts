@@ -1,4 +1,5 @@
 import { WAITING_ON, WRITTEN_ELSEWHERE, type WaitingOn } from './names.ts';
+import { statusFingerprint } from './fingerprint.ts';
 import type { Question, Status } from './types.ts';
 
 export const STATUS_OPEN = '<!-- status -->';
@@ -55,9 +56,58 @@ export function pickStatusComment<T extends { body: string }>(comments: T[]): T 
   return null;
 }
 
+const DATA_OPEN = '<!-- status-data ';
+const DATA_CLOSE = ' -->';
+
+/** JSON with `<` and `>` written as escapes, so no value can end the HTML comment or the section it sits in. */
+export function jsonForComment(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+}
+
+const isString = (v: unknown): v is string => typeof v === 'string';
+const isStringOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
+
+function readQuestion(v: unknown): Question | null {
+  if (typeof v !== 'object' || v === null) return null;
+  const q = v as Record<string, unknown>;
+  if (!Number.isInteger(q.n) || !isString(q.text) || !Array.isArray(q.choices) || !q.choices.every(isString)) return null;
+  if (!isStringOrNull(q.defaultChoice)) return null;
+  return { n: q.n as number, text: q.text, choices: q.choices, defaultChoice: q.defaultChoice };
+}
+
+/** The status from the data line, or null when there is none or it can't be trusted (then the text is read). */
+function readData(inner: string): Status | null {
+  const line = inner.split('\n').map((l) => l.trim()).find((l) => l.startsWith(DATA_OPEN) && l.endsWith(DATA_CLOSE));
+  if (!line) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(line.slice(DATA_OPEN.length, -DATA_CLOSE.length));
+  } catch {
+    return null;
+  }
+  if (typeof raw !== 'object' || raw === null) return null;
+  const d = raw as Record<string, unknown>;
+  if (d.v !== 1 || !isString(d.fingerprint) || !isString(d.ask) || !isStringOrNull(d.since) || !isStringOrNull(d.toTest)) return null;
+  const waitingOn = WAITING_ON.find((w) => w.role === d.waitingOn)?.role;
+  if (!waitingOn || !Array.isArray(d.questions)) return null;
+  const questions = d.questions.map(readQuestion);
+  if (questions.some((q) => q === null)) return null;
+  const since = d.since !== null && !Number.isNaN(Date.parse(d.since)) ? d.since : null;
+  const status: Status = { waitingOn, since, ask: d.ask, questions: questions as Question[], toTest: d.toTest };
+  // A fingerprint that doesn't match means the data was edited by hand, or is from a different status.
+  return statusFingerprint(status) === d.fingerprint ? status : null;
+}
+
+/**
+ * The status in the text, or null when there is none or it can't be read. The data line that
+ * `renderStatus` writes is used when it can be trusted; otherwise the text is read, which is how
+ * sections written before the data line existed are read too.
+ */
 export function parseStatus(text: string): Status | null {
   const section = findSection(text);
   if (!section) return null;
+  const fromData = readData(section.inner);
+  if (fromData) return fromData;
 
   let waitingOn: WaitingOn | null = null;
   let since: string | null = null;
@@ -138,6 +188,8 @@ export function renderStatus(s: Status): string {
     }
   }
   if (s.toTest) lines.push(`**To test:** ${s.toTest}`);
+  const data = { v: 1, waitingOn: s.waitingOn, since: s.since, ask: s.ask, questions: s.questions, toTest: s.toTest, fingerprint: statusFingerprint(s) };
+  lines.push(`${DATA_OPEN}${jsonForComment(data)}${DATA_CLOSE}`);
   lines.push(STATUS_CLOSE);
   return lines.join('\n');
 }

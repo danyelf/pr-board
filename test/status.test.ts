@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { extractToTest, parseStatus, pickStatusComment, renderStatus, replaceStatus } from '../src/shared/status.ts';
+import { statusFingerprint } from '../src/shared/fingerprint.ts';
 import type { Status } from '../src/shared/types.ts';
 
 const example = `<!-- status -->
@@ -74,6 +75,44 @@ describe('renderStatus', () => {
   it('round-trips a status with no optional parts', () => {
     const s: Status = { waitingOn: 'nobody', since: null, ask: 'nothing', questions: [], toTest: null };
     expect(parseStatus(renderStatus(s))).toEqual(s);
+  });
+});
+
+describe('the status as data', () => {
+  const dataLine = (text: string) => text.split('\n').find((l) => l.startsWith('<!-- status-data '));
+
+  it('writes the same content as JSON on the last line inside the markers, with its fingerprint', () => {
+    const lines = renderStatus(expected).split('\n');
+    expect(lines.at(-1)).toBe('<!-- /status -->');
+    const line = lines.at(-2)!;
+    expect(line).toMatch(/^<!-- status-data \{.*\} -->$/);
+    const data = JSON.parse(line.slice('<!-- status-data '.length, -' -->'.length));
+    expect(data).toEqual({ v: 1, ...expected, fingerprint: statusFingerprint(expected) });
+  });
+
+  it('reads the data in preference to text that disagrees with it', () => {
+    const claude: Status = { ...expected, waitingOn: 'claude', ask: 'from the data' };
+    const mixed = example.replace('<!-- /status -->', `${dataLine(renderStatus(claude))}\n<!-- /status -->`);
+    expect(parseStatus(mixed)).toEqual(claude);
+  });
+
+  it('falls back to the text when the data is broken, the wrong shape, or its fingerprint is wrong', () => {
+    const withData = (line: string) => example.replace('<!-- /status -->', `${line}\n<!-- /status -->`);
+    const good = JSON.parse(dataLine(renderStatus({ ...expected, ask: 'data' }))!.slice(17, -4));
+    expect(parseStatus(withData('<!-- status-data {not json -->'))).toEqual(expected);
+    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify({ ...good, waitingOn: 'someone' })} -->`))).toEqual(expected);
+    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify({ ...good, questions: 'none' })} -->`))).toEqual(expected);
+    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify({ ...good, v: 2 })} -->`))).toEqual(expected);
+    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify({ ...good, fingerprint: '00000000' })} -->`))).toEqual(expected);
+    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify(good)} -->`))?.ask).toBe('data');
+  });
+
+  it('keeps a value holding "-->" from ending the data line early', () => {
+    const tricky: Status = { ...expected, ask: 'a --> b <c>', questions: [{ n: 1, text: 'x --> y?', choices: ['<a>', 'b'], defaultChoice: '<a>' }] };
+    const rendered = renderStatus(tricky);
+    expect(dataLine(rendered)!.indexOf('-->')).toBe(dataLine(rendered)!.length - 3);
+    expect(dataLine(rendered)).not.toContain('<a>');
+    expect(parseStatus(rendered)).toEqual(tricky);
   });
 });
 
