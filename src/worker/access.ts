@@ -2,6 +2,8 @@ import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
 
 export interface Env {
   GITHUB_TOKEN: string;
+  /** A token that posts comments as the owner. Without it the board shows the answer controls, but can't send. */
+  GITHUB_ANSWER_TOKEN?: string;
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
   ALLOWED_EMAIL: string;

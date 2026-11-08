@@ -217,6 +217,17 @@ function quietRow(c: Card, now: Date): string {
   return listRow(c, c.turn === 'nobody' ? 'parked' : `no activity for ${days} days${noLabel}`);
 }
 
+/** A short page saying what happened to a post, with a way back to the board. */
+export function renderMessage(title: string, text: string): string {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>PR Board</title><style>${CSS}</style></head>
+<body><div class="pb">
+  <div class="sec">${esc(title)}</div>
+  <div class="detail">${esc(text)}</div>
+  <div class="links"><a href="/">Back to the board</a></div>
+</div></body></html>`;
+}
+
 export function renderBoard(b: Board, opts: RenderOptions = { answering: false }): string {
   const now = new Date(b.generatedAt);
   const sent = opts.sent ? `<div class="ok">${esc(`Sent your answers on ${opts.sent}.`)}</div>` : '';

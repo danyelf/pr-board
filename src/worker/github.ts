@@ -403,6 +403,19 @@ function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
   };
 }
 
+/** Posts a comment on a PR or issue, and says which account it went up under. Throws if GitHub refuses. */
+export async function postComment(
+  token: string, repo: string, n: number, body: string, fetchFn: typeof fetch = defaultFetch,
+): Promise<{ login: string | null }> {
+  const path = repo.split('/').map(encodeURIComponent).join('/');
+  const res = await fetchFn(`https://api.github.com/repos/${path}/issues/${n}/comments`, {
+    method: 'POST', headers: headersFor(token), body: JSON.stringify({ body }),
+  });
+  if (!res.ok) throw new Error(`GitHub said ${res.status} ${res.statusText}`);
+  const posted = (await res.json()) as { user?: { login?: string } | null };
+  return { login: posted.user?.login ?? null };
+}
+
 const ITEM_QUERY = `query($o: String!, $r: String!, $n: Int!) {
   repository(owner: $o, name: $r) {
     issueOrPullRequest(number: $n) { __typename ... on PullRequest { ${PR_FIELDS} } ... on Issue { ${COMMON_FIELDS} } }

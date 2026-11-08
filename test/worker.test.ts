@@ -1,7 +1,11 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from 'jose';
 import { makeHandler, type Env, type Handler } from '../src/worker/index.ts';
-import { facts } from './helpers.ts';
+import { LOOK_DEFAULT, parseAnswer } from '../src/shared/answer.ts';
+import { statusFingerprint } from '../src/shared/fingerprint.ts';
+import { renderStatus } from '../src/shared/status.ts';
+import type { ItemFacts } from '../src/shared/types.ts';
+import { facts, status } from './helpers.ts';
 
 const TEAM = 'team.cloudflareaccess.com';
 const AUD = 'aud-123';
@@ -69,7 +73,7 @@ describe('worker', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
     expect(res.headers.get('Cache-Control')).toBe('no-store');
-    expect(res.headers.get('Content-Security-Policy')).toBe("default-src 'none'; img-src https:; style-src 'unsafe-inline'");
+    expect(res.headers.get('Content-Security-Policy')).toBe("default-src 'none'; img-src https:; style-src 'unsafe-inline'; form-action 'self'");
     expect(res.headers.get('Referrer-Policy')).toBe('no-referrer');
     expect(await res.text()).toContain('#1');
   });
@@ -164,5 +168,176 @@ describe('worker', () => {
   it('answers other paths with 404', async () => {
     const res = await get(handler(ok).h, 'http://localhost:8787/nope', {}, { ...env, ALLOW_LOCAL: '1' });
     expect(res.status).toBe(404);
+  });
+
+  it('enables Send only when the answer token is set', async () => {
+    const local = { ...env, ALLOW_LOCAL: '1' };
+    const without = await (await get(handler(ok).h, 'http://localhost:8787/', {}, local)).text();
+    expect(without).toContain('class="btn send" disabled');
+    const withToken = await (await get(handler(ok).h, 'http://localhost:8787/', {}, { ...local, GITHUB_ANSWER_TOKEN: 'answer-tok' })).text();
+    expect(withToken).toContain('class="btn send">');
+  });
+});
+
+describe('POST /answer', () => {
+  const ORIGIN = 'http://localhost:8787';
+  const answerEnv: Env = { ...env, ALLOW_LOCAL: '1', GITHUB_ANSWER_TOKEN: 'answer-tok' };
+  const asking = status({ waitingOn: 'owner', questions: [{ n: 1, text: 'Colour?', choices: ['leave', 'change'], defaultChoice: 'leave' }] });
+  const item = () => facts({ repo: 'acme/x', number: 5, labels: ['on sam'], body: renderStatus(asking) });
+  const good = { repo: 'acme/x', number: '5', fingerprint: statusFingerprint(asking), q1: 'change', look: LOOK_DEFAULT, note: 'tint is strong' };
+
+  function answerHandler(over: { item?: ItemFacts | null; readFails?: boolean; postFails?: boolean; postedAs?: string } = {}) {
+    const posted: { token: string; repo: string; n: number; body: string }[] = [];
+    const read: { token: string; repo: string; n: number }[] = [];
+    const store = new Map<string, Response>();
+    const cache = {
+      match: async (req: Request) => store.get(req.url)?.clone(),
+      put: async (req: Request, res: Response) => { store.set(req.url, res); },
+      delete: async (req: Request) => store.delete(req.url),
+    } as unknown as Cache;
+    let fetches = 0;
+    const h = makeHandler({
+      fetchItems: async () => { fetches++; return ok; },
+      fetchItem: async (token, repo, n) => {
+        read.push({ token, repo, n });
+        if (over.readFails) throw new Error('GitHub said 502 Bad Gateway');
+        return over.item === undefined ? item() : over.item;
+      },
+      postComment: async (token, repo, n, body) => {
+        if (over.postFails) throw new Error('GitHub said 403 Forbidden');
+        posted.push({ token, repo, n, body });
+        return { login: over.postedAs ?? 'sam-gh' };
+      },
+      cache, getKey, now: () => NOW,
+    });
+    return { h, posted, read, store, fetches: () => fetches };
+  }
+
+  function post(h: Handler, fields: Record<string, string> | string, over: { headers?: Record<string, string>; url?: string; e?: Env } = {}) {
+    const body = typeof fields === 'string' ? fields : new URLSearchParams(fields).toString();
+    return h.fetch(new Request(over.url ?? `${ORIGIN}/answer`, {
+      method: 'POST', body,
+      headers: { Origin: ORIGIN, 'Content-Type': 'application/x-www-form-urlencoded', ...over.headers },
+    }), over.e ?? answerEnv);
+  }
+
+  it('posts the answers with the answer token, then sends the browser back to the board', async () => {
+    const { h, posted, read } = answerHandler();
+    const res = await post(h, good);
+    expect(res.status).toBe(303);
+    expect(res.headers.get('Location')).toBe('/?sent=acme%2Fx%235');
+    expect(read).toEqual([{ token: 'tok', repo: 'acme/x', n: 5 }]);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.token).toBe('answer-tok');
+    expect(posted[0]!).toMatchObject({ repo: 'acme/x', n: 5 });
+    expect(parseAnswer(posted[0]!.body)).toEqual({ fingerprint: good.fingerprint, answers: { '1': 'change', look: LOOK_DEFAULT }, note: 'tint is strong' });
+    expect(posted[0]!.body).toContain('1. Colour? → **change**');
+  });
+
+  it('drops the cached board, and the page after the post reads GitHub afresh and says what was sent', async () => {
+    const { h, store, fetches } = answerHandler();
+    await h.fetch(new Request(`${ORIGIN}/`), answerEnv);
+    expect(store.size).toBe(1);
+    await post(h, good);
+    expect(store.size).toBe(0);
+    await h.fetch(new Request(`${ORIGIN}/`), answerEnv);
+    const after = await h.fetch(new Request(`${ORIGIN}/?sent=${encodeURIComponent('acme/x#5')}`), answerEnv);
+    expect(await after.text()).toContain('Sent your answers on acme/x#5.');
+    expect(fetches()).toBe(3);
+  });
+
+  it('ignores a sent value that is not an item reference', async () => {
+    const { h } = answerHandler();
+    const res = await h.fetch(new Request(`${ORIGIN}/?sent=${encodeURIComponent('<b>hi</b>')}`), answerEnv);
+    expect(await res.text()).not.toContain('Sent your answers');
+  });
+
+  it('refuses a post from another origin, or with none', async () => {
+    const { h, posted } = answerHandler();
+    expect((await post(h, good, { headers: { Origin: 'https://evil.example.com' } })).status).toBe(403);
+    const noOrigin = new Request(`${ORIGIN}/answer`, { method: 'POST', body: new URLSearchParams(good).toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+    expect((await h.fetch(noOrigin, answerEnv)).status).toBe(403);
+    expect(posted).toHaveLength(0);
+  });
+
+  it('is behind the Access check', async () => {
+    const { h, posted } = answerHandler();
+    const res = await post(h, good, { url: 'https://board.example.com/answer', headers: { Origin: 'https://board.example.com' } });
+    expect(res.status).toBe(403);
+    expect(posted).toHaveLength(0);
+  });
+
+  it('takes only form posts, and only POST', async () => {
+    const { h, posted } = answerHandler();
+    expect((await post(h, JSON.stringify(good), { headers: { 'Content-Type': 'application/json' } })).status).toBe(415);
+    expect((await h.fetch(new Request(`${ORIGIN}/answer`), answerEnv)).status).toBe(405);
+    expect(posted).toHaveLength(0);
+  });
+
+  it('refuses a body over 16 KB', async () => {
+    const { h, posted } = answerHandler();
+    const res = await post(h, { ...good, note: 'x'.repeat(17 * 1024) });
+    expect(res.status).toBe(413);
+    expect(posted).toHaveLength(0);
+  });
+
+  it('refuses a bad repo, number or fingerprint, an unknown field, or a field given twice', async () => {
+    const { h, posted, read } = answerHandler();
+    for (const fields of [
+      { ...good, repo: 'acme/x/../y' }, { ...good, repo: '' }, { ...good, number: '5a' }, { ...good, number: '0' },
+      { ...good, fingerprint: 'nope' }, { ...good, extra: '1' },
+    ]) {
+      expect((await post(h, fields)).status).toBe(400);
+    }
+    expect((await post(h, `${new URLSearchParams(good)}&q1=leave`)).status).toBe(400);
+    expect(read).toHaveLength(0);
+    expect(posted).toHaveLength(0);
+  });
+
+  it("refuses a choice that isn't listed, and says why", async () => {
+    const { h, posted } = answerHandler();
+    const res = await post(h, { ...good, q1: 'purple' });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('&quot;purple&quot; isn&#39;t one of the choices for question 1');
+    expect(posted).toHaveLength(0);
+  });
+
+  it('refuses, and sends nothing, when the questions changed since the page was loaded', async () => {
+    const changed = facts({ repo: 'acme/x', number: 5, labels: ['on sam'], body: renderStatus({ ...asking, ask: 'something else' }) });
+    const { h, posted } = answerHandler({ item: changed });
+    const res = await post(h, good);
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('changed since this page was loaded');
+    expect(posted).toHaveLength(0);
+  });
+
+  it("refuses an item the read token can't see, or one that is closed", async () => {
+    const hidden = answerHandler({ item: null });
+    expect((await post(hidden.h, good)).status).toBe(404);
+    const closed = answerHandler({ item: { ...item(), closedAt: '2026-11-05T00:00:00Z' } });
+    expect((await post(closed.h, good)).status).toBe(409);
+    expect([...hidden.posted, ...closed.posted]).toHaveLength(0);
+  });
+
+  it("says answering isn't set up when there is no answer token, and posts nothing", async () => {
+    const { h, posted, read } = answerHandler();
+    const res = await post(h, good, { e: { ...answerEnv, GITHUB_ANSWER_TOKEN: '' } });
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain('Answering isn&#39;t set up');
+    expect(read).toHaveLength(0);
+    expect(posted).toHaveLength(0);
+  });
+
+  it('says so when GitHub could not be read or refused the comment', async () => {
+    expect((await post(answerHandler({ readFails: true }).h, good)).status).toBe(502);
+    const refused = await post(answerHandler({ postFails: true }).h, good);
+    expect(refused.status).toBe(502);
+    expect(await refused.text()).toContain('GitHub said 403 Forbidden');
+  });
+
+  it('warns when the comment went up under another account, since the watcher would not read it', async () => {
+    const res = await post(answerHandler({ postedAs: 'someone-else' }).h, good);
+    expect(res.status).toBe(500);
+    expect(await res.text()).toContain('someone-else');
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { fetchItem, fetchItems } from '../src/worker/github.ts';
+import { fetchItem, fetchItems, postComment } from '../src/worker/github.ts';
 import { answerRepo, recordedRepo } from './github-fake.ts';
 
 const NOW = new Date('2026-11-06T06:00:00Z');
@@ -563,5 +563,22 @@ describe('fetchItem', () => {
   it('throws when GitHub answers with an error status', async () => {
     const fn = (async () => new Response('nope', { status: 502, statusText: 'Bad Gateway' })) as typeof fetch;
     await expect(fetchItem('tok', 'danyelf/torahmap', 573, fn)).rejects.toThrow(/502/);
+  });
+});
+
+describe('postComment', () => {
+  it('posts the body to the item with the given token, and says who it went up as', async () => {
+    const seen: any[] = [];
+    const fn = (async (input: any, init?: any) => {
+      seen.push({ url: String(input), method: init.method, auth: init.headers.Authorization, body: JSON.parse(init.body) });
+      return Response.json({ user: { login: 'sam-gh' } }, { status: 201 });
+    }) as typeof fetch;
+    expect(await postComment('answer-tok', 'acme/x', 5, 'hello', fn)).toEqual({ login: 'sam-gh' });
+    expect(seen).toEqual([{ url: 'https://api.github.com/repos/acme/x/issues/5/comments', method: 'POST', auth: 'bearer answer-tok', body: { body: 'hello' } }]);
+  });
+
+  it('throws when GitHub refuses', async () => {
+    const fn = (async () => new Response('no', { status: 403, statusText: 'Forbidden' })) as typeof fetch;
+    await expect(postComment('t', 'acme/x', 5, 'hello', fn)).rejects.toThrow('GitHub said 403 Forbidden');
   });
 });
