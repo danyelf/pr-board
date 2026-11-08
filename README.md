@@ -31,7 +31,7 @@ ALLOW_LOCAL=1
 pnpm dev
 ```
 
-Wrangler (Cloudflare's command-line tool) prints the address to open; it picks the port itself.
+Wrangler (Cloudflare's command-line tool) prints the address to open; it picks the port itself (add `--port N` to choose one). The `dev` script passes `--infer-origin-from-routes=false`: without it, because `wrangler.toml` has a `routes` line, Wrangler hands the Worker the live hostname instead of `localhost`, so `ALLOW_LOCAL` doesn't apply and every page is refused with 403. Run it as `pnpm dev`, not a bare `wrangler dev`.
 
 ## Going live
 
