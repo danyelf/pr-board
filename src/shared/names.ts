@@ -10,6 +10,12 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 /** How long an answer may wait for a Claude session to claim it before the board says nobody has. */
 export const PICKUP_GRACE_MS = 10 * 60 * 1000;
 
+/** How long the Mac service waits before starting a session for an answer. It must stay below PICKUP_GRACE_MS. */
+export const SERVICE_GRACE_MS = 5 * 60 * 1000;
+
+/** The git config key that marks a repo whose sessions act as Claude's own GitHub account. */
+export const CLAUDE_BOT_KEY = 'claude.bot';
+
 /** The Worker and the label setup both cover repos pushed to within this many days. */
 export const REPO_WINDOW_DAYS = 60;
 
