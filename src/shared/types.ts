@@ -11,6 +11,8 @@ export interface Status {
   toTest: string | null;
 }
 export interface LabelEvent { label: string; action: 'added' | 'removed'; at: string }
+/** An answer comment from the owner. `claimed` is true once someone else has reacted 👀 to it. */
+export interface AnswerSeen { id: string; url: string; at: string; claimed: boolean }
 export interface ItemFacts {
   repo: string; number: number; kind: 'pr' | 'issue'; title: string; url: string;
   labels: string[]; body: string; createdAt: string; closedAt: string | null;
@@ -25,7 +27,8 @@ export interface ItemFacts {
   statusWrittenAt: string | null;     // when the status was last written: a PR's description edit, or the issue's status comment
   lastChangeAt: string | null;        // latest commit or comment, not counting the issue's status comment
   labelEvents: LabelEvent[];
-  lastActivityAt: string;             // latest of commits, comments, label changes, created/merged/closed
+  answers: AnswerSeen[];              // the owner's answers written since the status was, oldest first
+  lastActivityAt: string;            // latest of commits, comments, label changes, created/merged/closed
 }
 export type BoxState = 'done' | 'now' | 'ready' | 'blocked' | 'todo';
 export interface StageBox { name: 'Issue' | 'Design' | 'Build' | 'Your look' | 'Prep' | 'Ready for merge'; state: BoxState; note: string }

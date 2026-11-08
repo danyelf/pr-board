@@ -1,7 +1,9 @@
+import { parseAnswer } from '../shared/answer.ts';
+import { OWNER_LOGIN } from '../shared/config.ts';
 import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_OWNER, LABEL_PARKED, REPO_WINDOW_DAYS, WRITTEN_ELSEWHERE } from '../shared/names.ts';
 import { parseStatus, pickStatusComment } from '../shared/status.ts';
 import { effectiveTurn } from '../shared/turn.ts';
-import type { ItemFacts, LabelEvent } from '../shared/types.ts';
+import type { AnswerSeen, ItemFacts, LabelEvent } from '../shared/types.ts';
 
 const GRAPHQL_URL = 'https://api.github.com/graphql';
 const REPOS_PER_QUERY = 5;
@@ -15,6 +17,9 @@ const LABEL_CHANGES_PER_ITEM = 100;
 const FILES_PER_PR = 100;
 const COMMITS_PER_PR = 100;
 const CLOSING_ISSUES_PER_PR = 5;
+// Answers waiting to be picked up are few: an item's answers drop out once Claude rewrites its status.
+const MAX_ANSWERS_CHECKED = 100;
+const CLAIMS_PER_ANSWER = 20;
 // One issues connection per label, so GitHub does the filtering and each label has its own limit.
 const TURN_LABELS = [
   { label: LABEL_ON_OWNER, alias: 'onOwner' },
@@ -34,7 +39,7 @@ const REPOS_QUERY = `query {
 // For connections read from the start (first:) ask hasNextPage; for ones read from the end (last:) ask hasPreviousPage.
 const COMMON_FIELDS = `number title url body createdAt closedAt
   labels(first:${LABELS_PER_ITEM}){pageInfo{hasNextPage} nodes{name}}
-  comments(last:${COMMENTS_PER_ITEM}){pageInfo{hasPreviousPage} nodes{author{login} body url createdAt updatedAt}}
+  comments(last:${COMMENTS_PER_ITEM}){pageInfo{hasPreviousPage} nodes{id author{login} body url createdAt updatedAt}}
   timelineItems(last:${LABEL_CHANGES_PER_ITEM}, itemTypes:[LABELED_EVENT, UNLABELED_EVENT]){pageInfo{hasPreviousPage} nodes{__typename ... on LabeledEvent{label{name} createdAt} ... on UnlabeledEvent{label{name} createdAt}}}`;
 
 const PR_FIELDS = `${COMMON_FIELDS}
@@ -44,7 +49,7 @@ const PR_FIELDS = `${COMMON_FIELDS}
   commits(last:${COMMITS_PER_PR}){pageInfo{hasPreviousPage} nodes{commit{oid committedDate}}}`;
 
 interface RepoNode { nameWithOwner: string; pushedAt: string; defaultBranchRef: { name: string } | null }
-interface Comment { author: { login: string } | null; body: string; url: string; createdAt: string; updatedAt: string }
+interface Comment { id?: string; author: { login: string } | null; body: string; url: string; createdAt: string; updatedAt: string }
 interface TimelineNode { __typename: string; label?: { name: string }; createdAt?: string }
 /** A list as GitHub sends it. Any part of it can be missing or null if GitHub had a problem. */
 interface Connection<T> { pageInfo?: { hasNextPage?: boolean; hasPreviousPage?: boolean } | null; nodes?: (T | null)[] | null }
@@ -95,19 +100,59 @@ function listOfItem<T>(
   return items;
 }
 
+const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
+
+function headersFor(token: string): Record<string, string> {
+  return { Authorization: `bearer ${token}`, 'User-Agent': 'pr-board', 'Content-Type': 'application/json' };
+}
+
+function graphqlWith(token: string, fetchFn: typeof fetch) {
+  return async <T>(query: string, variables?: Record<string, unknown>): Promise<GraphqlResponse<T>> => {
+    const res = await fetchFn(GRAPHQL_URL, { method: 'POST', headers: headersFor(token), body: JSON.stringify({ query, variables }) });
+    if (!res.ok) throw new HttpError(`GitHub said ${res.status} ${res.statusText}`);
+    return (await res.json()) as GraphqlResponse<T>;
+  };
+}
+
+const CLAIMS_QUERY = `query($ids: [ID!]!) {
+  nodes(ids: $ids) { ... on IssueComment { id reactions(content: EYES, first: ${CLAIMS_PER_ANSWER}) { nodes { user { login } } } } }
+}`;
+
+/**
+ * Marks each answer that someone other than the owner has reacted 👀 to (the watcher's claim). Only
+ * the answers the board found are asked about, by id, so the main query stays the size it was.
+ */
+async function readClaims(answers: AnswerSeen[], graphql: ReturnType<typeof graphqlWith>, errors: string[]): Promise<void> {
+  if (answers.length === 0) return;
+  const asked = answers.slice(0, MAX_ANSWERS_CHECKED);
+  if (answers.length > asked.length) errors.push(`More than ${MAX_ANSWERS_CHECKED} answers to check; some may show as not picked up`);
+  type Node = { id?: string; reactions?: { nodes?: ({ user: { login: string } | null } | null)[] | null } | null } | null;
+  try {
+    const res = await graphql<{ nodes: Node[] | null }>(CLAIMS_QUERY, { ids: asked.map((a) => a.id) });
+    const nodes = res.data?.nodes;
+    if (!Array.isArray(nodes)) {
+      errors.push(`Couldn't check whether answers were picked up: ${res.errors?.[0]?.message ?? 'GitHub sent nothing'}`);
+      return;
+    }
+    const claimedIds = new Set<string>();
+    for (const n of nodes) {
+      const logins = (n?.reactions?.nodes ?? []).map((r) => r?.user?.login);
+      if (n?.id && logins.some((l) => l !== undefined && l !== OWNER_LOGIN)) claimedIds.add(n.id);
+    }
+    for (const a of asked) a.claimed = claimedIds.has(a.id);
+  } catch (e) {
+    errors.push(`Couldn't check whether answers were picked up: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 export async function fetchItems(
   token: string,
   now: Date,
-  fetchFn: typeof fetch = (input, init) => fetch(input, init),
+  fetchFn: typeof fetch = defaultFetch,
 ): Promise<{ items: ItemFacts[]; errors: string[] }> {
-  const headers = { Authorization: `bearer ${token}`, 'User-Agent': 'pr-board', 'Content-Type': 'application/json' };
+  const headers = headersFor(token);
   const errors: string[] = [];
-
-  async function graphql<T>(query: string): Promise<GraphqlResponse<T>> {
-    const res = await fetchFn(GRAPHQL_URL, { method: 'POST', headers, body: JSON.stringify({ query }) });
-    if (!res.ok) throw new HttpError(`GitHub said ${res.status} ${res.statusText}`);
-    return (await res.json()) as GraphqlResponse<T>;
-  }
+  const graphql = graphqlWith(token, fetchFn);
 
   try {
     const reposRes = await graphql<{ viewer: { repositories: Connection<RepoNode> } }>(REPOS_QUERY);
@@ -164,6 +209,7 @@ ${issues.join('\n')}
     for (const { facts } of pending) {
       if (facts.stackedOn !== null) facts.stackedOnOpen = openByRepo.get(facts.repo)?.has(facts.stackedOn) ?? false;
     }
+    await readClaims(pending.flatMap((p) => p.facts.answers), graphql, errors);
 
     // Only so many PRs can be compared with their base. Those that could be about to merge come first,
     // and PRs from forks are skipped, since their branches aren't in this repo to compare.
@@ -263,11 +309,23 @@ function baseFacts(repo: string, item: RawItem, kind: 'pr' | 'issue', labels: st
   };
 }
 
+/** A comment holding the owner's answers, posted from the board. */
+function isOwnerAnswer(c: Comment): boolean {
+  return c.author?.login === OWNER_LOGIN && parseAnswer(c.body) !== null;
+}
+
+/** The owner's answers written after the status was; all of them when there is no status time. Not yet checked for claims. */
+function answersSince(comments: Comment[], writtenAt: string | null): AnswerSeen[] {
+  return comments
+    .filter((c) => c.id !== undefined && isOwnerAnswer(c) && (writtenAt === null || Date.parse(c.createdAt) > Date.parse(writtenAt)))
+    .map((c) => ({ id: c.id!, url: c.url, at: c.createdAt, claimed: false }));
+}
+
 function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
   const where = `${repo}#${pr.number}`;
   const events = labelEvents(pr, where, report);
   const commits = listOfItem(pr.commits, 'commits', COMMITS_PER_PR, where, 'commit counts may be off', report).map((n) => n.commit);
-  const comments = listOfItem(pr.comments, 'comments', COMMENTS_PER_ITEM, where, 'a review or prep note may be missing', report);
+  const comments = listOfItem(pr.comments, 'comments', COMMENTS_PER_ITEM, where, 'a review, prep note or answer may be missing', report);
   const files = listOfItem(pr.files, 'files', FILES_PER_PR, where, 'an added design doc may be missing', report);
   const closingRefs = listOf(pr.closingIssuesReferences, `closing issues for ${where}`).items;
   const labels = listOfItem(pr.labels, 'labels', LABELS_PER_ITEM, where, 'a turn label may be missing', report).map((l) => l.name);
@@ -302,6 +360,7 @@ function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
   const commitsSincePrep = prepAt === null ? null : commits.filter((c) => Date.parse(c.committedDate) > Date.parse(prepAt!)).length;
 
   const extra = [...(pr.mergedAt ? [pr.mergedAt] : []), ...commits.map((c) => c.committedDate)];
+  const statusWrittenAt = pr.lastEditedAt ?? pr.createdAt;
   return {
     ...baseFacts(repo, pr, 'pr', labels, events, comments, extra),
     isDraft: pr.isDraft ?? false, merged: pr.merged ?? false, mergedAt: pr.mergedAt ?? null,
@@ -316,17 +375,20 @@ function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
     reviewSha, reviewUrl, commitsSinceReview,
     prepDone: prepAt !== null, commitsSincePrep,
     statusCommentBody: null,
-    statusWrittenAt: pr.lastEditedAt ?? pr.createdAt,
-    lastChangeAt: latestOrNull([...commits.map((c) => c.committedDate), ...comments.map((c) => c.createdAt)]),
+    statusWrittenAt,
+    answers: answersSince(comments, statusWrittenAt),
+    // The owner answering is not a change the status should have caught up with.
+    lastChangeAt: latestOrNull([...commits.map((c) => c.committedDate), ...comments.filter((c) => !isOwnerAnswer(c)).map((c) => c.createdAt)]),
   };
 }
 
 function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
   const where = `${repo}#${issue.number}`;
   const events = labelEvents(issue, where, report);
-  const comments = listOfItem(issue.comments, 'comments', COMMENTS_PER_ITEM, where, 'the status comment may be missing', report);
+  const comments = listOfItem(issue.comments, 'comments', COMMENTS_PER_ITEM, where, 'the status comment or an answer may be missing', report);
   const labels = listOfItem(issue.labels, 'labels', LABELS_PER_ITEM, where, 'a turn label may be missing', report).map((l) => l.name);
   const statusComment = pickStatusComment(comments);
+  const statusWrittenAt = statusComment?.updatedAt ?? null;
   return {
     ...baseFacts(repo, issue, 'issue', labels, events, comments, []),
     isDraft: false, merged: false, mergedAt: null, mergeState: null, behindBase: false,
@@ -335,7 +397,29 @@ function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
     reviewSha: null, reviewUrl: null, commitsSinceReview: null,
     prepDone: false, commitsSincePrep: null,
     statusCommentBody: statusComment?.body ?? null,
-    statusWrittenAt: statusComment?.updatedAt ?? null,
-    lastChangeAt: latestOrNull(comments.filter((c) => c !== statusComment).map((c) => c.createdAt)),
+    statusWrittenAt,
+    answers: answersSince(comments, statusWrittenAt),
+    lastChangeAt: latestOrNull(comments.filter((c) => c !== statusComment && !isOwnerAnswer(c)).map((c) => c.createdAt)),
   };
+}
+
+const ITEM_QUERY = `query($o: String!, $r: String!, $n: Int!) {
+  repository(owner: $o, name: $r) {
+    issueOrPullRequest(number: $n) { __typename ... on PullRequest { ${PR_FIELDS} } ... on Issue { ${COMMON_FIELDS} } }
+  }
+}`;
+
+/**
+ * One PR or issue, read the way the board reads it, or null when the token can't see it. For checking
+ * an item just before acting on it. Whether its answers have been picked up is not read.
+ */
+export async function fetchItem(token: string, repo: string, n: number, fetchFn: typeof fetch = defaultFetch): Promise<ItemFacts | null> {
+  const [o, r] = repo.split('/');
+  const res = await graphqlWith(token, fetchFn)<{ repository: { issueOrPullRequest: (RawItem & { __typename: string }) | null } | null }>(
+    ITEM_QUERY, { o, r, n },
+  );
+  const item = res.data?.repository?.issueOrPullRequest;
+  if (!item) return null;
+  const ignore: Report = () => {};
+  return item.__typename === 'PullRequest' ? prFacts(repo, item, ignore) : issueFacts(repo, item, ignore);
 }

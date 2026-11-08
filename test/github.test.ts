@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { fetchItems } from '../src/worker/github.ts';
+import { fetchItem, fetchItems } from '../src/worker/github.ts';
 import { answerRepo, recordedRepo } from './github-fake.ts';
 
 const NOW = new Date('2026-11-06T06:00:00Z');
@@ -16,18 +16,28 @@ interface FakeOptions {
   behind?: Record<string, number>;        // "base...head" -> behind_by
   status?: number;
   shape?: (repo: string, data: any) => any; // change what GitHub sends for a repo, after the recorded data is read
+  reactions?: Record<string, string[]>;     // comment id -> logins that reacted 👀
+  reactionsFail?: boolean;
 }
 
 function fake(opts: FakeOptions = {}) {
-  const calls: { url: string; method: string }[] = [];
+  const calls: { url: string; method: string; query?: string; variables?: any }[] = [];
   const items = recordedRepo();
   const fn = (async (input: any, init?: any) => {
     const url = String(input);
-    calls.push({ url, method: init?.method ?? 'GET' });
+    const sent = init?.body ? JSON.parse(init.body) : {};
+    calls.push({ url, method: init?.method ?? 'GET', query: sent.query, variables: sent.variables });
     if (opts.status && opts.status !== 200) return new Response('nope', { status: opts.status, statusText: 'Bad' });
     if (url === 'https://api.github.com/graphql') {
-      const query: string = JSON.parse(init.body).query;
+      const query: string = sent.query;
       if (query.includes('viewer')) return Response.json(opts.repos ?? fixture('graphql-repos.json'));
+      if (query.includes('nodes(ids:')) {
+        if (opts.reactionsFail) return Response.json({ data: null, errors: [{ message: 'Something went wrong' }] });
+        const nodes = sent.variables.ids.map((id: string) => ({
+          id, reactions: { nodes: (opts.reactions?.[id] ?? []).map((login) => ({ user: { login } })) },
+        }));
+        return Response.json({ data: { nodes } });
+      }
       const data: Record<string, any> = {};
       const errors: any[] = [];
       for (const m of query.matchAll(/(r\d+): repository\(owner: "([^"]+)", name: "([^"]+)"\)/g)) {
@@ -260,7 +270,7 @@ describe('fetchItems', () => {
     const { errors } = await fetchItems('tok', NOW, fake({ itemsFor, repos }).fn);
     expect(errors).toContain('More than 100 repositories; some recently active ones may be missing');
     expect(errors).toContain('More than 20 labels on danyelf/torahmap#564; a turn label may be missing');
-    expect(errors).toContain('More than 100 comments on danyelf/torahmap#564; a review or prep note may be missing');
+    expect(errors).toContain('More than 100 comments on danyelf/torahmap#564; a review, prep note or answer may be missing');
     expect(errors).toContain('More than 100 label changes on danyelf/torahmap#564; how long it has waited may be wrong');
     expect(errors).toContain('More than 100 files on danyelf/torahmap#564; an added design doc may be missing');
     expect(errors).toContain('More than 100 commits on danyelf/torahmap#564; commit counts may be off');
@@ -418,5 +428,140 @@ describe('fetchItems', () => {
     await fetchItems('tok', NOW, fn);
     expect(seen.Authorization).toBe('bearer tok');
     expect(seen['User-Agent']).toBe('pr-board');
+  });
+});
+
+const answerBody = '<!-- pr-board answer {"v":1,"fingerprint":"abcdef12","answers":{"1":"leave"},"note":""} -->\n**Answers from PR Board**';
+
+function comment(over: Record<string, unknown>) {
+  const at = (over.createdAt as string | undefined) ?? '2026-11-05T10:00:00Z';
+  return {
+    id: 'IC_x', author: { login: 'sam-gh' }, body: answerBody,
+    url: `https://github.com/danyelf/torahmap/pull/573#issuecomment-${String(over.id ?? 'x')}`,
+    createdAt: at, updatedAt: at, ...over,
+  };
+}
+
+/** The recording, with PR #573's status written at 09:00 and these comments added after its own. */
+function withComments(added: ReturnType<typeof comment>[]) {
+  return () => {
+    const data = recordedRepo();
+    const pr = data.pullRequests.nodes.find((p: any) => p.number === 573);
+    pr.lastEditedAt = '2026-11-05T09:00:00Z';
+    pr.comments.nodes.push(...added);
+    return data;
+  };
+}
+
+const reactionQueries = (calls: { query?: string; variables?: unknown }[]) => calls.filter((c) => c.query?.includes('nodes(ids:'));
+
+describe('fetchItems reads answers', () => {
+  it("finds the owner's answers written since the status, and whether each was picked up", async () => {
+    const itemsFor = withComments([
+      comment({ id: 'IC_old', createdAt: '2026-11-05T08:00:00Z' }),
+      comment({ id: 'IC_a', createdAt: '2026-11-05T10:00:00Z' }),
+      comment({ id: 'IC_b', createdAt: '2026-11-05T10:05:00Z' }),
+      comment({ id: 'IC_bob', author: { login: 'bob' }, createdAt: '2026-11-05T11:00:00Z' }),
+      comment({ id: 'IC_plain', body: 'Answers: 1 leave', createdAt: '2026-11-05T11:30:00Z' }),
+    ]);
+    const { fn, calls } = fake({ itemsFor, reactions: { IC_a: ['danyel-claude'], IC_b: ['sam-gh'] } });
+    const { items, errors } = await fetchItems('tok', NOW, fn);
+    expect(errors).toEqual([]);
+    expect(items.find((i) => i.number === 573)!.answers).toEqual([
+      { id: 'IC_a', url: 'https://github.com/danyelf/torahmap/pull/573#issuecomment-IC_a', at: '2026-11-05T10:00:00Z', claimed: true },
+      // The owner's own 👀 is not a claim.
+      { id: 'IC_b', url: 'https://github.com/danyelf/torahmap/pull/573#issuecomment-IC_b', at: '2026-11-05T10:05:00Z', claimed: false },
+    ]);
+    expect(reactionQueries(calls)).toHaveLength(1);
+    expect(reactionQueries(calls)[0]!.variables).toEqual({ ids: ['IC_a', 'IC_b'] });
+    expect(items.find((i) => i.number === 574)!.answers).toEqual([]);
+  });
+
+  it('asks about reactions only when there are answers to ask about', async () => {
+    const { fn, calls } = fake();
+    await fetchItems('tok', NOW, fn);
+    expect(reactionQueries(calls)).toHaveLength(0);
+  });
+
+  it("says so, and counts answers as not picked up, when the reactions can't be read", async () => {
+    const { fn } = fake({ itemsFor: withComments([comment({ id: 'IC_a' })]), reactions: { IC_a: ['danyel-claude'] }, reactionsFail: true });
+    const { items, errors } = await fetchItems('tok', NOW, fn);
+    expect(errors).toEqual(["Couldn't check whether answers were picked up: Something went wrong"]);
+    expect(items.find((i) => i.number === 573)!.answers.map((a) => a.claimed)).toEqual([false]);
+  });
+
+  it("doesn't count an answer as a change the status is older than", async () => {
+    const before = (await fetchItems('tok', NOW, fake({ itemsFor: withComments([]) }).fn)).items.find((i) => i.number === 573)!;
+    const after = (await fetchItems('tok', NOW, fake({ itemsFor: withComments([comment({ id: 'IC_a' })]) }).fn)).items.find((i) => i.number === 573)!;
+    expect(after.answers).toHaveLength(1);
+    expect(after.lastChangeAt).toBe(before.lastChangeAt);
+  });
+
+  it("finds answers on an issue written since its status comment", async () => {
+    const itemsFor = () => {
+      const data = recordedRepo();
+      const issue = data.issues.nodes.find((i: any) => i.number === 563);
+      issue.comments.nodes = [
+        { ...comment({ id: 'IC_s', author: { login: 'danyel-claude' }, createdAt: '2026-11-05T08:00:00Z' }), body: '<!-- status -->\n**Waiting on:** Sam\n<!-- /status -->', updatedAt: '2026-11-05T09:00:00Z' },
+        comment({ id: 'IC_early', createdAt: '2026-11-05T08:30:00Z' }),
+        comment({ id: 'IC_a', createdAt: '2026-11-05T10:00:00Z' }),
+      ];
+      return data;
+    };
+    const { items } = await fetchItems('tok', NOW, fake({ itemsFor }).fn);
+    const issue = items.find((i) => i.number === 563)!;
+    expect(issue.answers.map((a) => a.id)).toEqual(['IC_a']);
+    expect(issue.lastChangeAt).toBeNull();
+  });
+
+  it('warns that an answer may be missing when the comments are cut off', async () => {
+    const itemsFor = () => {
+      const data = recordedRepo();
+      data.pullRequests.nodes.find((p: any) => p.number === 564).comments.pageInfo = { hasPreviousPage: true };
+      data.issues.nodes.find((i: any) => i.number === 563).comments.pageInfo = { hasPreviousPage: true };
+      return data;
+    };
+    const { errors } = await fetchItems('tok', NOW, fake({ itemsFor }).fn);
+    expect(errors).toContain('More than 100 comments on danyelf/torahmap#564; a review, prep note or answer may be missing');
+    expect(errors).toContain('More than 100 comments on danyelf/torahmap#563; the status comment or an answer may be missing');
+  });
+});
+
+describe('fetchItem', () => {
+  function fakeOne() {
+    const world = recordedRepo();
+    const calls: any[] = [];
+    const fn = (async (_input: any, init?: any) => {
+      const sent = JSON.parse(init.body);
+      calls.push(sent);
+      const { o, r, n } = sent.variables;
+      if (`${o}/${r}` !== 'danyelf/torahmap') return Response.json({ data: { repository: null }, errors: [{ message: 'Could not resolve to a Repository' }] });
+      const pr = world.pullRequests.nodes.find((p: any) => p.number === n);
+      const issue = world.issues.nodes.find((i: any) => i.number === n);
+      const node = pr ? { __typename: 'PullRequest', ...pr } : issue ? { __typename: 'Issue', ...issue } : null;
+      return Response.json({ data: { repository: { issueOrPullRequest: node } } });
+    }) as typeof fetch;
+    return { fn, calls };
+  }
+
+  it('reads one PR or one issue with the same facts as the board', async () => {
+    const { fn, calls } = fakeOne();
+    const pr = await fetchItem('tok', 'danyelf/torahmap', 573, fn);
+    expect(pr?.kind).toBe('pr');
+    expect(pr?.linkedIssue).toBe(569);
+    const issue = await fetchItem('tok', 'danyelf/torahmap', 563, fn);
+    expect(issue?.kind).toBe('issue');
+    expect(calls[0].variables).toEqual({ o: 'danyelf', r: 'torahmap', n: 573 });
+  });
+
+  it("gives null for an item that doesn't exist, or a repo the token can't see", async () => {
+    const { fn } = fakeOne();
+    expect(await fetchItem('tok', 'danyelf/torahmap', 99999, fn)).toBeNull();
+    expect(await fetchItem('tok', 'someone/private', 1, fn)).toBeNull();
+  });
+
+  it('throws when GitHub answers with an error status', async () => {
+    const fn = (async () => new Response('nope', { status: 502, statusText: 'Bad Gateway' })) as typeof fetch;
+    await expect(fetchItem('tok', 'danyelf/torahmap', 573, fn)).rejects.toThrow(/502/);
   });
 });
