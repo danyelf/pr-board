@@ -19,13 +19,13 @@ const POLL_MS = 60_000;
 const COLLECT_MS = 60_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
 
-interface RestComment {
+export interface RestComment {
   id: number; user: { login: string } | null; body: string; html_url: string; created_at: string; updated_at: string;
   reactions?: { eyes?: number };
 }
 
 /** An answer comment nobody has claimed yet, with the text the item's status lived in when it was read. */
-interface Found { ref: Ref; id: number; url: string; answer: Answer; statusText: string }
+export interface Found { ref: Ref; id: number; url: string; createdAt: string; answer: Answer; statusText: string }
 
 const base = (ref: Ref) => `repos/${ref.owner}/${ref.repo}`;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -63,7 +63,7 @@ async function waitingOn(gh: Gh, ref: Ref, item: ItemRead<RestComment>): Promise
     if (!answersCurrentStatus(seen, written)) continue;
     // Reactions are read only for the answers to the current status.
     if ((await eyesOn(gh, ref, c)).some((r) => isClaimReaction(r.login, r.content))) continue;
-    found.push({ ref, id: c.id, url: c.html_url, answer: parseAnswer(c.body)!, statusText: item.statusText });
+    found.push({ ref, id: c.id, url: c.html_url, createdAt: c.created_at, answer: parseAnswer(c.body)!, statusText: item.statusText });
   }
   return found;
 }
@@ -73,7 +73,7 @@ async function waitingOn(gh: Gh, ref: Ref, item: ItemRead<RestComment>): Promise
  * for them. Returns the owner's answers still waiting on the rest, and why any item couldn't be read,
  * so one bad item doesn't hide the others.
  */
-async function waitingAnswers(gh: Gh, refs: Ref[], say: (line: string) => void): Promise<{ found: Found[]; failed: string[] }> {
+export async function waitingAnswers(gh: Gh, refs: Ref[], say: (line: string) => void): Promise<{ found: Found[]; failed: string[] }> {
   const found: Found[] = [];
   const failed: string[] = [];
   for (const ref of [...refs]) {
@@ -96,13 +96,13 @@ async function waitingAnswers(gh: Gh, refs: Ref[], say: (line: string) => void):
  * Adds this account's 👀 to the answer. GitHub says 201 when the reaction is new and 200 when this
  * account had already reacted, which means another session running as the same account claimed it first.
  */
-async function claim(gh: Gh, f: Found): Promise<boolean> {
+export async function claim(gh: Gh, f: Found): Promise<boolean> {
   const res = await gh(['api', '-X', 'POST', `${base(f.ref)}/issues/comments/${f.id}/reactions`, '-f', `content=${CLAIM_REACTION}`, '--include']);
   return /^HTTP\/\S+\s+201\b/.test(res);
 }
 
 /** The answers in words, with whether they still answer the item's questions as they were just read. */
-function describe(f: Found): string {
+export function describe(f: Found): string {
   const lines = [`${refString(f.ref)}: ${f.url}`];
   const status = parseStatus(f.statusText);
   const current = statusFingerprint(status);
