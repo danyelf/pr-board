@@ -22,7 +22,7 @@ Steps 5 to 8 are done (2026-11-08); steps 2 to 4, deploying, have not been run. 
 
 7. **Install the skill?** Done: `~/.claude/skills/pr-status` links to `skill/pr-status` in the main checkout.
 
-8. **Shall I do the one-off pass over open items?** Done, with your approval: torahmap #594 and #593 are `on danyel` with status sections, #411 stays `parked`, and #463 lost its `in-progress` label (to be decided later). #564 keeps `on danyel` but has no status section yet.
+8. **Shall I do the one-off pass over open items?** Done, with your approval: torahmap #594, #593 and #564 are `on danyel` with status sections, #411 stays `parked`, and #463 lost its `in-progress` label (to be decided later).
 
 ## Design questions the build turned up
 
