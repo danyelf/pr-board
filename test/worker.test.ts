@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from 'jose';
 import { makeHandler, type Env, type Handler } from '../src/worker/index.ts';
+import { GitHubRefused } from '../src/worker/github.ts';
 import { LOOK_DEFAULT, parseAnswer } from '../src/shared/answer.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
 import { parseStatus, renderStatus } from '../src/shared/status.ts';
@@ -169,24 +170,16 @@ describe('worker', () => {
     const res = await get(handler(ok).h, 'http://localhost:8787/nope', {}, { ...env, ALLOW_LOCAL: '1' });
     expect(res.status).toBe(404);
   });
-
-  it('enables Send only when the owner token is set', async () => {
-    const local = { ...env, ALLOW_LOCAL: '1' };
-    const without = await (await get(handler(ok).h, 'http://localhost:8787/', {}, local)).text();
-    expect(without).toContain('class="btn send" disabled');
-    const withToken = await (await get(handler(ok).h, 'http://localhost:8787/', {}, { ...local, GITHUB_OWNER_TOKEN: 'answer-tok' })).text();
-    expect(withToken).toContain('class="btn send">');
-  });
 });
 
 describe('POST /answer', () => {
   const ORIGIN = 'http://localhost:8787';
-  const answerEnv: Env = { ...env, ALLOW_LOCAL: '1', GITHUB_OWNER_TOKEN: 'answer-tok' };
+  const answerEnv: Env = { ...env, ALLOW_LOCAL: '1' };
   const asking = status({ waitingOn: 'owner', questions: [{ n: 1, text: 'Colour?', choices: ['leave', 'change'], defaultChoice: 'leave' }] });
   const item = () => facts({ repo: 'acme/x', number: 5, labels: ['on sam'], body: renderStatus(asking) });
   const good = { repo: 'acme/x', number: '5', fingerprint: statusFingerprint(asking), q1: 'change', look: LOOK_DEFAULT, note: 'tint is strong' };
 
-  function answerHandler(over: { item?: ItemFacts | null; readFails?: boolean; postFails?: boolean; postedAs?: string } = {}) {
+  function answerHandler(over: { item?: ItemFacts | null; readFails?: boolean; postFails?: number; postedAs?: string } = {}) {
     const posted: { token: string; repo: string; n: number; body: string }[] = [];
     const read: { token: string; repo: string; n: number }[] = [];
     const store = new Map<string, Response>();
@@ -204,7 +197,7 @@ describe('POST /answer', () => {
         return over.item === undefined ? item() : over.item;
       },
       postComment: async (token, repo, n, body) => {
-        if (over.postFails) throw new Error('GitHub said 403 Forbidden');
+        if (over.postFails) throw new GitHubRefused(over.postFails, over.postFails === 403 ? 'Forbidden' : 'Internal Server Error');
         posted.push({ token, repo, n, body });
         return { login: over.postedAs ?? 'sam-gh' };
       },
@@ -221,14 +214,14 @@ describe('POST /answer', () => {
     }), over.e ?? answerEnv);
   }
 
-  it('posts the answers with the owner token, then sends the browser back to the board', async () => {
+  it('posts the answers with the board token, then sends the browser back to the board', async () => {
     const { h, posted, read } = answerHandler();
     const res = await post(h, good);
     expect(res.status).toBe(303);
     expect(res.headers.get('Location')).toBe('/?sent=acme%2Fx%235');
     expect(read).toEqual([{ token: 'tok', repo: 'acme/x', n: 5 }]);
     expect(posted).toHaveLength(1);
-    expect(posted[0]!.token).toBe('answer-tok');
+    expect(posted[0]!.token).toBe('tok');
     expect(posted[0]!).toMatchObject({ repo: 'acme/x', n: 5 });
     expect(parseAnswer(posted[0]!.body)).toEqual({ fingerprint: good.fingerprint, answers: { '1': 'change', look: LOOK_DEFAULT }, note: 'tint is strong' });
     expect(posted[0]!.body).toContain('1. Colour? → **change**');
@@ -377,20 +370,17 @@ describe('POST /answer', () => {
     expect([...hidden.posted, ...closed.posted]).toHaveLength(0);
   });
 
-  it("says answering isn't set up when there is no owner token, and posts nothing", async () => {
-    const { h, posted, read } = answerHandler();
-    const res = await post(h, good, { e: { ...answerEnv, GITHUB_OWNER_TOKEN: '' } });
+  it('says the token needs write access when GitHub forbids the comment', async () => {
+    const res = await post(answerHandler({ postFails: 403 }).h, good);
     expect(res.status).toBe(503);
-    expect(await res.text()).toContain('Answering isn&#39;t set up');
-    expect(read).toHaveLength(0);
-    expect(posted).toHaveLength(0);
+    expect(await res.text()).toContain('needs read and write access to Issues and Pull requests');
   });
 
-  it('says so when GitHub could not be read or refused the comment', async () => {
+  it('says so when GitHub could not be read or failed to take the comment', async () => {
     expect((await post(answerHandler({ readFails: true }).h, good)).status).toBe(502);
-    const refused = await post(answerHandler({ postFails: true }).h, good);
-    expect(refused.status).toBe(502);
-    expect(await refused.text()).toContain('GitHub said 403 Forbidden');
+    const failed = await post(answerHandler({ postFails: 500 }).h, good);
+    expect(failed.status).toBe(502);
+    expect(await failed.text()).toContain('GitHub said 500 Internal Server Error');
   });
 
   it('warns when the comment went up under another account, since the watcher would not read it', async () => {

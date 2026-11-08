@@ -3,7 +3,6 @@ import type { BoxState, ItemFacts } from '../shared/types.ts';
 import { FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, LOOK_QUESTION, NOTE_MAX, choicesFor, questionField } from '../shared/answer.ts';
 import { DAY_MS } from '../shared/names.ts';
 import { boxNamed } from '../shared/stage.ts';
-import { ANSWERING_NOT_SET_UP } from './access.ts';
 import { formatWait } from '../shared/turn.ts';
 
 const CSS = `
@@ -109,8 +108,6 @@ function byProject(cards: Card[], draw: (c: Card) => string): string {
 }
 
 interface RenderOptions {
-  /** Whether the Worker can post answers. Without it the answer controls show, but Send is disabled. */
-  answering: boolean;
   /** The item whose answers were just sent, to say so at the top. */
   sent?: string | null;
 }
@@ -121,7 +118,7 @@ function choice(name: string, value: string, isDefault: boolean): string {
 }
 
 /** The questions, the look question when the card asks it, a note box and Send, as one form posted to /answer. */
-function answerForm(c: Card, answering: boolean): string {
+function answerForm(c: Card): string {
   const questions = c.status?.questions ?? [];
   if (questions.length === 0 && !c.asksLook) return '';
   const parts = [
@@ -144,9 +141,7 @@ function answerForm(c: Card, answering: boolean): string {
     parts.push(`<div class="detail"><b>${esc(LOOK_QUESTION)}</b><div class="choices">${choices}</div></div>`);
   }
   parts.push(`<textarea name="${FORM_FIELD.note}" maxlength="${NOTE_MAX}" placeholder="A note back (optional)" aria-label="A note back"></textarea>`);
-  parts.push(answering
-    ? '<div class="sendrow"><button type="submit" class="btn send">Send answers</button></div>'
-    : `<div class="sendrow"><button type="submit" class="btn send" disabled>Send answers</button><span class="age">${esc(ANSWERING_NOT_SET_UP)}</span></div>`);
+  parts.push('<div class="sendrow"><button type="submit" class="btn send">Send answers</button></div>');
   parts.push('</form>');
   return parts.join('\n    ');
 }
@@ -173,7 +168,7 @@ function renderCard(c: Card, opts: RenderOptions): string {
   else if (c.status === null) parts.push('<div class="detail age">No status written yet</div>');
   if (c.toTest) parts.push(`<div class="detail"><b>To test:</b> ${esc(c.toTest)}</div>`);
   // Once answered, the answers are on GitHub; asking again here would only send them twice.
-  if (c.answerState === null) parts.push(answerForm(c, opts.answering));
+  if (c.answerState === null) parts.push(answerForm(c));
   if (f.screenshots.length > 0) {
     const shots = f.screenshots
       .slice(0, 4)
@@ -231,7 +226,7 @@ export function renderMessage(title: string, text: string, extra?: { href: strin
 </div></body></html>`;
 }
 
-export function renderBoard(b: Board, opts: RenderOptions = { answering: false }): string {
+export function renderBoard(b: Board, opts: RenderOptions = {}): string {
   const now = new Date(b.generatedAt);
   const sent = opts.sent ? `<div class="ok">${esc(`Sent your answers on ${opts.sent}.`)}</div>` : '';
   const errors = sent + b.errors.map((e) => `<div class="err">${esc(e)}</div>`).join('');

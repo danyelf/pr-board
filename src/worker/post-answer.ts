@@ -3,8 +3,8 @@ import { OWNER_LOGIN } from '../shared/config.ts';
 import { FINGERPRINT_RE, statusFingerprint } from '../shared/fingerprint.ts';
 import { parseStatus, statusText } from '../shared/status.ts';
 import { effectiveTurn } from '../shared/turn.ts';
-import { ANSWERING_NOT_SET_UP, ownerToken, type Env } from './access.ts';
-import type { fetchItem, postComment } from './github.ts';
+import type { Env } from './access.ts';
+import { GitHubRefused, type fetchItem, type postComment } from './github.ts';
 
 // Room for a full note of NOTE_MAX characters, every one of them escaped to several bytes, and the answers.
 const MAX_BODY_BYTES = 32 * 1024;
@@ -55,7 +55,7 @@ async function readLimited(req: Request, max: number): Promise<string | null> {
  * posts it as a comment from the owner's account. The caller has already checked who is asking.
  */
 export async function postAnswer(
-  req: Request, env: Pick<Env, 'GITHUB_TOKEN' | 'GITHUB_OWNER_TOKEN'>, deps: AnswerDeps,
+  req: Request, env: Pick<Env, 'GITHUB_TOKEN'>, deps: AnswerDeps,
 ): Promise<AnswerResult> {
   // A form on another site can post here with the owner's Access cookie; only this page's own forms may.
   if (req.headers.get('Origin') !== new URL(req.url).origin) {
@@ -66,9 +66,6 @@ export async function postAnswer(
   }
   const text = await readLimited(req, MAX_BODY_BYTES);
   if (text === null) return refuse(413, 'Not sent', `The answers were more than ${MAX_BODY_BYTES / 1024} KB.`);
-
-  const token = ownerToken(env);
-  if (token === null) return refuse(503, 'Not sent', ANSWERING_NOT_SET_UP);
 
   const form = new URLSearchParams(text);
   const seen = new Set<string>();
@@ -90,7 +87,7 @@ export async function postAnswer(
   if (!FINGERPRINT_RE.test(fingerprint)) return refuse(400, 'Not sent', 'The form did not say which questions it answers.');
   const ref = `${repo}#${number}`;
 
-  // Read the item again with the read-only token: it must still be there, open, and asking the same questions.
+  // Read the item again: it must still be there, open, and asking the same questions.
   let item: Awaited<ReturnType<typeof fetchItem>>;
   try {
     item = await deps.fetchItem(env.GITHUB_TOKEN, repo, Number(number));
@@ -124,12 +121,16 @@ export async function postAnswer(
 
   let posted: { login: string | null };
   try {
-    posted = await deps.postComment(token, repo, Number(number), body);
+    posted = await deps.postComment(env.GITHUB_TOKEN, repo, Number(number), body);
   } catch (e) {
+    // A token that can read the item but not comment on it gets a 403 (or a 404 for a private repo).
+    if (e instanceof GitHubRefused && (e.status === 403 || e.status === 404)) {
+      return refuse(503, 'Not sent', `GitHub wouldn't let the board comment on ${ref} (${e.status}). The Worker's GITHUB_TOKEN needs read and write access to Issues and Pull requests on this repo.`);
+    }
     return refuse(502, 'Not sent', `GitHub didn't take the answers for ${ref}: ${e instanceof Error ? e.message : String(e)}`);
   }
   if (posted.login !== OWNER_LOGIN) {
-    return refuse(500, 'Sent under the wrong account', `The answers on ${ref} went up as ${posted.login ?? 'an unknown account'}, not ${OWNER_LOGIN}, so Claude won't pick them up. GITHUB_OWNER_TOKEN must belong to ${OWNER_LOGIN}.`);
+    return refuse(500, 'Sent under the wrong account', `The answers on ${ref} went up as ${posted.login ?? 'an unknown account'}, not ${OWNER_LOGIN}, so Claude won't pick them up. The Worker's GITHUB_TOKEN must belong to ${OWNER_LOGIN}.`);
   }
   return { sent: ref };
 }

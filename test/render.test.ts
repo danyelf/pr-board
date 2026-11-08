@@ -205,18 +205,13 @@ describe('renderBoard answering', () => {
     expect(cardOf(html, 964)).not.toContain('<form');
   });
 
-  it("disables Send, saying why, when answering isn't set up, and enables it when it is", () => {
+  it('gives the form a working Send button', () => {
     const item = facts({ number: 965, labels: ['on sam'], lastActivityAt: at });
-    const off = cardOf(board([item]), 965);
-    expect(off).toMatch(/<button type="submit" class="btn send" disabled>Send answers<\/button>/);
-    expect(off).toContain('Answering isn&#39;t set up yet');
-    const on = cardOf(board([item], { answering: true }), 965);
-    expect(on).toMatch(/<button type="submit" class="btn send">Send answers<\/button>/);
-    expect(on).not.toContain('set up yet');
+    expect(cardOf(board([item]), 965)).toMatch(/<button type="submit" class="btn send">Send answers<\/button>/);
   });
 
   it('says what was just sent, escaped', () => {
-    const html = board([], { answering: true, sent: 'acme/x#5 <b>' });
+    const html = board([], { sent: 'acme/x#5 <b>' });
     expect(html).toContain('<div class="ok">Sent your answers on acme/x#5 &lt;b&gt;.</div>');
   });
 
@@ -227,7 +222,7 @@ describe('renderBoard answering', () => {
       answers: [{ id: `c${n}`, url: `https://github.com/acme/x/pull/${n}#issuecomment-1`, at: minutesAgo(m), claimedAt: claimed === null ? null : minutesAgo(claimed) }],
       ...over,
     });
-    const html = board([answered(970, 2, null), answered(971, 200, 180), answered(972, 20, null)], { answering: true });
+    const html = board([answered(970, 2, null), answered(971, 200, 180), answered(972, 20, null)]);
     const claude = html.slice(html.indexOf('On Claude'), html.indexOf('Quiet:'));
     expect(claude).toMatch(/PR #970<\/a>.*answered, waiting for Claude to pick it up<\/span>/);
     expect(claude).toMatch(/PR #971<\/a>.*Claude picked up your answers 3 h ago<\/span>/);

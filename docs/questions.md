@@ -10,7 +10,7 @@ Collected while building part 1 (a board you can read). Newest at the bottom. Ea
 
 All the go-live steps are done (2026-11-08). They are in the order they were done. The steps themselves are written out once, in `README.md` under "Going live"; each question here names its step and gives only the decision and my default, in bold.
 
-2. **Make the GitHub token for the Worker?** Done: a fine-grained token from your account (read-only contents, issues and pull requests on your repos), stored as the Worker secret `GITHUB_TOKEN` by piping it in with `pbpaste`, because `wrangler secret put` run through Claude's `!` has no terminal to ask for it.
+2. **Make the GitHub token for the Worker?** Done: a fine-grained token from your account (read-only contents; issues and pull requests read-only at first, read and write since answering), stored as the Worker secret `GITHUB_TOKEN` by piping it in with `pbpaste`, because `wrangler secret put` run through Claude's `!` has no terminal to ask for it.
 
 3. **Which hostname, and shall I set up the login gate?** Done: `pr-board.danyelfisher.info`, behind the Cloudflare Access application of the team `fisherinsights.cloudflareaccess.com`, with a one-time emailed code as the login.
 
@@ -32,6 +32,6 @@ All the go-live steps are done (2026-11-08). They are in the order they were don
 
 ## Answering from the board
 
-11. **Make the owner token, which posts your answers?** (**yes** | wait) README step 8. A second fine-grained token from your account (danyelf), with issues and pull requests read and write, stored as the Worker secret `GITHUB_OWNER_TOKEN`. I haven't created it or set it. Until it exists the cards show the answer controls with Send disabled, and the board works as before.
+11. **Make the owner token, which posts your answers?** Done differently: there is no second token. You gave the board's existing `GITHUB_TOKEN` write access to issues and pull requests (2026-11-08), and the Worker posts with it (README step 8).
 
 12. **Are the calls I made for answering right?** (**yes** | let's talk) They are written down in the design under "Settled for answering", each marked as my call. The ones most worth a look: the Worker never changes whose turn it is or the status (the board works out "answered" from your comment being newer than the status); the status section carries a hidden data line, used only while the text still matches it, so a hand edit on GitHub is read from the text and tagged on the card; and an answer with no 👀 after 10 minutes puts the card back at the top.
