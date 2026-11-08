@@ -10,10 +10,7 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 /** The Worker and the label setup both cover repos pushed to within this many days. */
 export const REPO_WINDOW_DAYS = 60;
 
-/**
- * Who a status can be waiting on. `role` is what the code, the `--waiting` flag and whose-turn use;
- * `spelling` is how the status section writes it.
- */
+/** Who a status can be waiting on. `role` is the code's name; `spelling` is how the status section writes it. */
 export const WAITING_ON = [
   { role: 'owner', spelling: OWNER_NAME },
   { role: 'claude', spelling: 'Claude' },

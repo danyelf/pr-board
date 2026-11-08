@@ -1,5 +1,6 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { OWNER_LOGIN } from '../src/shared/config.ts';
 import { LABEL_ON_OWNER, LABEL_PARKED, WAITING_ON, type WaitingOn } from '../src/shared/names.ts';
 import { STATUS_CLOSE, STATUS_OPEN, parseStatus, pickStatusComment, renderStatus, replaceStatus, statusValueProblem } from '../src/shared/status.ts';
 import type { Question, Status } from '../src/shared/types.ts';
@@ -50,12 +51,11 @@ function parseSetArgs(args: string[]): SetOptions {
     else if (flag === '--to-test') opts.toTest = need();
     else throw new Error(`Unknown option ${flag}`);
   }
-  const chosen = WAITING_ON.find((w) => w.role === waiting);
-  if (!chosen) {
-    const options = WAITING_ON.map((w) => w.role);
-    throw new Error(`--waiting must be ${options.slice(0, -1).join(', ')} or ${options.at(-1)}`);
+  const roles: readonly string[] = WAITING_ON.map((w) => w.role);
+  if (waiting === null || !roles.includes(waiting)) {
+    throw new Error(`--waiting must be ${roles.slice(0, -1).join(', ')} or ${roles.at(-1)}`);
   }
-  opts.waiting = chosen.role;
+  opts.waiting = waiting as WaitingOn;
   return opts;
 }
 
@@ -73,9 +73,8 @@ function buildQuestions(texts: string[]): Question[] {
 }
 
 function nextStatus(opts: SetOptions, questions: Question[], previous: Status | null, now: Date): Status {
-  const waitingOn = opts.waiting;
-  const since = previous && previous.waitingOn === waitingOn && previous.since ? previous.since : now.toISOString();
-  return { waitingOn, since, ask: opts.ask, questions, toTest: opts.toTest };
+  const since = previous && previous.waitingOn === opts.waiting && previous.since ? previous.since : now.toISOString();
+  return { waitingOn: opts.waiting, since, ask: opts.ask, questions, toTest: opts.toTest };
 }
 
 /** A PR that has just been handed to the owner, and who opened it; null otherwise. */
@@ -109,23 +108,14 @@ async function writeStatus(gh: Gh, ref: Ref, opts: SetOptions, questions: Questi
   return null;
 }
 
-/**
- * Asks the repo's owner to review, so GitHub notifies them. The board is for one person, whose
- * repos these are, so the owner is the person to ask. Returns a complaint, or null when all is well.
- */
-async function requestOwnerReview(gh: Gh, ref: Ref, author: string | null): Promise<{ problem: string; failed: boolean } | null> {
-  if (author === ref.owner) return null; // GitHub won't ask someone to review their own PR.
-  const base = `repos/${ref.owner}/${ref.repo}`;
+/** Asks the board's owner to review, so GitHub notifies them. Returns what went wrong, or null. */
+async function requestReview(gh: Gh, ref: Ref, author: string | null): Promise<string | null> {
+  if (author === OWNER_LOGIN) return null; // GitHub won't ask someone to review their own PR.
   try {
-    const ownerType = (await gh(['api', base, '-q', '.owner.type'])).trim();
-    if (ownerType !== 'User') {
-      return { problem: `Didn't ask for a review: ${ref.owner}/${ref.repo} belongs to an organization, not a person`, failed: false };
-    }
-    await gh(['api', '-X', 'POST', `${base}/pulls/${ref.n}/requested_reviewers`, '-f', `reviewers[]=${ref.owner}`]);
+    await gh(['api', '-X', 'POST', `repos/${ref.owner}/${ref.repo}/pulls/${ref.n}/requested_reviewers`, '-f', `reviewers[]=${OWNER_LOGIN}`]);
     return null;
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    return { problem: `Couldn't ask ${ref.owner} to review ${refString(ref)}: ${message}`, failed: true };
+    return `Couldn't ask ${OWNER_LOGIN} to review ${refString(ref)}: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
@@ -196,9 +186,9 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
     for (const name of missing) {
       err(`Label "${name}" doesn't exist in ${ref.owner}/${ref.repo}; run cli/setup-labels.ts`);
     }
-    const review = handedOver ? await requestOwnerReview(deps.gh, ref, handedOver.author) : null;
-    if (review) err(review.problem);
-    return missing.length > 0 || review?.failed ? 1 : 0;
+    const reviewProblem = handedOver ? await requestReview(deps.gh, ref, handedOver.author) : null;
+    if (reviewProblem) err(reviewProblem);
+    return missing.length > 0 || reviewProblem ? 1 : 0;
   } catch (e) {
     err(e instanceof Error ? e.message : String(e));
     return 1;

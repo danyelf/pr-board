@@ -1,13 +1,14 @@
-// The settings that name the person this board is for. The tests swap in a different file
-// (see vitest.config.ts), so nothing else in the code can assume who that is.
+// The tests swap in a different file (see vitest.config.ts).
 import config from '../../pr-board.config.json' with { type: 'json' };
 
-function ownerName(value: unknown): string {
-  if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error('pr-board.config.json needs "ownerName": the name of the person the board is for');
-  }
+function setting(key: 'ownerName' | 'ownerLogin', meaning: string): string {
+  const value: unknown = (config as Record<string, unknown>)[key];
+  if (typeof value !== 'string' || value.trim() === '') throw new Error(`pr-board.config.json needs "${key}": ${meaning}`);
   return value.trim();
 }
 
-/** The person whose PRs and issues these are, as the status section and the labels spell them. */
-export const OWNER_NAME = ownerName((config as { ownerName?: unknown }).ownerName);
+/** The person the board is for, as the status section and the labels spell them. */
+export const OWNER_NAME = setting('ownerName', 'the name of the person the board is for');
+
+/** That person's GitHub login: the one asked to review a PR handed to them. */
+export const OWNER_LOGIN = setting('ownerLogin', "that person's GitHub login");
