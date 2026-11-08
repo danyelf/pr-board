@@ -6,13 +6,14 @@
 // It never stops on its own because of errors; it stops on SIGTERM or SIGINT and leaves the
 // sessions it started running.
 import { spawn as spawnChild } from 'node:child_process';
-import { accessSync, appendFileSync, closeSync, constants, mkdirSync, openSync, readFileSync, statSync } from 'node:fs';
+import { accessSync, appendFileSync, closeSync, constants, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { OWNER_NAME } from '../src/shared/config.ts';
 import { CLAUDE_BOT_KEY, LABEL_ON_OWNER, PICKUP_GRACE_MS, SERVICE_GRACE_MS } from '../src/shared/names.ts';
-import { claim, describe, unclaim, waitingAnswers, type Found } from './answers.ts';
-import { OwnerError, flattenPages, gh as realGh, git as realGit, refString, refuseOwner } from './gh.ts';
+import { answersCurrentStatus } from '../src/shared/answer.ts';
+import { claim, describe, statusWrittenAt, unclaim, waitingAnswers, type Found, type RestComment } from './answers.ts';
+import { OwnerError, flattenPages, gh as realGh, git as realGit, readItem, readRef, refString, refuseOwner } from './gh.ts';
 import type { Gh, Ref } from './gh.ts';
 import { backoff, message } from './poll.ts';
 
@@ -28,8 +29,12 @@ export interface Config {
   /** The most sessions it has running at once. */
   maxSessions: number;
   pollMs: number;
+  /** How long a session may run before it is stopped. */
+  sessionMs: number;
   /** Where each session's output goes, one file per session. */
   logDir: string;
+  /** Where the service keeps its state file: the sessions it has running, and the answers it won't take again. */
+  stateDir: string;
   /** The file holding the GitHub token of Claude's own account. */
   tokenFile: string;
   /** The claude program itself (not a shell function wrapping it). */
@@ -51,6 +56,37 @@ export interface Session {
 /** An answer this service claimed, with the id of its 👀 reaction. */
 interface Claimed { found: Found; reactionId: number | null }
 
+/** What the service remembers of a session it started, in its state file. */
+interface SessionRecord {
+  pid: number;
+  /** owner/repo#N */
+  ref: string;
+  claims: { answerId: number; reactionId: number | null }[];
+  startedAt: number;
+  logPath: string;
+  /** The process is gone; what is left is checking whether it did its job. */
+  ended: boolean;
+}
+
+/** The state file: one JSON object, written whole. */
+interface State {
+  sessions: SessionRecord[];
+  /** Answers it took back after a session that didn't act on them, and won't take again. */
+  refused: number[];
+}
+
+/** A session as the running service tracks it. */
+interface Tracked extends SessionRecord {
+  itemRef: Ref;
+  /** Started by an earlier run of the service, so there is no exit event to wait for. */
+  restored: boolean;
+  /** Asked to stop because it ran too long. */
+  stopped: boolean;
+  checking: boolean;
+}
+
+const REFUSED_KEPT = 500;
+
 export interface ServiceDeps {
   gh: Gh;
   git: Gh;
@@ -60,7 +96,11 @@ export interface ServiceDeps {
     isDirectory: (path: string) => boolean;
     isExecutable: (path: string) => boolean;
     mkdir: (path: string) => void;
+    /** Replaces the file's contents, all at once or not at all. */
+    write: (path: string, text: string) => void;
   };
+  /** Sends a signal to a process (a negative pid is a whole process group); signal 0 only checks it is there. Throws, with code ESRCH, when it isn't. */
+  kill: (pid: number, signal: NodeJS.Signals | 0) => void;
   homedir: string;
   env: NodeJS.ProcessEnv;
   now: () => number;
@@ -74,7 +114,7 @@ export interface ServiceDeps {
   err?: (line: string) => void;
 }
 
-const SETTINGS = ['repos', 'graceMinutes', 'maxSessions', 'pollSeconds', 'logDir', 'tokenFile', 'claude', 'claudeArgs'];
+const SETTINGS = ['repos', 'graceMinutes', 'maxSessions', 'sessionMinutes', 'pollSeconds', 'logDir', 'stateDir', 'tokenFile', 'claude', 'claudeArgs'];
 
 /** Reads the service's config file, filling in the defaults. Throws, naming the file, on anything it can't use. */
 export function loadConfig(text: string, home: string, path: string): Config {
@@ -118,7 +158,9 @@ export function loadConfig(text: string, home: string, path: string): Config {
     graceMs: num('graceMinutes', SERVICE_GRACE_MS / MIN,(n) => n >= 0, 'a number of minutes, 0 or more') * MIN,
     maxSessions: num('maxSessions', 2, (n) => Number.isInteger(n) && n >= 1, 'a whole number, 1 or more'),
     pollMs: num('pollSeconds', 60, (n) => n >= 1, 'a number of seconds, 1 or more') * 1000,
+    sessionMs: num('sessionMinutes', 60, (n) => n > 0, 'a number of minutes, more than 0') * MIN,
     logDir: d.logDir === undefined ? join(home, '.pr-board', 'logs') : absolute(d.logDir, 'logDir'),
+    stateDir: d.stateDir === undefined ? join(home, '.pr-board') : absolute(d.stateDir, 'stateDir'),
     tokenFile: d.tokenFile === undefined ? join(home, '.config', 'claude-github', 'token') : absolute(d.tokenFile, 'tokenFile'),
     claude: d.claude === undefined ? join(home, '.local', 'bin', 'claude') : absolute(d.claude, 'claude'),
     claudeArgs: claudeArgs as string[],
@@ -183,9 +225,6 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       throw new Error(`Couldn't read ${configPath} (${message(e)}). See mac/service.example.json for what goes in it.`);
     }
     config = loadConfig(text, deps.homedir, configPath);
-    for (const r of config.repos) {
-      if (!deps.files.isDirectory(r.clone)) throw new Error(`${configPath}: ${r.clone}, the clone of ${r.owner}/${r.repo}, isn't a directory`);
-    }
     if (!deps.files.isExecutable(config.claude)) throw new Error(`${configPath}: ${config.claude} isn't a program it can run; set "claude" to the claude program itself`);
   } catch (e) {
     err(message(e));
@@ -222,8 +261,120 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     err(`Couldn't tell which account the token in ${config.tokenFile} belongs to (${message(e)}); going on anyway.`);
   }
 
-  const running = new Map<string, Session>();
+  const tracked = new Map<string, Tracked>();
+  const refused = new Set<number>();
   let planned = 0;
+  const statePath = join(config.stateDir, 'state.json');
+  const live = () => [...tracked.values()].filter((t) => !t.ended).length;
+
+  const alive = (pid: number): boolean => {
+    try {
+      deps.kill(pid, 0);
+      return true;
+    } catch (e) {
+      return (e as NodeJS.ErrnoException).code !== 'ESRCH';
+    }
+  };
+
+  /** Writes the sessions it is tracking and the answers it won't take again. A dry run keeps no state. */
+  function saveState(): void {
+    if (dryRun) return;
+    const state: State = {
+      sessions: [...tracked.values()].map(({ pid, ref, claims, startedAt, logPath, ended }) => ({ pid, ref, claims, startedAt, logPath, ended })),
+      refused: [...refused].slice(-REFUSED_KEPT),
+    };
+    try {
+      deps.files.mkdir(config.stateDir);
+      deps.files.write(statePath, JSON.stringify(state, null, 2));
+    } catch (e) {
+      err(`Couldn't write ${statePath} (${message(e)}); after a restart it won't remember its sessions or the answers it gave back.`);
+    }
+  }
+
+  /** Reads the state file left by an earlier run. Sessions whose process is gone are marked ended, to be checked. */
+  function loadState(): void {
+    let text: string;
+    try {
+      text = deps.files.read(statePath);
+    } catch {
+      return;
+    }
+    let state: Partial<State>;
+    try {
+      state = JSON.parse(text) as Partial<State>;
+    } catch {
+      err(`${statePath} isn't valid JSON, so it is starting without it. Sessions it started before may still be running.`);
+      return;
+    }
+    for (const id of state.refused ?? []) refused.add(id);
+    if (dryRun) return;
+    let running = 0;
+    let gone = 0;
+    for (const rec of state.sessions ?? []) {
+      const itemRef = readRef(rec.ref);
+      if (!('owner' in itemRef)) continue;
+      const ended = rec.ended || !alive(rec.pid);
+      tracked.set(rec.ref, { ...rec, ended, itemRef, restored: true, stopped: false, checking: false });
+      if (ended) gone++;
+      else running++;
+    }
+    if (running + gone > 0) out(`Remembers ${running} ${running === 1 ? 'session' : 'sessions'} still running from before, and ${gone} that ended.`);
+  }
+
+  /**
+   * After a session ends: if the item's status wasn't rewritten after the answer, the session did
+   * nothing about it. Takes this account's 👀 back off, so the board shows "Answered, not picked up"
+   * again, and remembers the answer so it isn't taken a second time.
+   */
+  async function checkEnded(t: Tracked): Promise<void> {
+    const item = await readItem<RestComment>(gh, t.itemRef);
+    const writtenAt = item.open ? await statusWrittenAt(gh, t.itemRef, item) : null;
+    for (const claimed of [...t.claims]) {
+      const c = item.comments.find((x) => x.id === claimed.answerId);
+      if (c && item.open && answersCurrentStatus({ login: c.user?.login, body: c.body, createdAt: c.created_at }, writtenAt)) {
+        await unclaim(gh, { ref: t.itemRef, id: claimed.answerId }, claimed.reactionId);
+        refused.add(claimed.answerId);
+        err(`The session for ${t.ref} ended without updating its status, so ${c.html_url} is still unanswered. Took this account's 👀 back off it, so the board shows "Answered, not picked up" again; this service won't take that answer again. The session's output is in ${t.logPath}.`);
+      }
+      t.claims = t.claims.filter((x) => x !== claimed);
+    }
+  }
+
+  /** Runs the check for a session that has ended, and forgets the session once it is done. A failed check is tried again on the next poll. */
+  async function settle(t: Tracked): Promise<void> {
+    if (t.checking) return;
+    t.checking = true;
+    try {
+      await checkEnded(t);
+      tracked.delete(t.ref);
+    } catch (e) {
+      err(`Couldn't check whether the session for ${t.ref} did its job (${message(e)}); will try again.`);
+    } finally {
+      t.checking = false;
+      saveState();
+    }
+  }
+
+  /** Notices restored sessions that have ended, settles ended ones, and stops those that ran too long. */
+  async function sweep(): Promise<void> {
+    for (const t of [...tracked.values()]) {
+      if (!t.ended && t.restored && !alive(t.pid)) {
+        t.ended = true;
+        out(`The session for ${t.ref} (process ${t.pid}) is gone; its output is in ${t.logPath}.`);
+      }
+      if (t.ended) {
+        await settle(t);
+      } else if (!t.stopped && deps.now() - t.startedAt >= config.sessionMs) {
+        t.stopped = true;
+        err(`The session for ${t.ref} has run for ${config.sessionMs / MIN} min; stopping it. Its output is in ${t.logPath}.`);
+        try {
+          deps.kill(-t.pid, 'SIGTERM');
+        } catch (e) {
+          err(`Couldn't stop process group ${t.pid}: ${message(e)}`);
+        }
+      }
+    }
+  }
 
   /** The PR's branch. Throws if it comes from another repo (a fork) or its name could be read as an option. */
   async function prBranch(ref: Ref): Promise<string> {
@@ -262,6 +413,13 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     return path;
   }
 
+  /** Why sessions can't run in this repo's clone, or null when it is marked as one where Claude acts as its own account. */
+  async function markProblem(repo: RepoConfig): Promise<string | null> {
+    const marked = await deps.git(['-C', repo.clone, 'config', '--local', '--get', CLAUDE_BOT_KEY]).then((s) => s.trim(), () => '');
+    return marked === 'true' ? null
+      : `${repo.clone} is not marked ${CLAUDE_BOT_KEY}=true, so a session there would act as ${OWNER_NAME}'s own GitHub account. To let Claude act there under its own account: git -C ${repo.clone} config ${CLAUDE_BOT_KEY} true`;
+  }
+
   /** Takes this account's 👀 back off answers it claimed but can't serve, so the board shows them as waiting again. */
   async function giveBack(claims: Claimed[], why: string): Promise<void> {
     for (const c of claims) {
@@ -281,9 +439,9 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
    */
   async function startSession(repo: RepoConfig, ref: Ref, isPr: boolean, answers: Found[]): Promise<void> {
     const name = refString(ref);
-    const marked = await deps.git(['-C', repo.clone, 'config', '--local', '--get', CLAUDE_BOT_KEY]).then((s) => s.trim(), () => '');
-    if (marked !== 'true') {
-      err(`Not starting a session for ${name}: ${repo.clone} is not marked ${CLAUDE_BOT_KEY}=true, so the session would act as ${OWNER_NAME}'s own GitHub account. To let Claude act there under its own account: git -C ${repo.clone} config ${CLAUDE_BOT_KEY} true`);
+    const unmarked = await markProblem(repo);
+    if (unmarked) {
+      err(`Not starting a session for ${name}: ${unmarked}`);
       return;
     }
     const token = readToken();
@@ -329,20 +487,32 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       await giveBack(claimed, `Couldn't start a session for ${name} (${message(e)}).`);
       return;
     }
-    running.set(name, session);
-    out(`Started a session for ${name} (process ${session.pid ?? 'unknown'}) in ${cwd}; its output goes to ${logPath}.`);
-    void session.exited.then((code) => {
-      running.delete(name);
+    if (session.pid === undefined) {
+      await giveBack(claimed, `Started a session for ${name} but got no process id for it.`);
+      return;
+    }
+    const t: Tracked = {
+      pid: session.pid, ref: name, claims: claimed.map((c) => ({ answerId: c.found.id, reactionId: c.reactionId })), startedAt: deps.now(), logPath,
+      ended: false, itemRef: ref, restored: false, stopped: false, checking: false,
+    };
+    tracked.set(name, t);
+    saveState();
+    out(`Started a session for ${name} (process ${session.pid}) in ${cwd}; its output goes to ${logPath}.`);
+    void session.exited.then(async (code) => {
+      t.ended = true;
       out(`The session for ${name} finished (exit code ${code ?? 'unknown'}); its output is in ${logPath}.`);
+      saveState();
+      await settle(t);
     });
   }
 
-  /** The owner's waiting answers in one repo. Returns how many items had some past their grace period. */
-  async function serveRepo(repo: RepoConfig): Promise<number> {
+  /** The owner's waiting answers in one repo. Returns how many items had some past their grace period, and whether reading any item failed. */
+  async function serveRepo(repo: RepoConfig): Promise<{ ripe: number; failed: boolean }> {
     const label = encodeURIComponent(LABEL_ON_OWNER);
     const rows = flattenPages(await gh(['api', `repos/${repo.owner}/${repo.repo}/issues?labels=${label}&state=open&per_page=100`, '--paginate', '--slurp'])) as
       { number: number; comments?: number; pull_request?: unknown }[];
     let ripe = 0;
+    let failed = false;
     // An item with no comments has no answers, so it isn't read any further.
     const readable = rows.filter((r) => r.comments !== 0);
     if (once) {
@@ -351,11 +521,19 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     for (const row of readable) {
       const ref: Ref = { owner: repo.owner, repo: repo.repo, n: row.number };
       const name = refString(ref);
-      if (running.has(name)) continue;
-      const answers = await waitingAnswers(gh, [ref], out);
+      if (tracked.has(name)) continue;
+      // One item that can't be read doesn't keep the rest of the repo from being served.
+      let answers: Found[];
+      try {
+        answers = (await waitingAnswers(gh, [ref], out)).filter((f) => !refused.has(f.id));
+      } catch (e) {
+        failed = true;
+        err(`Couldn't read ${name}: ${message(e)}`);
+        continue;
+      }
       if (!answers.some((f) => deps.now() - Date.parse(f.createdAt) >= config.graceMs)) continue;
       ripe++;
-      if (running.size + planned >= config.maxSessions) {
+      if (live() + planned >= config.maxSessions) {
         out(`${name} has answers nobody picked up, but ${config.maxSessions} ${config.maxSessions === 1 ? 'session is' : 'sessions are'} already running; it waits for one to finish.`);
         continue;
       }
@@ -365,18 +543,34 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         err(`Couldn't start a session for ${name}: ${message(e)}`);
       }
     }
-    return ripe;
+    return { ripe, failed };
   }
 
-  out(`${dryRun ? 'Dry run: claims nothing, creates nothing, starts nothing. ' : ''}Looking every ${config.pollMs / 1000} s in ${config.repos.map((r) => `${r.owner}/${r.repo}`).join(', ')} for answers unclaimed after ${config.graceMs / MIN} min; at most ${config.maxSessions} sessions at once.`);
+  // A repo it can't serve is logged once and left out; the others carry on.
+  const repos: RepoConfig[] = [];
+  for (const r of config.repos) {
+    const why = !deps.files.isDirectory(r.clone) ? `${r.clone}, the clone of ${r.owner}/${r.repo}, isn't a directory` : await markProblem(r);
+    if (why) err(`Skipping ${r.owner}/${r.repo}: ${why}`);
+    else repos.push(r);
+  }
+  if (repos.length === 0) {
+    err('No repo is left to serve.');
+    return 1;
+  }
+
+  loadState();
+  out(`${dryRun ? 'Dry run: claims nothing, creates nothing, starts nothing. ' : ''}Looking every ${config.pollMs / 1000} s in ${repos.map((r) => `${r.owner}/${r.repo}`).join(', ')} for answers unclaimed after ${config.graceMs / MIN} min; at most ${config.maxSessions} sessions at once.`);
   let failures = 0;
   for (;;) {
     planned = 0;
+    await sweep();
     let failed = false;
     let ripe = 0;
-    for (const repo of config.repos) {
+    for (const repo of repos) {
       try {
-        ripe += await serveRepo(repo);
+        const served = await serveRepo(repo);
+        ripe += served.ripe;
+        failed ||= served.failed;
       } catch (e) {
         failed = true;
         err(`${new Date(deps.now()).toISOString()} ${repo.owner}/${repo.repo}: ${message(e)}`);
@@ -393,7 +587,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     await deps.sleep(wait, deps.signal);
     if (deps.signal?.aborted) break;
   }
-  out(`Stopping; leaving ${running.size} ${running.size === 1 ? 'session' : 'sessions'} running.`);
+  out(`Stopping; leaving ${live()} ${live() === 1 ? 'session' : 'sessions'} running.`);
   return 0;
 }
 
@@ -431,7 +625,13 @@ if (import.meta.main) {
       isDirectory: (p) => { try { return statSync(p).isDirectory(); } catch { return false; } },
       isExecutable: (p) => { try { accessSync(p, constants.X_OK); return statSync(p).isFile(); } catch { return false; } },
       mkdir: (p) => { mkdirSync(p, { recursive: true }); },
+      write: (p, text) => {
+        const temporary = `${p}.tmp`;
+        writeFileSync(temporary, text);
+        renameSync(temporary, p);
+      },
     },
+    kill: (pid, signal) => { process.kill(pid, signal); },
     homedir: homedir(),
     env: process.env,
     now: Date.now,
