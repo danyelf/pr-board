@@ -17,7 +17,7 @@ const WRITTEN = '2026-11-08T10:00:00.000Z';
 const asking: Status = { waitingOn: 'owner', since: null, ask: 'look', questions: [{ n: 1, text: 'Colour?', choices: ['leave', 'change'], defaultChoice: 'leave' }], toTest: null, writtenAt: WRITTEN };
 
 interface Comment { id: number; user: { login: string }; body: string; html_url: string; created_at: string; updated_at: string }
-interface Item { kind: 'pr' | 'issue'; branch: string; body: string; comments: Comment[]; labelled: boolean }
+interface Item { kind: 'pr' | 'issue'; branch: string; headRepo: string; body: string; comments: Comment[]; labelled: boolean }
 interface Started { cmd: string; args: string[]; opts: SpawnOptions; finish: (code: number) => void }
 
 class World {
@@ -36,6 +36,8 @@ class World {
   /** Worktrees by clone: branch → path. */
   worktrees = new Map<string, Map<string, string>>([[`${HOME}/code/x`, new Map([['main', `${HOME}/code/x`]])], [`${HOME}/code/y`, new Map([['main', `${HOME}/code/y`]])]]);
   localBranches = new Set<string>();
+  /** Worktree paths git lists as prunable (their folder is gone). */
+  prunable = new Set<string>();
   ghCalls: { line: string; token: string | undefined }[] = [];
   gitCalls: string[] = [];
   started: Started[] = [];
@@ -44,8 +46,14 @@ class World {
     this.files.set(CONFIG_PATH, JSON.stringify({ repos: [{ repo: 'acme/x', clone: '~/code/x' }, { repo: 'acme/y', clone: '~/code/y' }], ...over }));
   }
 
+  /** Adds a worktree on `branch`, with its folder. */
+  worktree(clone: string, branch: string, path: string): void {
+    this.worktrees.get(clone)!.set(branch, path);
+    this.dirs.add(path);
+  }
+
   item(ref: string, kind: 'pr' | 'issue' = 'pr', branch = 'feature-a'): Item {
-    const it: Item = { kind, branch, body: renderStatus(asking), comments: [], labelled: true };
+    const it: Item = { kind, branch, headRepo: ref.split('#')[0]!, body: renderStatus(asking), comments: [], labelled: true };
     this.items.set(ref, it);
     return it;
   }
@@ -85,8 +93,11 @@ class World {
       const it = this.items.get(`${item[1]}#${item[2]}`)!;
       return JSON.stringify({ state: 'open', body: it.kind === 'pr' ? it.body : 'issue text', ...(it.kind === 'pr' ? { pull_request: {} } : {}) });
     }
-    const head = /^api repos\/([^/]+\/[^/]+)\/pulls\/(\d+) -q \.head\.ref$/.exec(line);
-    if (head) return `${this.items.get(`${head[1]}#${head[2]}`)!.branch}\n`;
+    const head = /^api repos\/([^/]+\/[^/]+)\/pulls\/(\d+) -q .*head\.ref.*$/.exec(line);
+    if (head) {
+      const it = this.items.get(`${head[1]}#${head[2]}`)!;
+      return `${it.headRepo}\t${it.branch}\n`;
+    }
     if (/^api repos\/[^/]+\/[^/]+ -q \.default_branch$/.test(line)) return 'main\n';
     const eyes = /^api repos\/[^/]+\/[^/]+\/issues\/comments\/(\d+)\/reactions\?content=eyes&per_page=100 --paginate --slurp$/.exec(line);
     if (eyes) return JSON.stringify([(this.reactions.get(Number(eyes[1])) ?? []).map((login) => ({ user: { login }, content: 'eyes' }))]);
@@ -111,7 +122,8 @@ class World {
       throw new Error('git config failed: ');
     }
     if (cmd === 'worktree list --porcelain') {
-      return [...(this.worktrees.get(clone) ?? [])].map(([b, p]) => `worktree ${p}\nHEAD 0123abcd\nbranch refs/heads/${b}\n`).join('\n');
+      return [...(this.worktrees.get(clone) ?? [])]
+        .map(([b, p]) => `worktree ${p}\nHEAD 0123abcd\nbranch refs/heads/${b}\n${this.prunable.has(p) ? 'prunable gitdir file points to non-existent location\n' : ''}`).join('\n');
     }
     if (rest[0] === 'fetch') return '';
     if (rest[0] === 'rev-parse') {
@@ -122,6 +134,7 @@ class World {
       const b = rest.includes('-b') ? rest[rest.indexOf('-b') + 1]! : rest[rest.length - 1]!;
       const path = rest.find((a) => a.startsWith('/'))!;
       this.worktrees.get(clone)!.set(b, path);
+      this.dirs.add(path);
       return '';
     }
     throw new Error(`unexpected git call: ${args.join(' ')}`);
@@ -221,7 +234,7 @@ describe('mac-service', () => {
     const w = new World();
     w.config({ claudeArgs: ['--permission-mode', 'acceptEdits'] });
     w.item('acme/x#5');
-    w.worktrees.get(`${HOME}/code/x`)!.set('feature-a', `${HOME}/code/x/.claude/worktrees/feature-a`);
+    w.worktree(`${HOME}/code/x`, 'feature-a', `${HOME}/code/x/.claude/worktrees/feature-a`);
     const id = w.answer('acme/x#5', 6);
     const r = await run(w, ['--once']);
     expect(r.code).toBe(0);
@@ -270,8 +283,8 @@ describe('mac-service', () => {
     w.answer('acme/x#5', 6);
     await run(w, ['--once']);
     const path = `${HOME}/code/x/.claude/worktrees/fix/thing`;
-    expect(w.gitCalls).toContain(`-C ${HOME}/code/x fetch origin fix/thing`);
-    expect(w.gitCalls).toContain(`-C ${HOME}/code/x worktree add --track -b fix/thing ${path} origin/fix/thing`);
+    expect(w.gitCalls).toContain(`-C ${HOME}/code/x fetch -- origin fix/thing`);
+    expect(w.gitCalls).toContain(`-C ${HOME}/code/x worktree add --track -b fix/thing -- ${path} origin/fix/thing`);
     expect(w.started[0]!.opts.cwd).toBe(path);
   });
 
@@ -282,7 +295,7 @@ describe('mac-service', () => {
     w.localBranches.add('feature-a');
     w.answer('acme/x#5', 6);
     await run(w, ['--once']);
-    expect(w.gitCalls).toContain(`-C ${HOME}/code/x worktree add ${HOME}/code/x/.claude/worktrees/feature-a feature-a`);
+    expect(w.gitCalls).toContain(`-C ${HOME}/code/x worktree add -- ${HOME}/code/x/.claude/worktrees/feature-a feature-a`);
   });
 
   it('creates an issue-N worktree on a new branch from the default branch for an issue', async () => {
@@ -292,8 +305,8 @@ describe('mac-service', () => {
     w.answer('acme/y#7', 6);
     await run(w, ['--once']);
     const path = `${HOME}/code/y/.claude/worktrees/issue-7`;
-    expect(w.gitCalls).toContain(`-C ${HOME}/code/y fetch origin main`);
-    expect(w.gitCalls).toContain(`-C ${HOME}/code/y worktree add -b issue-7 ${path} origin/main`);
+    expect(w.gitCalls).toContain(`-C ${HOME}/code/y fetch -- origin main`);
+    expect(w.gitCalls).toContain(`-C ${HOME}/code/y worktree add --no-track -b issue-7 -- ${path} origin/main`);
     expect(w.started[0]!.opts.cwd).toBe(path);
     expect(w.started[0]!.args[1]).toContain('Read the issue');
   });
@@ -302,11 +315,69 @@ describe('mac-service', () => {
     const w = new World();
     w.config();
     w.item('acme/y#7', 'issue');
-    w.worktrees.get(`${HOME}/code/y`)!.set('issue-7', '/elsewhere/issue-7');
+    w.worktree(`${HOME}/code/y`, 'issue-7', '/elsewhere/issue-7');
     w.answer('acme/y#7', 6);
     await run(w, ['--once']);
     expect(w.gitCalls.some((c) => c.includes('worktree add'))).toBe(false);
     expect(w.started[0]!.opts.cwd).toBe('/elsewhere/issue-7');
+  });
+
+  describe('which worktree it will work in', () => {
+    const X = `${HOME}/code/x`;
+    const refused = async (w: World, why: string) => {
+      const r = await run(w, ['--once']);
+      expect(w.started).toHaveLength(0);
+      expect(w.posts()).toHaveLength(0);
+      expect(w.gitCalls.some((c) => c.includes('worktree add'))).toBe(false);
+      expect(r.err).toContain(why);
+    };
+
+    it('never works in the main checkout, even when the PR’s branch is the one checked out there', async () => {
+      const w = new World();
+      w.config();
+      w.item('acme/x#5', 'pr', 'main');
+      w.answer('acme/x#5', 6);
+      await refused(w, 'checked out in the main checkout');
+    });
+
+    it('does not reuse a worktree git lists as prunable, and makes a new one instead', async () => {
+      const w = new World();
+      w.config();
+      w.item('acme/x#5');
+      w.worktree(X, 'feature-a', `${X}/.claude/worktrees/feature-a`);
+      w.prunable.add(`${X}/.claude/worktrees/feature-a`);
+      w.dirs.delete(`${X}/.claude/worktrees/feature-a`);
+      w.answer('acme/x#5', 6);
+      await run(w, ['--once']);
+      expect(w.gitCalls.some((c) => c.includes('worktree add'))).toBe(true);
+      expect(w.started[0]!.opts.cwd).toBe(`${X}/.claude/worktrees/feature-a`);
+    });
+
+    it('refuses a worktree whose path is not a directory', async () => {
+      const w = new World();
+      w.config();
+      w.item('acme/x#5');
+      w.worktree(X, 'feature-a', '/gone/feature-a');
+      w.dirs.delete('/gone/feature-a');
+      w.answer('acme/x#5', 6);
+      await refused(w, "worktree /gone/feature-a for feature-a isn't a directory");
+    });
+
+    it('refuses a PR whose branch comes from a fork', async () => {
+      const w = new World();
+      w.config();
+      w.item('acme/x#5').headRepo = 'stranger/x';
+      w.answer('acme/x#5', 6);
+      await refused(w, 'stranger/x');
+    });
+
+    it('refuses a branch name that git would read as an option', async () => {
+      const w = new World();
+      w.config();
+      w.item('acme/x#5', 'pr', '--upload-pack=evil');
+      w.answer('acme/x#5', 6);
+      await refused(w, 'starts with "-"');
+    });
   });
 
   it('refuses to start a session in a repo not marked claude.bot, and leaves the answer unclaimed', async () => {

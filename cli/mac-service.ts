@@ -117,11 +117,19 @@ export function loadConfig(text: string, home: string, path: string): Config {
   };
 }
 
-/** The worktree checked out on `branch`, from `git worktree list --porcelain`, or null. */
+/**
+ * The worktree checked out on `branch`, from `git worktree list --porcelain`, or null. Skips the
+ * ones git marks prunable (their folder is gone). Throws if the branch is checked out in the main
+ * checkout, which is the first entry: a session must never work there.
+ */
 function worktreeOn(porcelain: string, branch: string): string | null {
-  for (const block of porcelain.split(/\n\s*\n/)) {
-    const lines = block.split('\n');
-    if (lines.includes(`branch refs/heads/${branch}`)) return lines.find((l) => l.startsWith('worktree '))?.slice('worktree '.length) ?? null;
+  const blocks = porcelain.split(/\n\s*\n/).map((b) => b.split('\n')).filter((lines) => lines.some((l) => l.startsWith('worktree ')));
+  const pathOf = (lines: string[]) => lines.find((l) => l.startsWith('worktree '))!.slice('worktree '.length);
+  const main = blocks[0] ? pathOf(blocks[0]) : null;
+  for (const lines of blocks) {
+    if (!lines.includes(`branch refs/heads/${branch}`) || lines.some((l) => l === 'prunable' || l.startsWith('prunable '))) continue;
+    if (pathOf(lines) === main) throw new Error(`the branch ${branch} is checked out in the main checkout ${main}, and a session must not work there`);
+    return pathOf(lines);
   }
   return null;
 }
@@ -211,9 +219,21 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   const running = new Map<string, Session>();
   let planned = 0;
 
+  /** The PR's branch. Throws if it comes from another repo (a fork) or its name could be read as an option. */
+  async function prBranch(ref: Ref): Promise<string> {
+    const head = (await gh(['api', `repos/${ref.owner}/${ref.repo}/pulls/${ref.n}`, '-q', '(.head.repo.full_name // "") + "\t" + .head.ref'])).trim();
+    const [from = '', branch = ''] = head.split('\t');
+    if (from.toLowerCase() !== `${ref.owner}/${ref.repo}`.toLowerCase()) throw new Error(`its branch comes from ${from || 'a repo that is gone'}, not ${ref.owner}/${ref.repo}; a session only works on branches in the repo itself`);
+    if (branch === '' || branch.startsWith('-')) throw new Error(`its branch name ${JSON.stringify(branch)} is empty or starts with "-"`);
+    return branch;
+  }
+
   async function worktreeFor(repo: RepoConfig, ref: Ref, isPr: boolean, branch: string): Promise<string> {
     const found = worktreeOn(await deps.git(['-C', repo.clone, 'worktree', 'list', '--porcelain']), branch);
-    if (found) return found;
+    if (found) {
+      if (!deps.files.isDirectory(found)) throw new Error(`the worktree ${found} for ${branch} isn't a directory`);
+      return found;
+    }
     const path = join(repo.clone, '.claude', 'worktrees', branch);
     if (dryRun) {
       out(`Would create the worktree ${path} on ${isPr ? `the PR's branch ${branch}` : `a new branch ${branch} from the default branch`}.`);
@@ -221,16 +241,16 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     }
     const hasLocal = await deps.git(['-C', repo.clone, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).then(() => true, () => false);
     if (isPr) {
-      await deps.git(['-C', repo.clone, 'fetch', 'origin', branch]);
+      await deps.git(['-C', repo.clone, 'fetch', '--', 'origin', branch]);
       await deps.git(hasLocal
-        ? ['-C', repo.clone, 'worktree', 'add', path, branch]
-        : ['-C', repo.clone, 'worktree', 'add', '--track', '-b', branch, path, `origin/${branch}`]);
+        ? ['-C', repo.clone, 'worktree', 'add', '--', path, branch]
+        : ['-C', repo.clone, 'worktree', 'add', '--track', '-b', branch, '--', path, `origin/${branch}`]);
     } else {
       const base = (await gh(['api', `repos/${ref.owner}/${ref.repo}`, '-q', '.default_branch'])).trim();
-      await deps.git(['-C', repo.clone, 'fetch', 'origin', base]);
+      await deps.git(['-C', repo.clone, 'fetch', '--', 'origin', base]);
       await deps.git(hasLocal
-        ? ['-C', repo.clone, 'worktree', 'add', path, branch]
-        : ['-C', repo.clone, 'worktree', 'add', '-b', branch, path, `origin/${base}`]);
+        ? ['-C', repo.clone, 'worktree', 'add', '--', path, branch]
+        : ['-C', repo.clone, 'worktree', 'add', '--no-track', '-b', branch, '--', path, `origin/${base}`]);
     }
     out(`Created the worktree ${path} for ${refString(ref)}.`);
     return path;
@@ -250,7 +270,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       err(`Not starting a session for ${name}: ${config.tokenFile} is missing or empty, so the session couldn't act as Claude's own GitHub account.`);
       return;
     }
-    const branch = isPr ? (await gh(['api', `repos/${ref.owner}/${ref.repo}/pulls/${ref.n}`, '-q', '.head.ref'])).trim() : `issue-${ref.n}`;
+    const branch = isPr ? await prBranch(ref) : `issue-${ref.n}`;
     const cwd = await worktreeFor(repo, ref, isPr, branch);
 
     let mine = answers;
