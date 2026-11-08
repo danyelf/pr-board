@@ -125,6 +125,13 @@ async function issueComments<T extends { body: string }>(gh: Gh, ref: Ref): Prom
   return flattenPages(await gh(['api', url, '--paginate', '--slurp'])) as T[];
 }
 
+/** The text that holds an item's status, as the board reads it: a PR's description, or an issue's last status comment. */
+export async function readStatusText(gh: Gh, ref: Ref): Promise<string> {
+  const item = JSON.parse(await gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}`])) as { pull_request?: unknown; body?: string | null };
+  if (item.pull_request) return item.body ?? '';
+  return pickStatusComment(await issueComments(gh, ref))?.body ?? '';
+}
+
 /** Returns the names of labels that were wanted but don't exist in the repo. */
 async function syncLabels(gh: Gh, ref: Ref, waiting: SetOptions['waiting']): Promise<string[]> {
   const base = `repos/${ref.owner}/${ref.repo}`;
@@ -163,12 +170,7 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
     const ref = await parseRef(refText, deps.gh);
 
     if (command === 'show') {
-      const item = JSON.parse(await deps.gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}`])) as { pull_request?: unknown; body?: string | null };
-      let text = item.body ?? '';
-      if (!item.pull_request) {
-        text = pickStatusComment(await issueComments(deps.gh, ref))?.body ?? '';
-      }
-      out(JSON.stringify(parseStatus(text), null, 2));
+      out(JSON.stringify(parseStatus(await readStatusText(deps.gh, ref)), null, 2));
       return 0;
     }
 

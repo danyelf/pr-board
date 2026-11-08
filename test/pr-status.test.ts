@@ -93,6 +93,7 @@ describe('pr-status set', () => {
     expect(patches(r.calls)).toHaveLength(1);
     expect(w.body.startsWith('<!-- status -->\n**Waiting on:** Sam, since 2026-11-05T10:00:00.000Z')).toBe(true);
     expect(w.body).toContain('1. Colour?  (**red** | green)');
+    expect(w.body).toMatch(/\n<!-- status-data \{"v":1,"waitingOn":"owner",.*"fingerprint":"[0-9a-f]{8}"\} -->\n<!-- \/status -->/);
     expect(w.body.endsWith('<!-- /status -->\n\nOld description\n')).toBe(true);
     expect(w.labels.has('on sam')).toBe(true);
     expect(r.calls.some((c) => c.join(' ').includes('-X DELETE repos/acme/x/issues/5/labels/parked'))).toBe(true);
