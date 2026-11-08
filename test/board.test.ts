@@ -180,3 +180,58 @@ describe('buildBoard', () => {
     expect(board.generatedAt).toBe(NOW.toISOString());
   });
 });
+
+describe('buildBoard and answers', () => {
+  const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
+  const waitingPr = (answers: ReturnType<typeof facts>['answers']) => facts({
+    number: 700, labels: ['on sam'], body: renderStatus(status({ waitingOn: 'owner' }, 1)), lastActivityAt: minutesAgo(1), answers,
+  });
+  const answer = (id: string, m: number, claimed: boolean) => ({ id, url: `https://example.com/${id}`, at: minutesAgo(m), claimed });
+  const where = (b: ReturnType<typeof buildBoard>) =>
+    b.waiting.some((c) => c.facts.number === 700) ? 'waiting' : b.onClaude.some((c) => c.facts.number === 700) ? 'onClaude' : 'quiet';
+
+  it('leaves a card with no answers as it was', () => {
+    const b = buildBoard([waitingPr([])], [], NOW);
+    expect(where(b)).toBe('waiting');
+    expect(b.waiting[0]!.answerState).toBeNull();
+  });
+
+  it('moves an answered card to On Claude while the answer waits to be picked up, for 10 minutes', () => {
+    const b = buildBoard([waitingPr([answer('a', 9, false)])], [], NOW);
+    expect(where(b)).toBe('onClaude');
+    expect(b.onClaude[0]!.answerState).toBe('awaiting-pickup');
+    expect(b.onClaude[0]!.answerUrl).toBe('https://example.com/a');
+  });
+
+  it('brings it back to the top, saying so, once 10 minutes pass with no claim', () => {
+    const b = buildBoard([waitingPr([answer('a', 11, false)])], [], NOW);
+    expect(where(b)).toBe('waiting');
+    const card = b.waiting[0]!;
+    expect(card.answerState).toBe('not-picked-up');
+    expect(card.why).toBe('Answered, not picked up');
+    expect(card.waitingSince).toBe(minutesAgo(11));
+  });
+
+  it('keeps it on Claude once every answer is picked up, however long ago', () => {
+    const b = buildBoard([waitingPr([answer('a', 60, true), answer('b', 30, true)])], [], NOW);
+    expect(where(b)).toBe('onClaude');
+    expect(b.onClaude[0]!.answerState).toBe('picked-up');
+    expect(b.onClaude[0]!.answerUrl).toBe('https://example.com/b');
+  });
+
+  it('times the wait for pickup from the oldest answer not yet picked up', () => {
+    const b = buildBoard([waitingPr([answer('a', 30, true), answer('b', 11, false), answer('c', 2, false)])], [], NOW);
+    expect(b.waiting[0]!.answerState).toBe('not-picked-up');
+    expect(b.waiting[0]!.waitingSince).toBe(minutesAgo(11));
+  });
+
+  it('works out whether a card asks for the look, and the fingerprint of what it asks', () => {
+    const b = buildBoard([waitingPr([]), facts({ number: 701, labels: ['on sam'], prepDone: true, lastActivityAt: minutesAgo(1) })], [], NOW);
+    const c700 = b.waiting.find((c) => c.facts.number === 700)!;
+    const c701 = b.waiting.find((c) => c.facts.number === 701)!;
+    expect(c700.asksLook).toBe(true);
+    expect(c701.asksLook).toBe(false);
+    expect(c700.fingerprint).toMatch(/^[0-9a-f]{8}$/);
+    expect(c700.fingerprint).not.toBe(c701.fingerprint);
+  });
+});
