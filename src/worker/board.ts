@@ -36,7 +36,7 @@ export interface Card {
  * 'not-picked-up': still unclaimed after that, so it is back with the owner to notice.
  * 'picked-up': every answer has been claimed by a Claude session.
  */
-export type AnswerState = 'awaiting-pickup' | 'not-picked-up' | 'picked-up';
+type AnswerState = 'awaiting-pickup' | 'not-picked-up' | 'picked-up';
 
 export interface Board {
   waiting: Card[];

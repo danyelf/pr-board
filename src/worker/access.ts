@@ -10,6 +10,14 @@ export interface Env {
   ALLOW_LOCAL?: string;
 }
 
+/** The token answers are posted with, or null when answering isn't set up. */
+export function answerToken(env: Pick<Env, 'GITHUB_ANSWER_TOKEN'>): string | null {
+  return typeof env.GITHUB_ANSWER_TOKEN === 'string' && env.GITHUB_ANSWER_TOKEN !== '' ? env.GITHUB_ANSWER_TOKEN : null;
+}
+
+/** Said on the page, and on a refused post, while there is no answer token. */
+export const ANSWERING_NOT_SET_UP = "Answering isn't set up yet: the Worker has no GITHUB_ANSWER_TOKEN to post with.";
+
 // Cloudflare's signing keys are fetched on first use and then kept, so build the set once per team domain.
 const remoteKeys = new Map<string, JWTVerifyGetKey>();
 

@@ -3,6 +3,7 @@ import type { BoxState, ItemFacts } from '../shared/types.ts';
 import { FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, LOOK_QUESTION, NOTE_MAX, choicesFor, questionField } from '../shared/answer.ts';
 import { DAY_MS } from '../shared/names.ts';
 import { boxNamed } from '../shared/stage.ts';
+import { ANSWERING_NOT_SET_UP } from './access.ts';
 import { formatWait } from '../shared/turn.ts';
 
 const CSS = `
@@ -107,7 +108,7 @@ function byProject(cards: Card[], draw: (c: Card) => string): string {
     .join('\n');
 }
 
-export interface RenderOptions {
+interface RenderOptions {
   /** Whether the Worker can post answers. Without it the answer controls show, but Send is disabled. */
   answering: boolean;
   /** The item whose answers were just sent, to say so at the top. */
@@ -145,7 +146,7 @@ function answerForm(c: Card, answering: boolean): string {
   parts.push(`<textarea name="${FORM_FIELD.note}" maxlength="${NOTE_MAX}" placeholder="A note back (optional)" aria-label="A note back"></textarea>`);
   parts.push(answering
     ? '<div class="sendrow"><button type="submit" class="btn send">Send answers</button></div>'
-    : `<div class="sendrow"><button type="submit" class="btn send" disabled>Send answers</button><span class="age">${esc("Answering isn't set up yet: the Worker has no token to post with.")}</span></div>`);
+    : `<div class="sendrow"><button type="submit" class="btn send" disabled>Send answers</button><span class="age">${esc(ANSWERING_NOT_SET_UP)}</span></div>`);
   parts.push('</form>');
   return parts.join('\n    ');
 }
@@ -238,7 +239,7 @@ export function renderBoard(b: Board, opts: RenderOptions = { answering: false }
   const nothingWaiting = b.errors.length
     ? esc("Couldn't read everything from GitHub, so this list may be incomplete.")
     : 'Nothing is waiting on you.';
-  const waiting = b.waiting.length ? byProject(b.waiting, (c) => renderCard(c, opts)) :`<div class="empty">${nothingWaiting}</div>`;
+  const waiting = b.waiting.length ? byProject(b.waiting, (c) => renderCard(c, opts)) : `<div class="empty">${nothingWaiting}</div>`;
   const claude = b.onClaude.length ? byProject(b.onClaude, (c) => claudeRow(c, now)) : '<div class="empty">Nothing in progress.</div>';
   const quiet = b.quiet.length ? byProject(b.quiet, (c) => quietRow(c, now)) : '<div class="empty">Nothing quiet.</div>';
 

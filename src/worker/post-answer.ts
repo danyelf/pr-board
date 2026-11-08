@@ -3,6 +3,7 @@ import { OWNER_LOGIN } from '../shared/config.ts';
 import { FINGERPRINT_RE, statusFingerprint } from '../shared/fingerprint.ts';
 import { parseStatus, statusText } from '../shared/status.ts';
 import { effectiveTurn } from '../shared/turn.ts';
+import { ANSWERING_NOT_SET_UP, answerToken, type Env } from './access.ts';
 import type { fetchItem, postComment } from './github.ts';
 
 // Room for a full note of NOTE_MAX characters, every one of them escaped to several bytes, and the answers.
@@ -14,13 +15,13 @@ const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const NUMBER = /^[1-9]\d{0,9}$/;
 const KNOWN_FIELDS: readonly string[] = [FORM_FIELD.repo, FORM_FIELD.number, FORM_FIELD.fingerprint, FORM_FIELD.note];
 
-export interface AnswerDeps {
+interface AnswerDeps {
   fetchItem: typeof fetchItem;
   postComment: typeof postComment;
 }
 
 /** What to send back: a page saying why nothing was posted, or the item whose answers were posted. */
-export type AnswerResult = { status: number; title: string; text: string; link?: { href: string; text: string } } | { sent: string };
+type AnswerResult = { status: number; title: string; text: string; link?: { href: string; text: string } } | { sent: string };
 
 const refuse = (status: number, title: string, text: string, link?: { href: string; text: string }): AnswerResult =>
   ({ status, title, text, ...(link ? { link } : {}) });
@@ -54,7 +55,7 @@ async function readLimited(req: Request, max: number): Promise<string | null> {
  * posts it as a comment from the owner's account. The caller has already checked who is asking.
  */
 export async function postAnswer(
-  req: Request, env: { GITHUB_TOKEN: string; GITHUB_ANSWER_TOKEN?: string }, deps: AnswerDeps,
+  req: Request, env: Pick<Env, 'GITHUB_TOKEN' | 'GITHUB_ANSWER_TOKEN'>, deps: AnswerDeps,
 ): Promise<AnswerResult> {
   // A form on another site can post here with the owner's Access cookie; only this page's own forms may.
   if (req.headers.get('Origin') !== new URL(req.url).origin) {
@@ -66,10 +67,8 @@ export async function postAnswer(
   const text = await readLimited(req, MAX_BODY_BYTES);
   if (text === null) return refuse(413, 'Not sent', `The answers were more than ${MAX_BODY_BYTES / 1024} KB.`);
 
-  const answerToken = env.GITHUB_ANSWER_TOKEN ?? '';
-  if (answerToken === '') {
-    return refuse(503, 'Not sent', "Answering isn't set up: the Worker has no GITHUB_ANSWER_TOKEN to post with.");
-  }
+  const token = answerToken(env);
+  if (token === null) return refuse(503, 'Not sent', ANSWERING_NOT_SET_UP);
 
   const form = new URLSearchParams(text);
   const seen = new Set<string>();
@@ -125,7 +124,7 @@ export async function postAnswer(
 
   let posted: { login: string | null };
   try {
-    posted = await deps.postComment(answerToken, repo, Number(number), body);
+    posted = await deps.postComment(token, repo, Number(number), body);
   } catch (e) {
     return refuse(502, 'Not sent', `GitHub didn't take the answers for ${ref}: ${e instanceof Error ? e.message : String(e)}`);
   }

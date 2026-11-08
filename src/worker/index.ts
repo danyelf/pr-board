@@ -1,6 +1,6 @@
 import type { JWTVerifyGetKey } from 'jose';
 import type { ItemFacts } from '../shared/types.ts';
-import { checkAccess, type Env } from './access.ts';
+import { answerToken, checkAccess, type Env } from './access.ts';
 import { buildBoard } from './board.ts';
 import { fetchItem, fetchItems, postComment } from './github.ts';
 import { ITEM_REF, postAnswer } from './post-answer.ts';
@@ -32,13 +32,9 @@ export interface Handler {
   fetch(req: Request, env: Env): Promise<Response>;
 }
 
-/** One cached board per minute. */
+/** One cached board per CACHE_SECONDS. */
 function cacheKey(at: Date): Request {
-  return new Request(`https://pr-board.internal/items?minute=${Math.floor(at.getTime() / 60_000)}`);
-}
-
-function answeringSetUp(env: Env): boolean {
-  return typeof env.GITHUB_ANSWER_TOKEN === 'string' && env.GITHUB_ANSWER_TOKEN !== '';
+  return new Request(`https://pr-board.internal/items?slot=${Math.floor(at.getTime() / (CACHE_SECONDS * 1000))}`);
 }
 
 export function makeHandler(deps: Deps): Handler {
@@ -100,7 +96,7 @@ export function makeHandler(deps: Deps): Handler {
       const sentParam = url.searchParams.get('sent');
       const sent = sentParam !== null && ITEM_REF.test(sentParam) ? sentParam : null;
       const { items, errors } = await load(env, at, sent !== null);
-      return new Response(renderBoard(buildBoard(items, errors, at), { answering: answeringSetUp(env), sent }), { headers: PAGE_HEADERS });
+      return new Response(renderBoard(buildBoard(items, errors, at), { answering: answerToken(env) !== null, sent }), { headers: PAGE_HEADERS });
     },
   };
 }

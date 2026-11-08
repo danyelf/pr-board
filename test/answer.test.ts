@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   FILE_AN_ISSUE, FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, NOTE_MAX, answersCurrentStatus, asksForLook, checkAnswer, choicesFor,
@@ -19,6 +20,11 @@ describe('the look question', () => {
   it('has looks good, prep for merge as its default, then needs changes and file an issue', () => {
     expect(LOOK_CHOICES).toEqual(['looks good, prep for merge', 'needs changes', 'file an issue']);
     expect(LOOK_DEFAULT).toBe('looks good, prep for merge');
+  });
+
+  it("is spelled the same in the skill that tells Claude what to do with each answer", () => {
+    const skill = readFileSync(new URL('../skill/pr-status/SKILL.md', import.meta.url), 'utf8');
+    for (const c of LOOK_CHOICES) expect(skill).toContain(`**${c}**`);
   });
 
   it("is asked of an open PR on the owner's turn that hasn't had prep", () => {

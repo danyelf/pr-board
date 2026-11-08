@@ -1,26 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { sha256Hex, statusFingerprint } from '../src/shared/fingerprint.ts';
+import { FINGERPRINT_RE, fnv1a, statusFingerprint } from '../src/shared/fingerprint.ts';
 import { status } from './helpers.ts';
 
-describe('sha256Hex', () => {
-  it('matches the published test values', () => {
-    expect(sha256Hex('')).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
-    expect(sha256Hex('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
-    expect(sha256Hex('abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq'))
-      .toBe('248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1');
+describe('fnv1a', () => {
+  it('matches the published 32-bit FNV-1a test values', () => {
+    expect(fnv1a('')).toBe(0x811c9dc5);
+    expect(fnv1a('a')).toBe(0xe40c292c);
+    expect(fnv1a('foobar')).toBe(0xbf9cf968);
   });
 
-  it('hashes text beyond plain ASCII as UTF-8', () => {
-    // From: printf 'é→' | shasum -a 256
-    expect(sha256Hex('é→')).toBe('04d4630cd3db3cffd5d551f99e844edcc4dd716925f05300ff91614af5439420');
+  it('hashes text beyond plain ASCII as UTF-8 bytes', () => {
+    // 'é' is the two bytes C3 A9; worked through the FNV-1a steps by hand.
+    expect(fnv1a('é')).toBe(0x1e9de8c1);
   });
 });
 
 describe('statusFingerprint', () => {
   const base = status({ ask: 'look' }, 2);
 
-  it('is 8 hex digits', () => {
-    expect(statusFingerprint(base)).toMatch(/^[0-9a-f]{8}$/);
+  it('is 8 hex digits, the shape answers are checked for', () => {
+    expect(statusFingerprint(base)).toMatch(FINGERPRINT_RE);
+    expect(FINGERPRINT_RE.source).toBe('^[0-9a-f]{8}$');
+  });
+
+  it('is the FNV-1a hash of what the status asks, written as JSON, in 8 hex digits', () => {
+    expect(statusFingerprint(null)).toBe(fnv1a('{"ask":"","questions":[]}').toString(16).padStart(8, '0'));
   });
 
   it('changes with the ask, a question, a choice or the default', () => {
