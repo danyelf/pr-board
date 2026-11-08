@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { pickStatusComment } from '../src/shared/status.ts';
 
-export type Gh = (args: string[], opts?: { cwd?: string }) => Promise<string>;
+/** Runs a command. `env`, when given, replaces the environment it runs in. */
+export type Gh = (args: string[], opts?: { cwd?: string; env?: NodeJS.ProcessEnv }) => Promise<string>;
 
 export interface Deps {
   gh: Gh;
@@ -29,7 +30,7 @@ export async function currentRepo(gh: Gh, cwd?: string): Promise<{ owner: string
 function run(command: string): Gh {
   return (args, opts) =>
     new Promise((resolve, reject) => {
-      execFile(command, args, { cwd: opts?.cwd, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+      execFile(command, args, { cwd: opts?.cwd, env: opts?.env, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
         if (error) reject(new Error(`${command} ${args.join(' ')} failed: ${stderr.trim() || error.message}`));
         else resolve(stdout);
       });

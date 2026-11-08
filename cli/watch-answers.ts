@@ -26,7 +26,7 @@ interface RestComment {
 }
 
 /** An answer comment nobody has claimed yet. */
-interface Found { ref: Ref; id: number; url: string; answer: Answer }
+export interface Found { ref: Ref; id: number; url: string; createdAt: string; answer: Answer }
 
 const base = (ref: Ref) => `repos/${ref.owner}/${ref.repo}`;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -60,7 +60,7 @@ async function eyesOn(gh: Gh, ref: Ref, c: RestComment): Promise<{ login: string
  * Reads each item. Drops, saying so, the ones that are closed or merged, since no answer will come
  * for them. Returns the owner's answers still waiting on the rest, oldest first within each item.
  */
-async function waitingAnswers(gh: Gh, refs: Ref[], say: (line: string) => void): Promise<Found[]> {
+export async function waitingAnswers(gh: Gh, refs: Ref[], say: (line: string) => void): Promise<Found[]> {
   const found: Found[] = [];
   for (const ref of [...refs]) {
     const item = await readItem<RestComment>(gh, ref);
@@ -74,7 +74,7 @@ async function waitingAnswers(gh: Gh, refs: Ref[], say: (line: string) => void):
       const seen: CommentSeen = { login: c.user?.login, body: c.body, createdAt: c.created_at };
       // Reactions are read only for the answers to the current status.
       if (!answersCurrentStatus(seen, writtenAt) || !isWaitingAnswer(seen, writtenAt, await eyesOn(gh, ref, c))) continue;
-      found.push({ ref, id: c.id, url: c.html_url, answer: parseAnswer(c.body)! });
+      found.push({ ref, id: c.id, url: c.html_url, createdAt: c.created_at, answer: parseAnswer(c.body)! });
     }
   }
   return found;
@@ -84,13 +84,13 @@ async function waitingAnswers(gh: Gh, refs: Ref[], say: (line: string) => void):
  * Adds this account's 👀 to the answer. GitHub says 201 when the reaction is new and 200 when this
  * account had already reacted, which means another session running as the same account claimed it first.
  */
-async function claim(gh: Gh, f: Found): Promise<boolean> {
+export async function claim(gh: Gh, f: Found): Promise<boolean> {
   const res = await gh(['api', '-X', 'POST', `${base(f.ref)}/issues/comments/${f.id}/reactions`, '-f', 'content=eyes', '--include']);
   return /^HTTP\/\S+\s+201\b/.test(res);
 }
 
 /** The answers in words, with whether they still answer the item's current questions. */
-async function describe(gh: Gh, f: Found): Promise<string> {
+export async function describe(gh: Gh, f: Found): Promise<string> {
   const lines = [`${refString(f.ref)}: ${f.url}`];
   let current: string | null = null;
   let status: Status | null = null;
