@@ -5,8 +5,10 @@
   ],
   "graceMinutes": 5,
   "maxSessions": 2,
+  "sessionMinutes": 60,
   "pollSeconds": 60,
   "logDir": "~/.pr-board/logs",
+  "stateDir": "~/.pr-board",
   "tokenFile": "~/.config/claude-github/token",
   "claude": "~/.local/bin/claude",
   "claudeArgs": []
