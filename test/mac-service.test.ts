@@ -24,6 +24,16 @@ class World {
   items = new Map<string, Item>();
   reactions = new Map<number, string[]>();
   me = 'robot';
+  /** From this many "which account" calls on, gh answers as the owner (the token was swapped). */
+  ownerFromCall = Infinity;
+  userCalls = 0;
+  /** The id of each comment's reaction from the service's account. */
+  reactionIds = new Map<number, number>();
+  nextReaction = 900;
+  failWorktreeAdd = false;
+  /** When set, the next session fails to start, the way a missing program does. */
+  spawnError: Error | null = null;
+  deleted: string[] = [];
   lostRace = new Set<number>();
   failLists = 0;
   nextId = 100;
@@ -75,7 +85,10 @@ class World {
   gh: Gh = async (args, opts) => {
     const line = args.join(' ');
     this.ghCalls.push({ line, token: opts?.env?.GH_TOKEN });
-    if (line === 'api user -q .login') return `${this.me}\n`;
+    if (line === 'api user -q .login') {
+      this.userCalls++;
+      return `${this.userCalls >= this.ownerFromCall ? 'sam-gh' : this.me}\n`;
+    }
     const list = /^api repos\/([^/]+\/[^/]+)\/issues\?labels=on%20sam&state=open&per_page=100 --paginate --slurp$/.exec(line);
     if (list) {
       if (list[1] === 'acme/x' && this.failLists > 0) { this.failLists--; throw new Error('gh: HTTP 502 Bad Gateway'); }
@@ -106,8 +119,20 @@ class World {
       const id = Number(react[1]);
       const who = this.reactions.get(id) ?? [];
       const already = who.includes(this.me) || this.lostRace.has(id);
-      if (!who.includes(this.me)) this.reactions.set(id, [...who, this.me]);
-      return already ? 'HTTP/2.0 200 OK\n\n{}' : 'HTTP/2.0 201 Created\n\n{}';
+      if (!who.includes(this.me)) {
+        this.reactions.set(id, [...who, this.me]);
+        this.reactionIds.set(id, this.nextReaction++);
+      }
+      return already ? 'HTTP/2.0 200 OK\n\n{}' : `HTTP/2.0 201 Created\n\n{"id": ${this.reactionIds.get(id)}}`;
+    }
+    const unreact = /^api -X DELETE repos\/[^/]+\/[^/]+\/issues\/comments\/(\d+)\/reactions\/(\d+)$/.exec(line);
+    if (unreact) {
+      const id = Number(unreact[1]);
+      if (this.reactionIds.get(id) !== Number(unreact[2])) throw new Error('gh: HTTP 404 Not Found');
+      this.reactions.set(id, (this.reactions.get(id) ?? []).filter((l) => l !== this.me));
+      this.reactionIds.delete(id);
+      this.deleted.push(line);
+      return '';
     }
     throw new Error(`unexpected gh call: ${line}`);
   };
@@ -131,6 +156,7 @@ class World {
       throw new Error('git rev-parse failed: ');
     }
     if (rest[0] === 'worktree' && rest[1] === 'add') {
+      if (this.failWorktreeAdd) throw new Error('git worktree add failed: disk full');
       const b = rest.includes('-b') ? rest[rest.indexOf('-b') + 1]! : rest[rest.length - 1]!;
       const path = rest.find((a) => a.startsWith('/'))!;
       this.worktrees.get(clone)!.set(b, path);
@@ -174,7 +200,9 @@ async function run(world: World, argv: string[], onSleep: (count: number, ms: nu
       let finish: (code: number) => void = () => {};
       const exited = new Promise<number | null>((resolve) => { finish = resolve; });
       world.started.push({ cmd, args, opts, finish });
-      return { pid: 4000 + world.started.length, exited };
+      const spawned = world.spawnError ? Promise.reject(world.spawnError) : Promise.resolve();
+      spawned.catch(() => {});
+      return { pid: 4000 + world.started.length, spawned, exited };
     },
     signal: stop.signal,
     out: (l) => out.push(l),
@@ -251,12 +279,13 @@ describe('mac-service', () => {
     expect(s.opts.logPath).toMatch(new RegExp(`^${HOME}/\\.pr-board/logs/acme-x-5-.*\\.log$`));
     const prompt = s.args[1]!;
     expect(prompt).toContain("Sam's answers from PR Board to acme/x#5");
+    expect(prompt).toContain(`in ${HOME}/code/x/.claude/worktrees/feature-a`);
     expect(prompt).toContain(`acme/x#5: https://github.com/acme/x/pull/5#issuecomment-${id}`);
     expect(prompt).toContain(`fingerprint ${statusFingerprint(asking)} matches the current status`);
     expect(prompt).toContain('1. Colour? → change');
-    expect(prompt).toContain('no chat memory');
-    expect(prompt).toContain('pr-status skill');
-    expect(prompt).toContain('pr-status set');
+    expect(prompt).toContain('Follow the pr-status skill under "Answers from the board"');
+    expect(prompt).toContain("Don't start the watcher");
+    expect(prompt).toContain('install dependencies');
     expect(r.out).toContain('Started a session for acme/x#5');
     // The service's own GitHub calls run as Claude's account too.
     expect(w.ghCalls.every((c) => c.token === 'tok-123')).toBe(true);
@@ -308,7 +337,7 @@ describe('mac-service', () => {
     expect(w.gitCalls).toContain(`-C ${HOME}/code/y fetch -- origin main`);
     expect(w.gitCalls).toContain(`-C ${HOME}/code/y worktree add --no-track -b issue-7 -- ${path} origin/main`);
     expect(w.started[0]!.opts.cwd).toBe(path);
-    expect(w.started[0]!.args[1]).toContain('Read the issue');
+    expect(w.started[0]!.args[1]).toContain(`in ${path}`);
   });
 
   it('reuses an issue-N worktree that already exists', async () => {
@@ -403,6 +432,49 @@ describe('mac-service', () => {
     expect(w.started).toHaveLength(0);
     expect(w.posts()).toHaveLength(0);
     expect(r.err).toContain(`${TOKEN_PATH} is missing or empty`);
+  });
+
+  describe('a claimed answer is never silently lost', () => {
+    it('claims nothing when something fails before the claim, such as making the worktree', async () => {
+      const w = new World();
+      w.config();
+      w.item('acme/x#5');
+      w.failWorktreeAdd = true;
+      w.answer('acme/x#5', 6);
+      const r = await run(w, ['--once']);
+      expect(w.posts()).toHaveLength(0);
+      expect(w.started).toHaveLength(0);
+      expect(r.err).toContain('disk full');
+    });
+
+    it('takes its 👀 back off when the session fails to start, and says so', async () => {
+      const w = new World();
+      w.config();
+      w.item('acme/x#5');
+      w.worktree(`${HOME}/code/x`, 'feature-a', `${HOME}/code/x/.claude/worktrees/feature-a`);
+      w.spawnError = new Error('spawn claude ENOENT');
+      const id = w.answer('acme/x#5', 6);
+      const r = await run(w, ['--once']);
+      expect(w.posts()).toHaveLength(1);
+      expect(w.deleted).toEqual([`api -X DELETE repos/acme/x/issues/comments/${id}/reactions/900`]);
+      expect(w.reactions.get(id)).toEqual([]);
+      expect(r.err).toContain('spawn claude ENOENT');
+      expect(r.err).toContain('Took this account\'s 👀 back off');
+      expect(r.out).not.toContain('Started a session');
+    });
+
+    it('refuses to claim when the token turns out to be the owner’s at the moment of the claim', async () => {
+      const w = new World();
+      w.config();
+      w.ownerFromCall = 2;
+      w.item('acme/x#5');
+      w.worktree(`${HOME}/code/x`, 'feature-a', `${HOME}/code/x/.claude/worktrees/feature-a`);
+      w.answer('acme/x#5', 6);
+      const r = await run(w, ['--once']);
+      expect(w.posts()).toHaveLength(0);
+      expect(w.started).toHaveLength(0);
+      expect(r.err).toContain("signed in as sam-gh, the board's owner");
+    });
   });
 
   it('skips an answer another session claimed first', async () => {

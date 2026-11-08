@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { OWNER_NAME } from '../src/shared/config.ts';
 import { CLAUDE_BOT_KEY, LABEL_ON_OWNER, PICKUP_GRACE_MS, SERVICE_GRACE_MS } from '../src/shared/names.ts';
-import { claim, describe, waitingAnswers, type Found } from './answers.ts';
+import { claim, describe, unclaim, waitingAnswers, type Found } from './answers.ts';
 import { OwnerError, flattenPages, gh as realGh, git as realGit, refString, refuseOwner } from './gh.ts';
 import type { Gh, Ref } from './gh.ts';
 import { backoff, message } from './poll.ts';
@@ -41,7 +41,15 @@ export interface Config {
 export interface SpawnOptions { cwd: string; env: NodeJS.ProcessEnv; logPath: string }
 
 /** A session started in the background: its process id and when it ends (with its exit code, or null). */
-export interface Session { pid: number | undefined; exited: Promise<number | null> }
+export interface Session {
+  pid: number | undefined;
+  /** Settles when the process has started, and rejects if it couldn't. */
+  spawned: Promise<void>;
+  exited: Promise<number | null>;
+}
+
+/** An answer this service claimed, with the id of its 👀 reaction. */
+interface Claimed { found: Found; reactionId: number | null }
 
 export interface ServiceDeps {
   gh: Gh;
@@ -134,17 +142,14 @@ function worktreeOn(porcelain: string, branch: string): string | null {
   return null;
 }
 
-/** What the fresh session is told: the answers, as the watcher prints them, and how to act on them. */
-function promptFor(ref: Ref, isPr: boolean, described: string[]): string {
-  const kind = isPr ? 'PR' : 'issue';
+/** What the fresh session is told: the answers, as the watcher prints them, and where to act on them. */
+function promptFor(ref: Ref, cwd: string, described: string[]): string {
   return [
-    `These are ${OWNER_NAME}'s answers from PR Board to ${refString(ref)}. No open Claude session picked them up, so the PR Board service on the Mac started this fresh session for them, in this ${kind}'s worktree, and claimed them with a 👀 so no other session takes them.`,
+    `${OWNER_NAME}'s answers from PR Board to ${refString(ref)}. Nobody picked them up, so the PR Board service on the Mac started this fresh session for them in ${cwd} and claimed them with a 👀.`,
     '',
     ...described.flatMap((d) => [d, '']),
-    `This session has no chat memory of ${refString(ref)}. Before acting:`,
-    `1) Read the ${kind} on GitHub and its status section (the pr-status skill's show command prints the status), and check this worktree's branch is up to date with GitHub.`,
-    '2) Act on the answers as the pr-status skill says under "Answers from the board". If an answer\'s fingerprint does not match the current status, apply nothing from it and ask again.',
-    `3) End by running pr-status set with the new state. Don't start the watcher: this session ends when you finish, and the service starts a new one for ${OWNER_NAME}'s next answers.`,
+    'Follow the pr-status skill under "Answers from the board". Don\'t start the watcher: this session ends when you finish.',
+    "The worktree may be new: install dependencies with the repo's package manager before running tests.",
   ].join('\n');
 }
 
@@ -198,11 +203,12 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       return null;
     }
   };
-  // The service's own GitHub calls, the claim among them, run as Claude's account when its token is there.
-  // Under launchd gh would otherwise use whichever account it is logged in as, often the owner's.
-  const gh: Gh = (args, opts) => {
+  // The service's own GitHub calls, the claim among them, run as Claude's account. With no token they
+  // refuse: under launchd gh would otherwise use whichever account it is logged in as, often the owner's.
+  const gh: Gh = async (args, opts) => {
     const token = readToken();
-    return deps.gh(args, { ...opts, env: token ? { ...deps.env, GH_TOKEN: token } : deps.env });
+    if (!token) throw new Error(`${config.tokenFile} is missing or empty, so there is no token for Claude's own GitHub account`);
+    return deps.gh(args, { ...opts, env: { ...deps.env, GH_TOKEN: token } });
   };
 
   const ownerAdvice = `The token in ${config.tokenFile} is the owner's; put Claude's own token there.`;
@@ -256,10 +262,25 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     return path;
   }
 
-  /** Checks it may act as Claude here, finds the worktree, claims the answers and starts the session. */
+  /** Takes this account's 👀 back off answers it claimed but can't serve, so the board shows them as waiting again. */
+  async function giveBack(claims: Claimed[], why: string): Promise<void> {
+    for (const c of claims) {
+      try {
+        await unclaim(gh, c.found, c.reactionId);
+        err(`${why} Took this account's 👀 back off ${c.found.url} so a session can pick it up.`);
+      } catch (e) {
+        err(`${why} Couldn't take this account's 👀 off ${c.found.url} (${message(e)}); take it off by hand.`);
+      }
+    }
+  }
+
+  /**
+   * Finds the worktree and writes the prompt, all before anything is claimed, so an answer this
+   * service can't serve stays free for others. Then claims the answers and starts the session. If the
+   * session can't start, the claim is given back.
+   */
   async function startSession(repo: RepoConfig, ref: Ref, isPr: boolean, answers: Found[]): Promise<void> {
     const name = refString(ref);
-    // These checks come before the claim, so an answer this service can't serve stays free for others.
     const marked = await deps.git(['-C', repo.clone, 'config', '--local', '--get', CLAUDE_BOT_KEY]).then((s) => s.trim(), () => '');
     if (marked !== 'true') {
       err(`Not starting a session for ${name}: ${repo.clone} is not marked ${CLAUDE_BOT_KEY}=true, so the session would act as ${OWNER_NAME}'s own GitHub account. To let Claude act there under its own account: git -C ${repo.clone} config ${CLAUDE_BOT_KEY} true`);
@@ -272,37 +293,40 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     }
     const branch = isPr ? await prBranch(ref) : `issue-${ref.n}`;
     const cwd = await worktreeFor(repo, ref, isPr, branch);
-
-    let mine = answers;
-    if (!dryRun) {
-      mine = [];
-      for (const f of answers) {
-        try {
-          if (await claim(gh, f)) mine.push(f);
-          else out(`${f.url} was already claimed by another session; leaving it to that one.`);
-        } catch (e) {
-          err(`Couldn't claim ${f.url}: ${message(e)}`);
-        }
-      }
-      if (mine.length === 0) return;
-    }
-
-    const described: string[] = [];
-    for (const f of mine) described.push(await describe(gh, f));
-    const prompt = promptFor(ref, isPr, described);
-    const args = ['-p', prompt, '--name', `${ref.repo}#${ref.n} answers`, ...config.claudeArgs];
+    const described = new Map<number, string>();
+    for (const f of answers) described.set(f.id, await describe(gh, f));
+    const promptOf = (some: Found[]) => promptFor(ref, cwd, some.map((f) => described.get(f.id)!));
     const logPath = join(config.logDir, `${ref.owner}-${ref.repo}-${ref.n}-${new Date(deps.now()).toISOString().replace(/[:.]/g, '-')}.log`);
+    const argsFor = (prompt: string) => ['-p', prompt, '--name', `${ref.repo}#${ref.n} answers`, ...config.claudeArgs];
     if (dryRun) {
       planned++;
-      out(`Would claim and start: ${config.claude} -p <the prompt below> ${args.slice(2).join(' ')}\n  in ${cwd}\n  with GH_TOKEN from ${config.tokenFile}\n  output to ${logPath}\n  prompt:\n${indent(prompt)}`);
+      const args = argsFor(promptOf(answers));
+      out(`Would claim and start: ${config.claude} -p <the prompt below> ${args.slice(2).join(' ')}\n  in ${cwd}\n  with GH_TOKEN from ${config.tokenFile}\n  output to ${logPath}\n  prompt:\n${indent(args[1]!)}`);
       return;
     }
+    deps.files.mkdir(config.logDir);
+
+    // The last check before the claim: the token must not be the owner's, whose 👀 the board ignores.
+    await refuseOwner(gh, ownerAdvice);
+    const claimed: Claimed[] = [];
+    for (const f of answers) {
+      try {
+        const got = await claim(gh, f);
+        if (got) claimed.push({ found: f, reactionId: got.reactionId });
+        else out(`${f.url} was already claimed by another session; leaving it to that one.`);
+      } catch (e) {
+        err(`Couldn't claim ${f.url}: ${message(e)}`);
+      }
+    }
+    if (claimed.length === 0) return;
+
+    const args = argsFor(promptOf(claimed.map((c) => c.found)));
     let session: Session;
     try {
-      deps.files.mkdir(config.logDir);
       session = deps.spawn(config.claude, args, { cwd, env: { ...deps.env, GH_TOKEN: token }, logPath });
+      await session.spawned;
     } catch (e) {
-      err(`Claimed the answers on ${name} but couldn't start a session (${message(e)}). Nobody has them now: take this account's 👀 off ${mine.map((f) => f.url).join(', ')} so a session can pick them up.`);
+      await giveBack(claimed, `Couldn't start a session for ${name} (${message(e)}).`);
       return;
     }
     running.set(name, session);
@@ -378,6 +402,10 @@ function spawnDetached(command: string, args: string[], opts: SpawnOptions): Ses
   try {
     const child = spawnChild(command, args, { cwd: opts.cwd, env: opts.env, detached: true, stdio: ['ignore', fd, fd] });
     child.unref();
+    const spawned = new Promise<void>((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', reject);
+    });
     const exited = new Promise<number | null>((resolve) => {
       child.on('exit', (code) => resolve(code));
       child.on('error', (e) => {
@@ -385,7 +413,7 @@ function spawnDetached(command: string, args: string[], opts: SpawnOptions): Ses
         resolve(null);
       });
     });
-    return { pid: child.pid, exited };
+    return { pid: child.pid, spawned, exited };
   } finally {
     closeSync(fd);
   }
