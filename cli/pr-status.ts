@@ -1,6 +1,6 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { LABEL_ON_DANYEL, LABEL_PARKED, WAITING_ON, type WaitingOption } from '../src/shared/names.ts';
+import { LABEL_ON_OWNER, LABEL_PARKED, WAITING_ON, type WaitingOn } from '../src/shared/names.ts';
 import { STATUS_CLOSE, STATUS_OPEN, parseStatus, pickStatusComment, renderStatus, replaceStatus, statusValueProblem } from '../src/shared/status.ts';
 import type { Question, Status } from '../src/shared/types.ts';
 import { currentRepo, flattenPages, gh, isNotFound, refString } from './gh.ts';
@@ -21,7 +21,7 @@ export async function parseRef(text: string, gh: Gh): Promise<Ref> {
 }
 
 interface SetOptions {
-  waiting: WaitingOption;
+  waiting: WaitingOn;
   ask: string;
   questions: string[];
   toTest: string | null;
@@ -50,12 +50,12 @@ function parseSetArgs(args: string[]): SetOptions {
     else if (flag === '--to-test') opts.toTest = need();
     else throw new Error(`Unknown option ${flag}`);
   }
-  const chosen = WAITING_ON.find((w) => w.option === waiting);
+  const chosen = WAITING_ON.find((w) => w.role === waiting);
   if (!chosen) {
-    const options = WAITING_ON.map((w) => w.option);
+    const options = WAITING_ON.map((w) => w.role);
     throw new Error(`--waiting must be ${options.slice(0, -1).join(', ')} or ${options.at(-1)}`);
   }
-  opts.waiting = chosen.option;
+  opts.waiting = chosen.role;
   return opts;
 }
 
@@ -73,12 +73,12 @@ function buildQuestions(texts: string[]): Question[] {
 }
 
 function nextStatus(opts: SetOptions, questions: Question[], previous: Status | null, now: Date): Status {
-  const waitingOn = WAITING_ON.find((w) => w.option === opts.waiting)!.status;
+  const waitingOn = opts.waiting;
   const since = previous && previous.waitingOn === waitingOn && previous.since ? previous.since : now.toISOString();
   return { waitingOn, since, ask: opts.ask, questions, toTest: opts.toTest };
 }
 
-/** A PR that has just been handed to Danyel, and who opened it; null otherwise. */
+/** A PR that has just been handed to the owner, and who opened it; null otherwise. */
 type HandedOver = { author: string | null } | null;
 
 async function writeStatus(gh: Gh, ref: Ref, opts: SetOptions, questions: Question[], now: Date): Promise<HandedOver> {
@@ -93,7 +93,7 @@ async function writeStatus(gh: Gh, ref: Ref, opts: SetOptions, questions: Questi
     const previous = parseStatus(body);
     const status = nextStatus(opts, questions, previous, now);
     await gh(['api', '-X', 'PATCH', `${base}/pulls/${ref.n}`, '-f', `body=${replaceStatus(body, status)}`]);
-    const handedOver = opts.waiting === 'danyel' && previous?.waitingOn !== status.waitingOn;
+    const handedOver = opts.waiting === 'owner' && previous?.waitingOn !== status.waitingOn;
     return handedOver ? { author: item.user?.login ?? null } : null;
   }
   const login = (await gh(['api', 'user', '-q', '.login'])).trim();
@@ -138,8 +138,8 @@ async function issueComments<T extends { body: string }>(gh: Gh, ref: Ref): Prom
 /** Returns the names of labels that were wanted but don't exist in the repo. */
 async function syncLabels(gh: Gh, ref: Ref, waiting: SetOptions['waiting']): Promise<string[]> {
   const base = `repos/${ref.owner}/${ref.repo}`;
-  const add = waiting === 'danyel' ? [LABEL_ON_DANYEL] : waiting === 'nobody' ? [LABEL_PARKED] : [];
-  const remove = waiting === 'danyel' ? [LABEL_PARKED] : waiting === 'nobody' ? [LABEL_ON_DANYEL] : [LABEL_ON_DANYEL, LABEL_PARKED];
+  const add = waiting === 'owner' ? [LABEL_ON_OWNER] : waiting === 'nobody' ? [LABEL_PARKED] : [];
+  const remove = waiting === 'owner' ? [LABEL_PARKED] : waiting === 'nobody' ? [LABEL_ON_OWNER] : [LABEL_ON_OWNER, LABEL_PARKED];
   const missing: string[] = [];
   for (const name of add) {
     try {

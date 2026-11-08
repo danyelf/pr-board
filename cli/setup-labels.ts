@@ -1,4 +1,5 @@
-import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_DANYEL, LABEL_PARKED, REPO_WINDOW_DAYS } from '../src/shared/names.ts';
+import { OWNER_NAME } from '../src/shared/config.ts';
+import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_OWNER, LABEL_PARKED, REPO_WINDOW_DAYS } from '../src/shared/names.ts';
 import { flattenPages, gh } from './gh.ts';
 import type { Deps as BaseDeps } from './gh.ts';
 
@@ -7,8 +8,8 @@ interface Deps extends BaseDeps {
 }
 
 const LABELS = [
-  { name: LABEL_ON_DANYEL, color: 'e8a33a', description: 'Waiting on Danyel: a look, an answer, or a merge' },
-  { name: LABEL_PARKED, color: 'c9c6bd', description: 'Waiting on something outside Danyel and Claude' },
+  { name: LABEL_ON_OWNER, color: 'e8a33a', description: `Waiting on ${OWNER_NAME}: a look, an answer, or a merge` },
+  { name: LABEL_PARKED, color: 'c9c6bd', description: `Waiting on something outside ${OWNER_NAME} and Claude` },
   { name: LABEL_IN_PROGRESS, color: '4a7bd0', description: 'Picked up: someone is working on it' },
 ];
 

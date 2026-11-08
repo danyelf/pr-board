@@ -1,6 +1,7 @@
 import type { WaitingOn } from './names.ts';
 
-export type Turn = 'danyel' | 'claude' | 'nobody' | 'none';
+/** Whose turn an item is: someone a status can wait on, or 'none' when nothing says. */
+export type Turn = WaitingOn | 'none';
 export interface Question { n: number; text: string; choices: string[]; defaultChoice: string | null }
 export interface Status {
   waitingOn: WaitingOn;

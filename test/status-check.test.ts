@@ -6,7 +6,7 @@ import { main } from '../hooks/status-check.ts';
 import type { Gh } from '../cli/gh.ts';
 
 const FIXTURES = join(import.meta.dirname, 'fixtures', 'transcripts');
-const MARKER_BODY = '<!-- status -->\n**Waiting on:** Danyel\n**Ask:** x\n<!-- /status -->\n\nbody';
+const MARKER_BODY = '<!-- status -->\n**Waiting on:** Sam\n**Ask:** x\n<!-- /status -->\n\nbody';
 
 interface Setup {
   lastEditedAt?: string | null;
@@ -78,7 +78,7 @@ describe('status-check hook', () => {
   });
 
   it('is satisfied by a label change this turn', async () => {
-    const r = await run('pr-comment.jsonl', { events: [{ event: 'labeled', label: { name: 'on danyel' }, created_at: '2026-11-05T10:20:00Z' }] });
+    const r = await run('pr-comment.jsonl', { events: [{ event: 'labeled', label: { name: 'on sam' }, created_at: '2026-11-05T10:20:00Z' }] });
     expect(r.out).toEqual([]);
   });
 

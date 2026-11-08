@@ -4,7 +4,7 @@ import { facts, status } from './helpers.ts';
 
 describe('turnOf', () => {
   it('reads whose turn it is from labels', () => {
-    expect(turnOf(['on danyel', 'in-progress'])).toBe('danyel');
+    expect(turnOf(['on sam', 'in-progress'])).toBe('owner');
     expect(turnOf(['parked', 'in-progress'])).toBe('nobody');
     expect(turnOf(['in-progress'])).toBe('claude');
     expect(turnOf([])).toBe('none');
@@ -13,51 +13,51 @@ describe('turnOf', () => {
 
 describe('effectiveTurn', () => {
   it('treats the item as Danyel\'s when the status says so but labels do not', () => {
-    expect(effectiveTurn(['in-progress'], status({ waitingOn: 'Danyel' }))).toEqual({ turn: 'danyel', outOfSync: true });
+    expect(effectiveTurn(['in-progress'], status({ waitingOn: 'owner' }))).toEqual({ turn: 'owner', outOfSync: true });
   });
   it('flags a label that disagrees with the status', () => {
-    expect(effectiveTurn(['on danyel'], status({ waitingOn: 'Claude' }))).toEqual({ turn: 'danyel', outOfSync: true });
+    expect(effectiveTurn(['on sam'], status({ waitingOn: 'claude' }))).toEqual({ turn: 'owner', outOfSync: true });
   });
   it('flags a status that says Danyel when there is no turn label at all', () => {
-    expect(effectiveTurn([], status({ waitingOn: 'Danyel' }))).toEqual({ turn: 'danyel', outOfSync: true });
+    expect(effectiveTurn([], status({ waitingOn: 'owner' }))).toEqual({ turn: 'owner', outOfSync: true });
   });
   it('is in sync with no status', () => {
-    expect(effectiveTurn(['on danyel'], null)).toEqual({ turn: 'danyel', outOfSync: false });
+    expect(effectiveTurn(['on sam'], null)).toEqual({ turn: 'owner', outOfSync: false });
   });
   it('is in sync when they agree, and no turn label never counts as a disagreement', () => {
-    expect(effectiveTurn(['in-progress'], status({ waitingOn: 'Claude' }))).toEqual({ turn: 'claude', outOfSync: false });
-    expect(effectiveTurn([], status({ waitingOn: 'Claude' }))).toEqual({ turn: 'none', outOfSync: false });
+    expect(effectiveTurn(['in-progress'], status({ waitingOn: 'claude' }))).toEqual({ turn: 'claude', outOfSync: false });
+    expect(effectiveTurn([], status({ waitingOn: 'claude' }))).toEqual({ turn: 'none', outOfSync: false });
   });
 });
 
 describe('waitingSince', () => {
   it('prefers the label event over a stale status time', () => {
     const f = facts({
-      labels: ['on danyel'],
-      labelEvents: [{ label: 'on danyel', action: 'added', at: '2026-11-04T15:00:00-08:00' }],
+      labels: ['on sam'],
+      labelEvents: [{ label: 'on sam', action: 'added', at: '2026-11-04T15:00:00-08:00' }],
     });
     expect(waitingSince(f, status({ since: '2026-11-01T09:00:00-08:00' }))).toBe('2026-11-04T15:00:00-08:00');
   });
   it('ignores an added event that was later removed, and uses the latest one in force', () => {
     const f = facts({
-      labels: ['on danyel'],
+      labels: ['on sam'],
       labelEvents: [
-        { label: 'on danyel', action: 'added', at: '2026-11-02T10:00:00-08:00' },
-        { label: 'on danyel', action: 'removed', at: '2026-11-02T11:00:00-08:00' },
-        { label: 'on danyel', action: 'added', at: '2026-11-03T10:00:00-08:00' },
+        { label: 'on sam', action: 'added', at: '2026-11-02T10:00:00-08:00' },
+        { label: 'on sam', action: 'removed', at: '2026-11-02T11:00:00-08:00' },
+        { label: 'on sam', action: 'added', at: '2026-11-03T10:00:00-08:00' },
       ],
     });
     expect(waitingSince(f, null)).toBe('2026-11-03T10:00:00-08:00');
     const removed = facts({
       labelEvents: [
-        { label: 'on danyel', action: 'added', at: '2026-11-02T10:00:00-08:00' },
-        { label: 'on danyel', action: 'removed', at: '2026-11-02T11:00:00-08:00' },
+        { label: 'on sam', action: 'added', at: '2026-11-02T10:00:00-08:00' },
+        { label: 'on sam', action: 'removed', at: '2026-11-02T11:00:00-08:00' },
       ],
     });
     expect(waitingSince(removed, status({ since: '2026-11-01T09:00:00-08:00' }))).toBe('2026-11-01T09:00:00-08:00');
   });
   it('falls back to status.since, then null', () => {
-    expect(waitingSince(facts({ labels: ['on danyel'] }), status({ since: '2026-11-01T09:00:00-08:00' }))).toBe('2026-11-01T09:00:00-08:00');
+    expect(waitingSince(facts({ labels: ['on sam'] }), status({ since: '2026-11-01T09:00:00-08:00' }))).toBe('2026-11-01T09:00:00-08:00');
     expect(waitingSince(facts(), null)).toBeNull();
   });
 });
@@ -77,7 +77,7 @@ describe('formatWait', () => {
 
 describe('isReadyToMerge', () => {
   const ready = () => facts({
-    prepDone: true, commitsSincePrep: 0, labels: ['on danyel'], mergeState: 'CLEAN',
+    prepDone: true, commitsSincePrep: 0, labels: ['on sam'], mergeState: 'CLEAN',
   });
   it('is true when everything lines up', () => {
     expect(isReadyToMerge(ready(), status())).toBe(true);

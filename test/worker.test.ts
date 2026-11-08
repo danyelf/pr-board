@@ -55,7 +55,7 @@ async function get(h: Handler, url: string, headers: Record<string, string> = {}
   return h.fetch(new Request(url, { headers }), e);
 }
 
-const ok = { items: [facts({ number: 1, labels: ['on danyel'] })], errors: [] as string[] };
+const ok = { items: [facts({ number: 1, labels: ['on sam'] })], errors: [] as string[] };
 
 describe('worker', () => {
   it('refuses a request with no Access header', async () => {

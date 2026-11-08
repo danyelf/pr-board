@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { LABEL_ON_DANYEL, LABEL_PARKED } from '../src/shared/names.ts';
+import { LABEL_ON_OWNER, LABEL_PARKED } from '../src/shared/names.ts';
 import { hasStatusSection } from '../src/shared/status.ts';
 import { currentRepo, flattenPages, gh, git, refString } from '../cli/gh.ts';
 import type { Deps, Gh, Ref } from '../cli/gh.ts';
@@ -25,7 +25,7 @@ interface Entry {
 
 interface ToolUse { id: string; command: string; cwd: string }
 
-const TURN_LABELS = new Set([LABEL_ON_DANYEL, LABEL_PARKED]);
+const TURN_LABELS = new Set([LABEL_ON_OWNER, LABEL_PARKED]);
 /** The status command Claude is told to run; it sits next to this hook's folder. */
 const PR_STATUS_SCRIPT = join(import.meta.dirname, '..', 'cli', 'pr-status.ts');
 const VALUE_FLAGS = new Set(['-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--title', '-a', '--assignee', '-l', '--label', '-m', '--milestone', '-B', '--base', '-H', '--head', '-r', '--reviewer', '-p', '--project']);
@@ -35,8 +35,8 @@ function contentParts(entry: Entry): Record<string, unknown>[] {
   return Array.isArray(c) ? (c as Record<string, unknown>[]) : [];
 }
 
-/** Whether this transcript entry is Danyel typing (not a tool result or a system wrapper). */
-function isDanyelTyping(entry: Entry): boolean {
+/** Whether this transcript entry is the owner typing (not a tool result or a system wrapper). */
+function isOwnerTyping(entry: Entry): boolean {
   if (entry.type !== 'user' || entry.isMeta || entry.isCompactSummary) return false;
   const c = entry.message?.content;
   if (typeof c === 'string') return !c.trimStart().startsWith('<');
@@ -273,7 +273,7 @@ export async function main(deps: HookDeps): Promise<number> {
 
     let turnStart: number | null = null;
     for (const e of entries) {
-      if (e.timestamp && isDanyelTyping(e)) turnStart = Date.parse(e.timestamp);
+      if (e.timestamp && isOwnerTyping(e)) turnStart = Date.parse(e.timestamp);
     }
     if (turnStart === null) return 0;
 

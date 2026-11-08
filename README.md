@@ -50,6 +50,8 @@ Nothing here has been run. Each step needs Danyel's OK. `docs/questions.md` list
 
 ## Where things are
 
+- `pr-board.config.json` names the person the board is for (`ownerName`). The status section and the `on <name>` label are spelled from it; the code itself never names anyone. The tests use `test/fixtures/pr-board.config.json`, with a different name, so a name written into the code fails them.
+
 - `src/worker/` the Worker: GitHub reading, the Access check, page rendering.
 - `src/shared/` the rules for whose turn it is, stages, and the status section, plus `names.ts` for the label names and other values several parts must agree on.
 - `cli/` `pr-status.ts` (Claude writes the status) and `setup-labels.ts`.

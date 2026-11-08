@@ -3,7 +3,7 @@ import { extractToTest, parseStatus, pickStatusComment, renderStatus, replaceSta
 import type { Status } from '../src/shared/types.ts';
 
 const example = `<!-- status -->
-**Waiting on:** Danyel, since 2026-11-02T16:40:00-08:00
+**Waiting on:** Sam, since 2026-11-02T16:40:00-08:00
 **Ask:** look at the preview, and answer one question
 **Questions:**
 1. Does the tint over the code dull the colours enough to change the shell?  (**leave** | change)
@@ -11,7 +11,7 @@ const example = `<!-- status -->
 <!-- /status -->`;
 
 const expected: Status = {
-  waitingOn: 'Danyel',
+  waitingOn: 'owner',
   since: '2026-11-02T16:40:00-08:00',
   ask: 'look at the preview, and answer one question',
   questions: [
@@ -51,17 +51,17 @@ describe('parseStatus', () => {
   });
 
   it('drops a since that is not a date, so nothing downstream does arithmetic on it', () => {
-    const read = (since: string) => parseStatus(`<!-- status -->\n**Waiting on:** Danyel, since ${since}\n<!-- /status -->`);
+    const read = (since: string) => parseStatus(`<!-- status -->\n**Waiting on:** Sam, since ${since}\n<!-- /status -->`);
     expect(read('yesterday')?.since).toBeNull();
     expect(read('2026-11-04T09:00:00Z.')?.since).toBeNull();
     expect(read('2026-11-04T09:00:00Z')?.since).toBe('2026-11-04T09:00:00Z');
-    expect(read('yesterday')?.waitingOn).toBe('Danyel');
+    expect(read('yesterday')?.waitingOn).toBe('owner');
   });
 
   it('returns null, without throwing, for missing or malformed sections', () => {
     expect(parseStatus('no markers here')).toBeNull();
     expect(parseStatus('<!-- status -->\n**Ask:** x\n<!-- /status -->')).toBeNull();
-    expect(parseStatus('<!-- status -->\n**Waiting on:** Danyel\n**Ask:** x')).toBeNull();
+    expect(parseStatus('<!-- status -->\n**Waiting on:** Sam\n**Ask:** x')).toBeNull();
   });
 });
 
@@ -104,7 +104,7 @@ describe('replaceStatus', () => {
 });
 
 describe('pickStatusComment', () => {
-  const section = '<!-- status -->\n**Waiting on:** Danyel\n<!-- /status -->';
+  const section = '<!-- status -->\n**Waiting on:** Sam\n<!-- /status -->';
   it('takes the last comment that has a status section', () => {
     const comments = [{ body: 'hi' }, { body: `first ${section}` }, { body: 'chat' }, { body: `second ${section}` }, { body: 'more chat' }];
     expect(pickStatusComment(comments)).toBe(comments[3]);

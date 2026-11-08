@@ -14,7 +14,7 @@ const why = (f: ReturnType<typeof facts>, s: ReturnType<typeof status> | null) =
 const pr573 = () => facts({
   number: 573, linkedIssue: 569,
   addedDocs: [{ path: 'docs/plans/2026-11-03-tools-state.md', url: 'https://github.com/danyelf/torahmap/pull/573/files' }],
-  reviewSha: 'bd275212', commitsSinceReview: 1, labels: ['on danyel'], behindBase: true,
+  reviewSha: 'bd275212', commitsSinceReview: 1, labels: ['on sam'], behindBase: true,
 });
 
 describe('stage strip', () => {
@@ -36,7 +36,7 @@ describe('stage strip', () => {
   });
 
   it('shows 574 stacked on an open PR with two questions', () => {
-    const f = facts({ number: 574, stackedOn: 573, stackedOnOpen: true, labels: ['on danyel'], linkedIssue: 570 });
+    const f = facts({ number: 574, stackedOn: 573, stackedOnOpen: true, labels: ['on sam'], linkedIssue: 570 });
     const s = status({}, 2);
     expect(box(f, s, 'Your look').note).toBe('2 questions');
     expect(box(f, s, 'Ready for merge')).toEqual({ name: 'Ready for merge', state: 'todo', note: 'after #573' });
@@ -44,7 +44,7 @@ describe('stage strip', () => {
   });
 
   it('says one question and one decision in the singular', () => {
-    const f = facts({ number: 575, labels: ['on danyel'] });
+    const f = facts({ number: 575, labels: ['on sam'] });
     const s = status({}, 1);
     expect(box(f, s, 'Your look').note).toBe('1 question');
     expect(why(f, s)).toBe('1 decision + your look');
@@ -53,7 +53,7 @@ describe('stage strip', () => {
   describe('578 after prep', () => {
     const f = (over = {}) => facts({
       number: 578, linkedIssue: 571, reviewSha: 'abc', prepDone: true, commitsSincePrep: 0,
-      labels: ['on danyel'], mergeState: 'CLEAN', ...over,
+      labels: ['on sam'], mergeState: 'CLEAN', ...over,
     });
     it('is ready to merge', () => {
       expect(states(f(), status())).toEqual(['done', 'todo', 'done', 'done', 'done', 'ready']);
@@ -94,11 +94,11 @@ describe('stage strip', () => {
   });
 
   it('puts your look before prep: a PR waiting on Danyel with no prep yet', () => {
-    expect(states(facts({ labels: ['on danyel'] }), status({}, 0))).toEqual(['todo', 'todo', 'done', 'now', 'todo', 'todo']);
+    expect(states(facts({ labels: ['on sam'] }), status({}, 0))).toEqual(['todo', 'todo', 'done', 'now', 'todo', 'todo']);
   });
 
   it('shows an issue with no PR waiting on Danyel at Design', () => {
-    const f = facts({ kind: 'issue', number: 569, labels: ['on danyel'] });
+    const f = facts({ kind: 'issue', number: 569, labels: ['on sam'] });
     expect(states(f, null)).toEqual(['done', 'now', 'todo', 'now', 'todo', 'todo']);
     expect(box(f, null, 'Issue').note).toBe('#569');
   });

@@ -41,7 +41,7 @@ export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date(
   const design =
     f.addedDocs.length > 0 ? box('Design', 'done', '✓')
     : f.screenshots.length > 0 ? box('Design', 'done', `${f.screenshots.length} mockups`)
-    : !isPr && turn === 'danyel' ? box('Design', 'now')
+    : !isPr && turn === 'owner' ? box('Design', 'now')
     : box('Design', 'todo');
 
   // A code review Claude posted before prep is a note on Build, not a stage of its own.
@@ -54,7 +54,7 @@ export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date(
     : sinceReview > 0 ? box('Build', 'done', `✓ reviewed, ${count(sinceReview, 'commit')} since`)
     : box('Build', 'done', '✓ reviewed');
 
-  // Prep for merge runs after Danyel's look, once he says the PR looks good.
+  // Prep for merge runs after the owner's look, once they say the PR looks good.
   const sincePrep = f.commitsSincePrep ?? 0;
   const prep = !f.prepDone ? box('Prep', 'todo')
     : sincePrep > 0 ? box('Prep', 'done', `✓ ${count(sincePrep, 'commit')} since`)
@@ -63,7 +63,7 @@ export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date(
   let look: StageBox;
   if (f.merged || f.prepDone) {
     look = box('Your look', 'done');
-  } else if (turn === 'danyel') {
+  } else if (turn === 'owner') {
     // How long it has waited is already in the card's header, so the box only counts questions.
     look = box('Your look', 'now', questions > 0 ? count(questions, 'question') : '');
   } else {
@@ -80,7 +80,7 @@ export function whyTag(s: Status | null, strip: StageBox[], turn: Turn): string 
   const questions = s?.questions.length ?? 0;
   if (merge.state === 'ready') return 'Ready to merge';
   if (merge.state === 'blocked') return `Can't merge yet: ${merge.note}`;
-  if (questions > 0 && turn === 'danyel') return `${count(questions, 'decision')} + your look`;
+  if (questions > 0 && turn === 'owner') return `${count(questions, 'decision')} + your look`;
   if (look.state === 'now') return 'Needs your look';
   if (turn === 'nobody') return 'Parked';
   return '';

@@ -20,15 +20,15 @@ describe('renderBoard', () => {
   });
 
   it("shows the status's Ask as one line under the title", async () => {
-    const body = renderStatus(status({ waitingOn: 'Danyel', ask: 'Pick a <colour> for the button' }));
-    const html = await page([facts({ number: 960, labels: ['on danyel'], body, lastActivityAt: '2026-11-05T23:00:00Z' })]);
+    const body = renderStatus(status({ waitingOn: 'owner', ask: 'Pick a <colour> for the button' }));
+    const html = await page([facts({ number: 960, labels: ['on sam'], body, lastActivityAt: '2026-11-05T23:00:00Z' })]);
     const card = html.slice(html.indexOf('PR #960'));
     expect(card).toContain('<div class="ask">Pick a &lt;colour&gt; for the button</div>');
     expect(card.indexOf('class="ask"')).toBeLessThan(card.indexOf('class="steps"'));
   });
 
   it('says so when no status has been written', async () => {
-    expect(await page([facts({ number: 900, labels: ['on danyel'],lastActivityAt: '2026-11-05T23:00:00Z' })])).toContain('No status written yet');
+    expect(await page([facts({ number: 900, labels: ['on sam'],lastActivityAt: '2026-11-05T23:00:00Z' })])).toContain('No status written yet');
   });
 
   it('flags a label that disagrees with the status', async () => {
@@ -36,11 +36,11 @@ describe('renderBoard', () => {
   });
 
   it('tags a waiting card, and an On Claude row, whose status is older than the latest change', async () => {
-    const body = renderStatus(status({ waitingOn: 'Danyel' }));
-    const claudeBody = renderStatus(status({ waitingOn: 'Claude' }));
+    const body = renderStatus(status({ waitingOn: 'owner' }));
+    const claudeBody = renderStatus(status({ waitingOn: 'claude' }));
     const times = { statusWrittenAt: '2026-11-05T10:00:00Z', lastChangeAt: '2026-11-05T12:00:00Z' };
     const html = await page([
-      facts({ number: 950, labels: ['on danyel'], body, lastActivityAt: '2026-11-05T23:00:00Z', ...times }),
+      facts({ number: 950, labels: ['on sam'], body, lastActivityAt: '2026-11-05T23:00:00Z', ...times }),
       facts({ number: 951, labels: ['in-progress'], body: claudeBody, lastActivityAt: '2026-11-05T23:00:00Z', ...times }),
     ]);
     const waiting = html.slice(html.indexOf('PR #950'), html.indexOf('On Claude'));
@@ -49,7 +49,7 @@ describe('renderBoard', () => {
     expect(claude).toMatch(/last activity [^<]* ago · status older than latest change</);
     // A status that is up to date says nothing.
     const fresh = renderBoard(buildBoard([
-      facts({ number: 952, labels: ['on danyel'], body, lastActivityAt: '2026-11-05T23:00:00Z', statusWrittenAt: '2026-11-05T13:00:00Z', lastChangeAt: '2026-11-05T12:00:00Z' }),
+      facts({ number: 952, labels: ['on sam'], body, lastActivityAt: '2026-11-05T23:00:00Z', statusWrittenAt: '2026-11-05T13:00:00Z', lastChangeAt: '2026-11-05T12:00:00Z' }),
     ], [], NOW));
     expect(fresh).not.toContain('status older than latest change');
   });
@@ -92,8 +92,8 @@ describe('renderBoard', () => {
   });
 
   it('says when a status section is there but could not be read', async () => {
-    const body = '<!-- status -->\n**Waiting on:** Danyel, since yesterday afternoon\n<!-- /status -->';
-    const html = await page([facts({ number: 907, labels: ['on danyel'], body, lastActivityAt: '2026-11-05T23:00:00Z' })]);
+    const body = '<!-- status -->\n**Waiting on:** Sam, since yesterday afternoon\n<!-- /status -->';
+    const html = await page([facts({ number: 907, labels: ['on sam'], body, lastActivityAt: '2026-11-05T23:00:00Z' })]);
     expect(html).toContain("The status section couldn&#39;t be read");
   });
 
@@ -108,7 +108,7 @@ describe('renderBoard', () => {
 
   it('links Merge on GitHub to the PR when the merge box is ready', async () => {
     const ready = facts({
-      number: 905, url: 'https://github.com/danyelf/torahmap/pull/905', labels: ['on danyel'],
+      number: 905, url: 'https://github.com/danyelf/torahmap/pull/905', labels: ['on sam'],
       prepDone: true, commitsSincePrep: 0, mergeState: 'CLEAN', lastActivityAt: '2026-11-05T23:00:00Z',
     });
     const html = await page([ready]);
@@ -118,7 +118,7 @@ describe('renderBoard', () => {
 
   it('links every number to GitHub and says whether it is a PR or an issue', () => {
     const html = renderBoard(buildBoard([
-      facts({ number: 910, labels: ['on danyel'], url: 'https://github.com/danyelf/torahmap/pull/910', lastActivityAt: '2026-11-05T23:00:00Z' }),
+      facts({ number: 910, labels: ['on sam'], url: 'https://github.com/danyelf/torahmap/pull/910', lastActivityAt: '2026-11-05T23:00:00Z' }),
       facts({ number: 911, labels: ['in-progress'], url: 'https://github.com/danyelf/torahmap/pull/911', lastActivityAt: '2026-11-05T23:00:00Z' }),
       facts({ number: 912, kind: 'issue', labels: ['parked'], url: 'https://github.com/danyelf/torahmap/issues/912', lastActivityAt: '2026-11-05T23:00:00Z' }),
     ], [], NOW));
@@ -140,7 +140,7 @@ describe('renderBoard', () => {
 
   it('limits screenshots to four thumbnails, 96 px wide', async () => {
     const shots = Array.from({ length: 6 }, (_, i) => `https://example.com/shot${i}.png`);
-    const html = await page([facts({ number: 906, labels: ['on danyel'], screenshots: shots, lastActivityAt: '2026-11-05T23:00:00Z' })]);
+    const html = await page([facts({ number: 906, labels: ['on sam'], screenshots: shots, lastActivityAt: '2026-11-05T23:00:00Z' })]);
     expect(html).toContain('shot3.png');
     expect(html).not.toContain('shot4.png');
     expect(html).toContain('width="96"');

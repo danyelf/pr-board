@@ -1,6 +1,7 @@
 // Names and values several parts of the board have to agree on. Each lives here once.
+import { OWNER_NAME } from './config.ts';
 
-export const LABEL_ON_DANYEL = 'on danyel';
+export const LABEL_ON_OWNER = `on ${OWNER_NAME.toLowerCase()}`;
 export const LABEL_PARKED = 'parked';
 export const LABEL_IN_PROGRESS = 'in-progress';
 
@@ -10,17 +11,16 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 export const REPO_WINDOW_DAYS = 60;
 
 /**
- * The people a status can be waiting on. `status` is how the status section spells it, `option` is the
- * value of the command-line `--waiting` flag, and `turn` is whose turn it makes the item.
+ * Who a status can be waiting on. `role` is what the code, the `--waiting` flag and whose-turn use;
+ * `spelling` is how the status section writes it.
  */
 export const WAITING_ON = [
-  { status: 'Danyel', option: 'danyel', turn: 'danyel' },
-  { status: 'Claude', option: 'claude', turn: 'claude' },
-  { status: 'nobody', option: 'nobody', turn: 'nobody' },
+  { role: 'owner', spelling: OWNER_NAME },
+  { role: 'claude', spelling: 'Claude' },
+  { role: 'nobody', spelling: 'nobody' },
 ] as const;
 
-export type WaitingOn = (typeof WAITING_ON)[number]['status'];
-export type WaitingOption = (typeof WAITING_ON)[number]['option'];
+export type WaitingOn = (typeof WAITING_ON)[number]['role'];
 
 /**
  * Text that other tools write, and that the board looks for. If one of them changes its wording,
