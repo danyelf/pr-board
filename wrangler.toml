@@ -3,10 +3,10 @@ main = "src/worker/index.ts"
 compatibility_date = "2026-11-05"
 workers_dev = false
 
-# Route to confirm with Danyel before the first deploy:
-# routes = [{ pattern = "board.danyelfisher.info", custom_domain = true }]
+# The page is reachable only here, behind the Cloudflare Access application for this hostname.
+routes = [{ pattern = "pr-board.danyelfisher.info", custom_domain = true }]
 
 [vars]
-ACCESS_TEAM_DOMAIN = "REPLACE-ME.cloudflareaccess.com"
-ACCESS_AUD = "REPLACE-WITH-ACCESS-APPLICATION-AUD-TAG"
+ACCESS_TEAM_DOMAIN = "fisherinsights.cloudflareaccess.com"
+ACCESS_AUD = "6faedf2418067af21317b08c774d756e13c5df7ae1bf2978aa4e3129672ea555"
 ALLOWED_EMAIL = "danyel@gmail.com"
