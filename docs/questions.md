@@ -8,13 +8,13 @@ Collected while building part 1 (a board you can read). Newest at the bottom. Ea
 
 ## Go-live steps prepared by the build
 
-Steps 5 to 8 are done (2026-11-08); steps 2 to 4, deploying, have not been run. Each needs your OK. They are in the order to do them. The steps themselves are written out once, in `README.md` under "Going live"; each question here names its step and gives only the decision and my default, in bold.
+All the go-live steps are done (2026-11-08). They are in the order they were done. The steps themselves are written out once, in `README.md` under "Going live"; each question here names its step and gives only the decision and my default, in bold.
 
-2. **Make the GitHub token for the Worker?** (**yes** | wait) README step 1. I haven't created a token or set a secret.
+2. **Make the GitHub token for the Worker?** Done: a fine-grained token from your account (read-only contents, issues and pull requests on your repos), stored as the Worker secret `GITHUB_TOKEN` by piping it in with `pbpaste`, because `wrangler secret put` run through Claude's `!` has no terminal to ask for it.
 
-3. **Which hostname, and shall I set up the login gate?** (**board.danyelfisher.info** | another name) README step 2. `wrangler.toml` has the route commented out, with `board.danyelfisher.info` as the suggestion. I haven't changed anything in Cloudflare.
+3. **Which hostname, and shall I set up the login gate?** Done: `pr-board.danyelfisher.info`, behind the Cloudflare Access application of the team `fisherinsights.cloudflareaccess.com`, with a one-time emailed code as the login.
 
-4. **Deploy?** (**yes, after 2 and 3** | wait) README step 3.
+4. **Deploy?** Done from `main`. Without signing in, the page sends you to the Cloudflare login; signed in, it shows the board.
 
 5. **Create the three labels?** Done. All three now exist in the four repos danyel-claude can see (pr-board, torahmap, danyelfisher.info, ieeevis-scrape); no merge-setting warnings. The script runs as danyel-claude, so a repo it isn't a collaborator on gets no labels: run it again from your own account, or add danyel-claude, if the Worker's token sees more repos.
 
