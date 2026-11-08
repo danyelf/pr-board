@@ -1,6 +1,6 @@
 import type { JWTVerifyGetKey } from 'jose';
 import type { ItemFacts } from '../shared/types.ts';
-import { answerToken, checkAccess, type Env } from './access.ts';
+import { checkAccess, ownerToken, type Env } from './access.ts';
 import { buildBoard } from './board.ts';
 import { fetchItem, fetchItems, postComment } from './github.ts';
 import { ITEM_REF, postAnswer } from './post-answer.ts';
@@ -96,7 +96,7 @@ export function makeHandler(deps: Deps): Handler {
       const sentParam = url.searchParams.get('sent');
       const sent = sentParam !== null && ITEM_REF.test(sentParam) ? sentParam : null;
       const { items, errors } = await load(env, at, sent !== null);
-      return new Response(renderBoard(buildBoard(items, errors, at), { answering: answerToken(env) !== null, sent }), { headers: PAGE_HEADERS });
+      return new Response(renderBoard(buildBoard(items, errors, at), { answering: ownerToken(env) !== null, sent }), { headers: PAGE_HEADERS });
     },
   };
 }

@@ -3,7 +3,7 @@ import { OWNER_LOGIN } from '../shared/config.ts';
 import { FINGERPRINT_RE, statusFingerprint } from '../shared/fingerprint.ts';
 import { parseStatus, statusText } from '../shared/status.ts';
 import { effectiveTurn } from '../shared/turn.ts';
-import { ANSWERING_NOT_SET_UP, answerToken, type Env } from './access.ts';
+import { ANSWERING_NOT_SET_UP, ownerToken, type Env } from './access.ts';
 import type { fetchItem, postComment } from './github.ts';
 
 // Room for a full note of NOTE_MAX characters, every one of them escaped to several bytes, and the answers.
@@ -55,7 +55,7 @@ async function readLimited(req: Request, max: number): Promise<string | null> {
  * posts it as a comment from the owner's account. The caller has already checked who is asking.
  */
 export async function postAnswer(
-  req: Request, env: Pick<Env, 'GITHUB_TOKEN' | 'GITHUB_ANSWER_TOKEN'>, deps: AnswerDeps,
+  req: Request, env: Pick<Env, 'GITHUB_TOKEN' | 'GITHUB_OWNER_TOKEN'>, deps: AnswerDeps,
 ): Promise<AnswerResult> {
   // A form on another site can post here with the owner's Access cookie; only this page's own forms may.
   if (req.headers.get('Origin') !== new URL(req.url).origin) {
@@ -67,7 +67,7 @@ export async function postAnswer(
   const text = await readLimited(req, MAX_BODY_BYTES);
   if (text === null) return refuse(413, 'Not sent', `The answers were more than ${MAX_BODY_BYTES / 1024} KB.`);
 
-  const token = answerToken(env);
+  const token = ownerToken(env);
   if (token === null) return refuse(503, 'Not sent', ANSWERING_NOT_SET_UP);
 
   const form = new URLSearchParams(text);
@@ -129,7 +129,7 @@ export async function postAnswer(
     return refuse(502, 'Not sent', `GitHub didn't take the answers for ${ref}: ${e instanceof Error ? e.message : String(e)}`);
   }
   if (posted.login !== OWNER_LOGIN) {
-    return refuse(500, 'Sent under the wrong account', `The answers on ${ref} went up as ${posted.login ?? 'an unknown account'}, not ${OWNER_LOGIN}, so Claude won't pick them up. GITHUB_ANSWER_TOKEN must belong to ${OWNER_LOGIN}.`);
+    return refuse(500, 'Sent under the wrong account', `The answers on ${ref} went up as ${posted.login ?? 'an unknown account'}, not ${OWNER_LOGIN}, so Claude won't pick them up. GITHUB_OWNER_TOKEN must belong to ${OWNER_LOGIN}.`);
   }
   return { sent: ref };
 }

@@ -44,7 +44,7 @@ Tests: the form fields and hidden values; default checked; the look question onl
 
 ## 7. POST /answer
 
-Behind the Access check; Origin must be the page's own; form posts only; body at most 16 KB; repo, number and choices checked; the item re-read with the read token, refused if it can't be seen, is closed, or its fingerprint has changed; the comment posted with `GITHUB_ANSWER_TOKEN`; then a 303 back to `/?sent=…`, with the cached board dropped. CSP gains `form-action 'self'`.
+Behind the Access check; Origin must be the page's own; form posts only; body at most 16 KB; repo, number and choices checked; the item re-read with the read token, refused if it can't be seen, is closed, or its fingerprint has changed; the comment posted with `GITHUB_OWNER_TOKEN`; then a 303 back to `/?sent=…`, with the cached board dropped. CSP gains `form-action 'self'`.
 
 Tests: one per refusal, a good post (the comment body and the token used), the redirect, the cache dropped, the CSP.
 

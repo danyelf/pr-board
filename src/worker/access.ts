@@ -3,20 +3,20 @@ import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
 export interface Env {
   GITHUB_TOKEN: string;
   /** A token that posts comments as the owner. Without it the board shows the answer controls, but can't send. */
-  GITHUB_ANSWER_TOKEN?: string;
+  GITHUB_OWNER_TOKEN?: string;
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
   ALLOWED_EMAIL: string;
   ALLOW_LOCAL?: string;
 }
 
-/** The token answers are posted with, or null when answering isn't set up. */
-export function answerToken(env: Pick<Env, 'GITHUB_ANSWER_TOKEN'>): string | null {
-  return typeof env.GITHUB_ANSWER_TOKEN === 'string' && env.GITHUB_ANSWER_TOKEN !== '' ? env.GITHUB_ANSWER_TOKEN : null;
+/** The owner's token, which answers are posted with, or null when answering isn't set up. */
+export function ownerToken(env: Pick<Env, 'GITHUB_OWNER_TOKEN'>): string | null {
+  return typeof env.GITHUB_OWNER_TOKEN === 'string' && env.GITHUB_OWNER_TOKEN !== '' ? env.GITHUB_OWNER_TOKEN : null;
 }
 
-/** Said on the page, and on a refused post, while there is no answer token. */
-export const ANSWERING_NOT_SET_UP = "Answering isn't set up yet: the Worker has no GITHUB_ANSWER_TOKEN to post with.";
+/** Said on the page, and on a refused post, while there is no owner token. */
+export const ANSWERING_NOT_SET_UP = "Answering isn't set up yet: the Worker has no GITHUB_OWNER_TOKEN to post with.";
 
 // Cloudflare's signing keys are fetched on first use and then kept, so build the set once per team domain.
 const remoteKeys = new Map<string, JWTVerifyGetKey>();

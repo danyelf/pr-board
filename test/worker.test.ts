@@ -170,18 +170,18 @@ describe('worker', () => {
     expect(res.status).toBe(404);
   });
 
-  it('enables Send only when the answer token is set', async () => {
+  it('enables Send only when the owner token is set', async () => {
     const local = { ...env, ALLOW_LOCAL: '1' };
     const without = await (await get(handler(ok).h, 'http://localhost:8787/', {}, local)).text();
     expect(without).toContain('class="btn send" disabled');
-    const withToken = await (await get(handler(ok).h, 'http://localhost:8787/', {}, { ...local, GITHUB_ANSWER_TOKEN: 'answer-tok' })).text();
+    const withToken = await (await get(handler(ok).h, 'http://localhost:8787/', {}, { ...local, GITHUB_OWNER_TOKEN: 'answer-tok' })).text();
     expect(withToken).toContain('class="btn send">');
   });
 });
 
 describe('POST /answer', () => {
   const ORIGIN = 'http://localhost:8787';
-  const answerEnv: Env = { ...env, ALLOW_LOCAL: '1', GITHUB_ANSWER_TOKEN: 'answer-tok' };
+  const answerEnv: Env = { ...env, ALLOW_LOCAL: '1', GITHUB_OWNER_TOKEN: 'answer-tok' };
   const asking = status({ waitingOn: 'owner', questions: [{ n: 1, text: 'Colour?', choices: ['leave', 'change'], defaultChoice: 'leave' }] });
   const item = () => facts({ repo: 'acme/x', number: 5, labels: ['on sam'], body: renderStatus(asking) });
   const good = { repo: 'acme/x', number: '5', fingerprint: statusFingerprint(asking), q1: 'change', look: LOOK_DEFAULT, note: 'tint is strong' };
@@ -221,7 +221,7 @@ describe('POST /answer', () => {
     }), over.e ?? answerEnv);
   }
 
-  it('posts the answers with the answer token, then sends the browser back to the board', async () => {
+  it('posts the answers with the owner token, then sends the browser back to the board', async () => {
     const { h, posted, read } = answerHandler();
     const res = await post(h, good);
     expect(res.status).toBe(303);
@@ -377,9 +377,9 @@ describe('POST /answer', () => {
     expect([...hidden.posted, ...closed.posted]).toHaveLength(0);
   });
 
-  it("says answering isn't set up when there is no answer token, and posts nothing", async () => {
+  it("says answering isn't set up when there is no owner token, and posts nothing", async () => {
     const { h, posted, read } = answerHandler();
-    const res = await post(h, good, { e: { ...answerEnv, GITHUB_ANSWER_TOKEN: '' } });
+    const res = await post(h, good, { e: { ...answerEnv, GITHUB_OWNER_TOKEN: '' } });
     expect(res.status).toBe(503);
     expect(await res.text()).toContain('Answering isn&#39;t set up');
     expect(read).toHaveLength(0);
