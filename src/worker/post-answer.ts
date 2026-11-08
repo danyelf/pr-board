@@ -5,7 +5,8 @@ import { parseStatus, statusText } from '../shared/status.ts';
 import { effectiveTurn } from '../shared/turn.ts';
 import type { fetchItem, postComment } from './github.ts';
 
-export const MAX_BODY_BYTES = 16 * 1024;
+// Room for a full note of NOTE_MAX characters, every one of them escaped to several bytes, and the answers.
+const MAX_BODY_BYTES = 32 * 1024;
 
 /** owner/repo#N, the way the board names an item. */
 export const ITEM_REF = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d{0,9})$/;

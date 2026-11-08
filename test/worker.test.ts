@@ -274,10 +274,37 @@ describe('POST /answer', () => {
     expect(posted).toHaveLength(0);
   });
 
-  it('refuses a body over 16 KB', async () => {
-    const { h, posted } = answerHandler();
-    const res = await post(h, { ...good, note: 'x'.repeat(17 * 1024) });
+  it('takes a body up to 32 KB, and refuses one that says it is longer without reading it', async () => {
+    // A 20 KB note gets past the size limit and is turned down by the note check instead.
+    expect((await post(answerHandler().h, { ...good, note: 'x'.repeat(20 * 1024) })).status).toBe(400);
+    const { h, posted, read } = answerHandler();
+    const res = await post(h, good, { headers: { 'Content-Length': String(33 * 1024) } });
     expect(res.status).toBe(413);
+    expect(await res.text()).toContain('more than 32 KB');
+    expect(read).toHaveLength(0);
+    expect(posted).toHaveLength(0);
+  });
+
+  it('stops reading a streamed body with no length given as soon as it passes 32 KB', async () => {
+    const { h, posted, read } = answerHandler();
+    const chunk = new TextEncoder().encode(`note=${'x'.repeat(1024)}`);
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled++;
+        if (pulled > 1000) controller.close();
+        else controller.enqueue(chunk);
+      },
+    });
+    const req = new Request(`${ORIGIN}/answer`, {
+      method: 'POST', body, duplex: 'half',
+      headers: { Origin: ORIGIN, 'Content-Type': 'application/x-www-form-urlencoded' },
+    } as RequestInit);
+    expect(req.headers.get('Content-Length')).toBeNull();
+    const res = await h.fetch(req, answerEnv);
+    expect(res.status).toBe(413);
+    expect(pulled).toBeLessThan(40);
+    expect(read).toHaveLength(0);
     expect(posted).toHaveLength(0);
   });
 
