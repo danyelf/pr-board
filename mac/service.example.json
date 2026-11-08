@@ -1,0 +1,13 @@
+{
+  "repos": [
+    { "repo": "OWNER/REPO", "clone": "~/path/to/REPO" },
+    { "repo": "OWNER/OTHER-REPO", "clone": "~/path/to/OTHER-REPO" }
+  ],
+  "graceMinutes": 5,
+  "maxSessions": 2,
+  "pollSeconds": 60,
+  "logDir": "~/.pr-board/logs",
+  "tokenFile": "~/.config/claude-github/token",
+  "claude": "~/.local/bin/claude",
+  "claudeArgs": []
+}

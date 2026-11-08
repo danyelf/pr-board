@@ -299,6 +299,10 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     const rows = flattenPages(await gh(['api', `repos/${repo.owner}/${repo.repo}/issues?labels=${label}&state=open&per_page=100`, '--paginate', '--slurp'])) as
       { number: number; comments?: number; pull_request?: unknown }[];
     let ripe = 0;
+    if (once) {
+      const read = rows.filter((r) => r.comments !== 0).length;
+      out(`${repo.owner}/${repo.repo}: ${rows.length} open ${rows.length === 1 ? 'item carries' : 'items carry'} "${LABEL_ON_OWNER}"; ${read} with comments read for answers.`);
+    }
     for (const row of rows) {
       // An item with no comments has no answers, so it isn't read any further.
       if (row.comments === 0) continue;

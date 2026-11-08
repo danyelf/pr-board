@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { LOOK_DEFAULT, renderAnswer } from '../src/shared/answer.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
@@ -179,6 +180,14 @@ describe('loadConfig', () => {
       graceMs: 5 * MIN, maxSessions: 2, pollMs: POLL,
       logDir: `${HOME}/.pr-board/logs`, tokenFile: TOKEN_PATH, claude: CLAUDE, claudeArgs: [],
     });
+  });
+
+  it('reads the example file in mac/, which spells every default', () => {
+    const text = readFileSync(new URL('../mac/service.example.json', import.meta.url), 'utf8');
+    const { repos, ...rest } = loadConfig(text, HOME, 'service.example.json');
+    const { repos: _, ...defaults } = loadConfig(JSON.stringify({ repos: [{ repo: 'a/b', clone: '/c' }] }), HOME, 'x');
+    expect(repos.length).toBeGreaterThan(0);
+    expect(rest).toEqual(defaults);
   });
 
   it('takes every setting from the file', () => {
@@ -410,6 +419,7 @@ describe('mac-service', () => {
     const r = await run(w, ['--once']);
     expect(r.code).toBe(0);
     expect(r.out).toContain('No answers waiting');
+    expect(r.out).toContain('acme/x: 0 open items carry "on sam"; 0 with comments read for answers.');
   });
 
   it('keeps going through errors, waiting longer each time up to 5 minutes, and back to the usual wait after', async () => {
