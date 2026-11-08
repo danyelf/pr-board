@@ -222,18 +222,35 @@ describe('renderBoard answering', () => {
 
   it('shows answered items on Claude, and one nobody picked up at the top with its answers linked and no form', () => {
     const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
-    const answered = (n: number, m: number, claimed: boolean) => facts({
+    const answered = (n: number, m: number, claimed: number | null, over: Partial<ReturnType<typeof facts>> = {}) => facts({
       number: n, labels: ['on sam'], lastActivityAt: at,
-      answers: [{ id: `c${n}`, url: `https://github.com/acme/x/pull/${n}#issuecomment-1`, at: minutesAgo(m), claimed }],
+      answers: [{ id: `c${n}`, url: `https://github.com/acme/x/pull/${n}#issuecomment-1`, at: minutesAgo(m), claimedAt: claimed === null ? null : minutesAgo(claimed) }],
+      ...over,
     });
-    const html = board([answered(970, 2, false), answered(971, 30, true), answered(972, 20, false)], { answering: true });
+    const html = board([answered(970, 2, null), answered(971, 200, 180), answered(972, 20, null)], { answering: true });
     const claude = html.slice(html.indexOf('On Claude'), html.indexOf('Quiet:'));
-    expect(claude).toMatch(/PR #970<\/a>.*answered, waiting for Claude to pick it up/);
-    expect(claude).toMatch(/PR #971<\/a>.*Claude picked up your answers/);
+    expect(claude).toMatch(/PR #970<\/a>.*answered, waiting for Claude to pick it up<\/span>/);
+    expect(claude).toMatch(/PR #971<\/a>.*Claude picked up your answers 3 h ago<\/span>/);
     const card = cardOf(html, 972);
     expect(html.indexOf('PR #972')).toBeLessThan(html.indexOf('On Claude'));
     expect(card).toContain('<span class="why">Answered, not picked up</span>');
     expect(card).toContain('href="https://github.com/acme/x/pull/972#issuecomment-1">Your answers ↗</a>');
     expect(card).not.toContain('<form');
+  });
+
+  it('keeps the notes on an answered row: no turn label, label out of sync, and a status older than the latest change', () => {
+    const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
+    const answers = [{ id: 'c', url: 'https://github.com/acme/x/pull/973#issuecomment-1', at: minutesAgo(2), claimedAt: null }];
+    const noLabel = facts({ number: 973, labels: [], body: renderStatus(status({ waitingOn: 'claude' })), lastActivityAt: at, answers });
+    const outOfStep = facts({ number: 974, labels: ['in-progress'], body: renderStatus(status({ waitingOn: 'nobody' })), lastActivityAt: at, answers });
+    const stale = facts({
+      number: 975, labels: ['on sam'], body: renderStatus(status({ waitingOn: 'owner' })), lastActivityAt: at, answers,
+      statusWrittenAt: minutesAgo(60), lastChangeAt: minutesAgo(30),
+    });
+    const html = board([noLabel, outOfStep, stale]);
+    const row = (n: number) => html.slice(html.indexOf(`PR #${n}</a>`), html.indexOf('</div>', html.indexOf(`PR #${n}</a>`)));
+    expect(row(973)).toContain('answered, waiting for Claude to pick it up · no turn label');
+    expect(row(974)).toContain('answered, waiting for Claude to pick it up · label out of sync');
+    expect(row(975)).toContain('answered, waiting for Claude to pick it up · status older than latest change');
   });
 });

@@ -1,6 +1,6 @@
 import type { Board, Card } from './board.ts';
 import type { BoxState, ItemFacts } from '../shared/types.ts';
-import { LOOK_CHOICES, LOOK_DEFAULT, LOOK_KEY, LOOK_QUESTION, NOTE_MAX, choicesFor, questionField } from '../shared/answer.ts';
+import { FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, LOOK_QUESTION, NOTE_MAX, choicesFor, questionField } from '../shared/answer.ts';
 import { DAY_MS } from '../shared/names.ts';
 import { boxNamed } from '../shared/stage.ts';
 import { formatWait } from '../shared/turn.ts';
@@ -125,9 +125,9 @@ function answerForm(c: Card, answering: boolean): string {
   if (questions.length === 0 && !c.asksLook) return '';
   const parts = [
     '<form class="answer" method="post" action="/answer">',
-    `<input type="hidden" name="repo" value="${esc(c.facts.repo)}">`,
-    `<input type="hidden" name="number" value="${c.facts.number}">`,
-    `<input type="hidden" name="fingerprint" value="${esc(c.fingerprint)}">`,
+    `<input type="hidden" name="${FORM_FIELD.repo}" value="${esc(c.facts.repo)}">`,
+    `<input type="hidden" name="${FORM_FIELD.number}" value="${c.facts.number}">`,
+    `<input type="hidden" name="${FORM_FIELD.fingerprint}" value="${esc(c.fingerprint)}">`,
   ];
   if (questions.length > 0) {
     const qs = questions
@@ -139,10 +139,10 @@ function answerForm(c: Card, answering: boolean): string {
     parts.push(`<div class="detail"><b>Left for you to decide:</b><ol class="q">${qs}</ol></div>`);
   }
   if (c.asksLook) {
-    const choices = LOOK_CHOICES.map((v) => choice(LOOK_KEY, v, v === LOOK_DEFAULT)).join('');
+    const choices = LOOK_CHOICES.map((v) => choice(FORM_FIELD.look, v, v === LOOK_DEFAULT)).join('');
     parts.push(`<div class="detail"><b>${esc(LOOK_QUESTION)}</b><div class="choices">${choices}</div></div>`);
   }
-  parts.push(`<textarea name="note" maxlength="${NOTE_MAX}" placeholder="A note back (optional)" aria-label="A note back"></textarea>`);
+  parts.push(`<textarea name="${FORM_FIELD.note}" maxlength="${NOTE_MAX}" placeholder="A note back (optional)" aria-label="A note back"></textarea>`);
   parts.push(answering
     ? '<div class="sendrow"><button type="submit" class="btn send">Send answers</button></div>'
     : `<div class="sendrow"><button type="submit" class="btn send" disabled>Send answers</button><span class="age">${esc("Answering isn't set up yet: the Worker has no token to post with.")}</span></div>`);
@@ -200,16 +200,17 @@ function listRow(c: Card, note: string): string {
   return `<div class="quiet">${ref(c.facts)}<span class="t">${esc(c.facts.title)}</span><span class="age">${esc(note)}</span></div>`;
 }
 
-const ANSWER_ROW_NOTE: Record<'awaiting-pickup' | 'picked-up', string> = {
-  'awaiting-pickup': 'answered, waiting for Claude to pick it up',
-  'picked-up': 'Claude picked up your answers',
-};
-
 function claudeRow(c: Card, now: Date): string {
-  if (c.answerState === 'awaiting-pickup' || c.answerState === 'picked-up') return listRow(c, ANSWER_ROW_NOTE[c.answerState]);
-  const noLabel = c.turn === 'none' ? ' · no turn label' : '';
-  const stale = c.statusStale ? ` · ${STALE_STATUS}` : '';
-  return listRow(c, `last activity ${ago(c.facts.lastActivityAt, now)}${noLabel}${stale}`);
+  const lead =
+    c.answerState === 'awaiting-pickup' ? 'answered, waiting for Claude to pick it up'
+    : c.answerState === 'picked-up' ? `Claude picked up your answers${c.pickedUpAt ? ` ${ago(c.pickedUpAt, now)}` : ''}`
+    : `last activity ${ago(c.facts.lastActivityAt, now)}`;
+  const notes = [
+    ...(c.turn === 'none' ? ['no turn label'] : []),
+    ...(c.outOfSync ? ['label out of sync'] : []),
+    ...(c.statusStale ? [STALE_STATUS] : []),
+  ];
+  return listRow(c, [lead, ...notes].join(' · '));
 }
 
 function quietRow(c: Card, now: Date): string {
@@ -219,13 +220,13 @@ function quietRow(c: Card, now: Date): string {
 }
 
 /** A short page saying what happened to a post, with a way back to the board. */
-export function renderMessage(title: string, text: string): string {
+export function renderMessage(title: string, text: string, extra?: { href: string; text: string }): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>PR Board</title><style>${CSS}</style></head>
 <body><div class="pb">
   <div class="sec">${esc(title)}</div>
   <div class="detail">${esc(text)}</div>
-  <div class="links"><a href="/">Back to the board</a></div>
+  <div class="links">${extra ? link(extra.href, extra.text) : ''}<a href="/">Back to the board</a></div>
 </div></body></html>`;
 }
 

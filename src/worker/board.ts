@@ -27,6 +27,8 @@ export interface Card {
   answerState: AnswerState | null;
   /** The newest of those answers. */
   answerUrl: string | null;
+  /** When the last of them was picked up, once every one has been; null otherwise. */
+  pickedUpAt: string | null;
 }
 
 /**
@@ -64,15 +66,18 @@ function changedSince(change: string | null, written: string | null): boolean {
 interface HiddenWait { issue: number; since: string | null }
 
 function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card {
-  const status = statusOf(f);
+  // Read once here; everything below works from these.
+  const text = statusText(f);
+  const status = parseStatus(text);
   const effective = effectiveTurn(f.labels, status);
   const own = waitingSince(f, status);
-  const strip = stageStrip(f, status, now);
+  const strip = stageStrip(f, status, now, effective.turn);
   const why = whyTag(status, strip, effective.turn);
   // The PR stands in for an issue that is waiting on the owner, so the PR waits too. Unless the PR
   // already says so itself, its labels are out of step with that.
   const carried = hidden !== undefined && effective.turn !== 'owner';
-  const unclaimed = f.answers.filter((a) => !a.claimed);
+  const unclaimed = f.answers.filter((a) => a.claimedAt === null);
+  const claimTimes = f.answers.map((a) => a.claimedAt).filter((t): t is string => t !== null);
   const answerState: AnswerState | null =
     f.answers.length === 0 ? null
     : unclaimed.length === 0 ? 'picked-up'
@@ -83,7 +88,7 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
   return {
     facts: f,
     status,
-    statusUnreadable: status === null && hasStatusSection(statusText(f)),
+    statusUnreadable: status === null && hasStatusSection(text),
     statusStale: status !== null && changedSince(f.lastChangeAt, f.statusWrittenAt),
     statusEditedByHand: status?.editedByHand === true,
     turn: carried ? 'owner' : effective.turn,
@@ -93,10 +98,11 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
     waitingSince: since,
     waited: since ? formatWait(since, now) : '',
     toTest: status?.toTest ?? extractToTest(f.body),
-    asksLook: asksForLook(f, status),
+    asksLook: asksForLook(f, effective.turn),
     fingerprint: statusFingerprint(status),
     answerState,
     answerUrl: f.answers.at(-1)?.url ?? null,
+    pickedUpAt: answerState === 'picked-up' ? claimTimes.reduce((a, b) => (time(b) > time(a) ? b : a)) : null,
   };
 }
 

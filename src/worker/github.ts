@@ -1,5 +1,4 @@
-import { parseAnswer } from '../shared/answer.ts';
-import { OWNER_LOGIN } from '../shared/config.ts';
+import { answersCurrentStatus, isClaimReaction, isOwnerAnswer } from '../shared/answer.ts';
 import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_OWNER, LABEL_PARKED, REPO_WINDOW_DAYS, WRITTEN_ELSEWHERE } from '../shared/names.ts';
 import { parseStatus, pickStatusComment } from '../shared/status.ts';
 import { effectiveTurn } from '../shared/turn.ts';
@@ -115,18 +114,19 @@ function graphqlWith(token: string, fetchFn: typeof fetch) {
 }
 
 const CLAIMS_QUERY = `query($ids: [ID!]!) {
-  nodes(ids: $ids) { ... on IssueComment { id reactions(content: EYES, first: ${CLAIMS_PER_ANSWER}) { nodes { user { login } } } } }
+  nodes(ids: $ids) { ... on IssueComment { id reactions(content: EYES, first: ${CLAIMS_PER_ANSWER}) { nodes { content createdAt user { login } } } } }
 }`;
 
 /**
- * Marks each answer that someone other than the owner has reacted 👀 to (the watcher's claim). Only
- * the answers the board found are asked about, by id, so the main query stays the size it was.
+ * Marks when each answer was claimed: the first 👀 from someone other than the owner (a watcher).
+ * Only the answers the board found are asked about, by id, so the main query stays the size it was.
  */
 async function readClaims(answers: AnswerSeen[], graphql: ReturnType<typeof graphqlWith>, errors: string[]): Promise<void> {
   if (answers.length === 0) return;
   const asked = answers.slice(0, MAX_ANSWERS_CHECKED);
   if (answers.length > asked.length) errors.push(`More than ${MAX_ANSWERS_CHECKED} answers to check; some may show as not picked up`);
-  type Node = { id?: string; reactions?: { nodes?: ({ user: { login: string } | null } | null)[] | null } | null } | null;
+  type Reaction = { content?: string; createdAt?: string; user: { login: string } | null };
+  type Node = { id?: string; reactions?: { nodes?: (Reaction | null)[] | null } | null } | null;
   try {
     const res = await graphql<{ nodes: Node[] | null }>(CLAIMS_QUERY, { ids: asked.map((a) => a.id) });
     const nodes = res.data?.nodes;
@@ -134,12 +134,14 @@ async function readClaims(answers: AnswerSeen[], graphql: ReturnType<typeof grap
       errors.push(`Couldn't check whether answers were picked up: ${res.errors?.[0]?.message ?? 'GitHub sent nothing'}`);
       return;
     }
-    const claimedIds = new Set<string>();
+    const claimedAt = new Map<string, string>();
     for (const n of nodes) {
-      const logins = (n?.reactions?.nodes ?? []).map((r) => r?.user?.login);
-      if (n?.id && logins.some((l) => l !== undefined && l !== OWNER_LOGIN)) claimedIds.add(n.id);
+      const claims = (n?.reactions?.nodes ?? [])
+        .filter((r): r is Reaction => r !== null && isClaimReaction(r.user?.login, r.content ?? '') && typeof r.createdAt === 'string')
+        .map((r) => r.createdAt!);
+      if (n?.id && claims.length > 0) claimedAt.set(n.id, earliest(claims));
     }
-    for (const a of asked) a.claimed = claimedIds.has(a.id);
+    for (const a of asked) a.claimedAt = claimedAt.get(a.id) ?? null;
   } catch (e) {
     errors.push(`Couldn't check whether answers were picked up: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -285,6 +287,10 @@ function latest(times: string[]): string {
   return times.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
 }
 
+function earliest(times: string[]): string {
+  return times.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a));
+}
+
 function latestOrNull(times: string[]): string | null {
   return times.length > 0 ? latest(times) : null;
 }
@@ -309,16 +315,14 @@ function baseFacts(repo: string, item: RawItem, kind: 'pr' | 'issue', labels: st
   };
 }
 
-/** A comment holding the owner's answers, posted from the board. */
-function isOwnerAnswer(c: Comment): boolean {
-  return c.author?.login === OWNER_LOGIN && parseAnswer(c.body) !== null;
-}
+const fromOwner = (c: Comment): boolean => isOwnerAnswer(c.author?.login, c.body);
 
-/** The owner's answers written after the status was; all of them when there is no status time. Not yet checked for claims. */
+/** The owner's answers to the current status, oldest first. Whether each was claimed is read afterwards. */
 function answersSince(comments: Comment[], writtenAt: string | null): AnswerSeen[] {
   return comments
-    .filter((c) => c.id !== undefined && isOwnerAnswer(c) && (writtenAt === null || Date.parse(c.createdAt) > Date.parse(writtenAt)))
-    .map((c) => ({ id: c.id!, url: c.url, at: c.createdAt, claimed: false }));
+    .filter((c): c is Comment & { id: string } =>
+      c.id !== undefined && answersCurrentStatus({ login: c.author?.login, body: c.body, createdAt: c.createdAt }, writtenAt))
+    .map((c) => ({ id: c.id, url: c.url, at: c.createdAt, claimedAt: null }));
 }
 
 function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
@@ -379,7 +383,7 @@ function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
     statusWrittenAt,
     answers: answersSince(comments, statusWrittenAt),
     // The owner answering is not a change the status should have caught up with.
-    lastChangeAt: latestOrNull([...commits.map((c) => c.committedDate), ...comments.filter((c) => !isOwnerAnswer(c)).map((c) => c.createdAt)]),
+    lastChangeAt: latestOrNull([...commits.map((c) => c.committedDate), ...comments.filter((c) => !fromOwner(c)).map((c) => c.createdAt)]),
   };
 }
 
@@ -400,7 +404,7 @@ function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
     statusCommentBody: statusComment?.body ?? null,
     statusWrittenAt,
     answers: answersSince(comments, statusWrittenAt),
-    lastChangeAt: latestOrNull(comments.filter((c) => c !== statusComment && !isOwnerAnswer(c)).map((c) => c.createdAt)),
+    lastChangeAt: latestOrNull(comments.filter((c) => c !== statusComment && !fromOwner(c)).map((c) => c.createdAt)),
   };
 }
 

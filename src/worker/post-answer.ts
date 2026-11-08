@@ -1,7 +1,8 @@
-import { LOOK_KEY, asksForLook, checkAnswer, renderAnswer } from '../shared/answer.ts';
+import { FORM_FIELD, asksForLook, checkAnswer, questionOfField, renderAnswer } from '../shared/answer.ts';
 import { OWNER_LOGIN } from '../shared/config.ts';
-import { statusFingerprint } from '../shared/fingerprint.ts';
+import { FINGERPRINT_RE, statusFingerprint } from '../shared/fingerprint.ts';
 import { parseStatus, statusText } from '../shared/status.ts';
+import { effectiveTurn } from '../shared/turn.ts';
 import type { fetchItem, postComment } from './github.ts';
 
 export const MAX_BODY_BYTES = 16 * 1024;
@@ -10,8 +11,7 @@ export const MAX_BODY_BYTES = 16 * 1024;
 export const ITEM_REF = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d{0,9})$/;
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const NUMBER = /^[1-9]\d{0,9}$/;
-const FINGERPRINT = /^[0-9a-f]{8}$/;
-const QUESTION_FIELD = /^q([1-9]\d{0,3})$/;
+const KNOWN_FIELDS: readonly string[] = [FORM_FIELD.repo, FORM_FIELD.number, FORM_FIELD.fingerprint, FORM_FIELD.note];
 
 export interface AnswerDeps {
   fetchItem: typeof fetchItem;
@@ -19,9 +19,10 @@ export interface AnswerDeps {
 }
 
 /** What to send back: a page saying why nothing was posted, or the item whose answers were posted. */
-export type AnswerResult = { status: number; title: string; text: string } | { sent: string };
+export type AnswerResult = { status: number; title: string; text: string; link?: { href: string; text: string } } | { sent: string };
 
-const refuse = (status: number, title: string, text: string): AnswerResult => ({ status, title, text });
+const refuse = (status: number, title: string, text: string, link?: { href: string; text: string }): AnswerResult =>
+  ({ status, title, text, ...(link ? { link } : {}) });
 
 /** The request body as text, or null when it is longer than `max` bytes. Stops reading as soon as it is. */
 async function readLimited(req: Request, max: number): Promise<string | null> {
@@ -75,18 +76,18 @@ export async function postAnswer(
   for (const [key, value] of form) {
     if (seen.has(key)) return refuse(400, 'Not sent', `The form sent "${key}" twice.`);
     seen.add(key);
-    const q = QUESTION_FIELD.exec(key);
-    if (q) answers[q[1]!] = value;
-    else if (key === LOOK_KEY) answers[LOOK_KEY] = value;
-    else if (!['repo', 'number', 'fingerprint', 'note'].includes(key)) return refuse(400, 'Not sent', `The form sent a field the board doesn't know: "${key}".`);
+    const q = questionOfField(key);
+    if (q !== null) answers[q] = value;
+    else if (key === FORM_FIELD.look) answers[FORM_FIELD.look] = value;
+    else if (!KNOWN_FIELDS.includes(key)) return refuse(400, 'Not sent', `The form sent a field the board doesn't know: "${key}".`);
   }
-  const repo = form.get('repo') ?? '';
-  const number = form.get('number') ?? '';
-  const fingerprint = form.get('fingerprint') ?? '';
-  const note = form.get('note') ?? '';
+  const repo = form.get(FORM_FIELD.repo) ?? '';
+  const number = form.get(FORM_FIELD.number) ?? '';
+  const fingerprint = form.get(FORM_FIELD.fingerprint) ?? '';
+  const note = form.get(FORM_FIELD.note) ?? '';
   if (!REPO.test(repo) || repo.includes('..')) return refuse(400, 'Not sent', 'The form named no repository the board can read.');
   if (!NUMBER.test(number)) return refuse(400, 'Not sent', 'The form named no item number.');
-  if (!FINGERPRINT.test(fingerprint)) return refuse(400, 'Not sent', 'The form did not say which questions it answers.');
+  if (!FINGERPRINT_RE.test(fingerprint)) return refuse(400, 'Not sent', 'The form did not say which questions it answers.');
   const ref = `${repo}#${number}`;
 
   // Read the item again with the read-only token: it must still be there, open, and asking the same questions.
@@ -98,17 +99,32 @@ export async function postAnswer(
   }
   if (!item) return refuse(404, 'Not sent', `The board can't see ${ref}.`);
   if (item.merged || item.closedAt !== null) return refuse(409, 'Not sent', `${ref} is closed, so the answers were not sent.`);
+  // A page left open after answering, or open in two tabs, would otherwise send the same answers twice.
+  const earlier = item.answers.at(-1);
+  if (earlier) {
+    return refuse(409, 'Not sent', `You have already answered ${ref} since Claude last wrote its status, so these answers were not sent. Claude will write a new status once it has acted on them.`, { href: earlier.url, text: 'Your answers' });
+  }
   // Read exactly as the page read it, so a status edited by hand is checked against its text, as shown.
   const status = parseStatus(statusText(item));
+  const { turn } = effectiveTurn(item.labels, status);
+  if (turn !== 'owner') {
+    return refuse(409, 'Not sent', `${ref} isn't waiting on you any more, so the answers were not sent. Go back to the board to see where it is.`);
+  }
   if (statusFingerprint(status) !== fingerprint) {
     return refuse(409, 'Not sent', `The questions on ${ref} have changed since this page was loaded, so the answers were not sent. Go back to the board to see the new questions.`);
   }
-  const problem = checkAnswer(status, asksForLook(item, status), { answers, note });
+  const problem = checkAnswer(status, asksForLook(item, turn), { answers, note });
   if (problem) return refuse(400, 'Not sent', problem);
+  let body: string;
+  try {
+    body = renderAnswer(status, { fingerprint, answers, note });
+  } catch (e) {
+    return refuse(400, 'Not sent', `${e instanceof Error ? e.message : String(e)}, so they were not sent. Rewrite the status with pr-status set.`);
+  }
 
   let posted: { login: string | null };
   try {
-    posted = await deps.postComment(answerToken, repo, Number(number), renderAnswer(status, { fingerprint, answers, note }));
+    posted = await deps.postComment(answerToken, repo, Number(number), body);
   } catch (e) {
     return refuse(502, 'Not sent', `GitHub didn't take the answers for ${ref}: ${e instanceof Error ? e.message : String(e)}`);
   }

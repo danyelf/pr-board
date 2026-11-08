@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { FILE_AN_ISSUE, LOOK_CHOICES, LOOK_DEFAULT, NOTE_MAX, asksForLook, checkAnswer, choicesFor, parseAnswer, renderAnswer } from '../src/shared/answer.ts';
+import {
+  FILE_AN_ISSUE, FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, NOTE_MAX, answersCurrentStatus, asksForLook, checkAnswer, choicesFor,
+  isClaimReaction, isOwnerAnswer, isWaitingAnswer, parseAnswer, questionField, questionOfField, renderAnswer, type CommentSeen,
+} from '../src/shared/answer.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
 import type { Status } from '../src/shared/types.ts';
 import { facts, status } from './helpers.ts';
@@ -19,14 +22,11 @@ describe('the look question', () => {
   });
 
   it("is asked of an open PR on the owner's turn that hasn't had prep", () => {
-    const s = status({ waitingOn: 'owner' });
-    expect(asksForLook(facts({ labels: ['on sam'] }), s)).toBe(true);
-    expect(asksForLook(facts({ labels: ['on sam'] }), null)).toBe(true);
-    expect(asksForLook(facts({ labels: [] }), s)).toBe(true);
-    expect(asksForLook(facts({ labels: ['on sam'], prepDone: true }), s)).toBe(false);
-    expect(asksForLook(facts({ labels: ['on sam'], merged: true }), s)).toBe(false);
-    expect(asksForLook(facts({ labels: ['on sam'], kind: 'issue' }), s)).toBe(false);
-    expect(asksForLook(facts({ labels: ['in-progress'] }), status({ waitingOn: 'claude' }))).toBe(false);
+    expect(asksForLook(facts(), 'owner')).toBe(true);
+    expect(asksForLook(facts({ prepDone: true }), 'owner')).toBe(false);
+    expect(asksForLook(facts({ merged: true }), 'owner')).toBe(false);
+    expect(asksForLook(facts({ kind: 'issue' }), 'owner')).toBe(false);
+    for (const turn of ['claude', 'nobody', 'none'] as const) expect(asksForLook(facts(), turn)).toBe(false);
   });
 });
 
@@ -103,5 +103,64 @@ describe('renderAnswer and parseAnswer', () => {
     expect(parseAnswer('<!-- pr-board answer {"v":1,"fingerprint":"xyz","answers":{},"note":""} -->')).toBeNull();
     expect(parseAnswer('<!-- pr-board answer {"v":1,"fingerprint":"abcdef12","answers":{},"note":""} -->\r\nrest'))
       .toEqual({ fingerprint: 'abcdef12', answers: {}, note: '' });
+  });
+
+  it('writes each question and choice on one line, whatever line breaks or runs of spaces they hold', () => {
+    const messy: Status = status({ questions: [{ n: 1, text: 'Colour\nof the\r\n  button?', choices: ['dark\nblue', 'red'], defaultChoice: 'red' }] });
+    const text = renderAnswer(messy, { fingerprint: 'abcdef12', answers: { '1': 'dark\nblue' }, note: '' });
+    expect(text).toContain('1. Colour of the button? → **dark blue**');
+    expect(text.split('\n')).toHaveLength(4);
+  });
+
+  it('refuses to write a comment that would hold a status section or a second answer marker', () => {
+    const carrying = (text: string): Status => status({ questions: [{ n: 1, text, choices: ['a', 'b'], defaultChoice: 'a' }] });
+    const write = (s: Status) => () => renderAnswer(s, { fingerprint: 'abcdef12', answers: { '1': 'a' }, note: '' });
+    expect(write(carrying('see <!-- status --> x <!-- /status -->'))).toThrow(/status section/);
+    expect(write(carrying('see <!-- pr-board answer {} -->'))).toThrow(/second answer marker/);
+    expect(write(carrying('see <!-- status --> only the opening'))).not.toThrow();
+  });
+});
+
+describe('the answer form', () => {
+  it('names a field for each question, and reads the question back from it', () => {
+    expect(questionField(3)).toBe('q3');
+    expect(questionOfField(questionField(3))).toBe('3');
+    for (const field of ['q0', 'q', 'q12345', 'look', 'note', 'xq1']) expect(questionOfField(field)).toBeNull();
+    expect(Object.values(FORM_FIELD)).toEqual(['repo', 'number', 'fingerprint', 'note', 'look']);
+  });
+});
+
+describe('the rules for an answer', () => {
+  const at = (iso: string, over: Partial<CommentSeen> = {}): CommentSeen => ({ login: 'sam-gh', body: renderAnswer(asked, { fingerprint: 'abcdef12', answers: { '1': 'leave' }, note: '' }), createdAt: iso, ...over });
+
+  it("counts a comment as the owner's answer only from the owner's login and in the answer format", () => {
+    const body = at('2026-11-05T10:00:00Z').body;
+    expect(isOwnerAnswer('sam-gh', body)).toBe(true);
+    expect(isOwnerAnswer('bob', body)).toBe(false);
+    expect(isOwnerAnswer(null, body)).toBe(false);
+    expect(isOwnerAnswer('sam-gh', 'Answers: 1 leave')).toBe(false);
+  });
+
+  it('counts 👀 from anyone but the owner as a claim, in either spelling GitHub uses', () => {
+    expect(isClaimReaction('danyel-claude', 'eyes')).toBe(true);
+    expect(isClaimReaction('danyel-claude', 'EYES')).toBe(true);
+    expect(isClaimReaction('sam-gh', 'eyes')).toBe(false);
+    expect(isClaimReaction(null, 'eyes')).toBe(false);
+    expect(isClaimReaction('danyel-claude', 'heart')).toBe(false);
+  });
+
+  it('counts only answers written after the status, or every answer when the status has no time', () => {
+    expect(answersCurrentStatus(at('2026-11-05T10:00:00Z'), '2026-11-05T09:00:00Z')).toBe(true);
+    expect(answersCurrentStatus(at('2026-11-05T08:00:00Z'), '2026-11-05T09:00:00Z')).toBe(false);
+    expect(answersCurrentStatus(at('2026-11-05T08:00:00Z'), null)).toBe(true);
+    expect(answersCurrentStatus(at('2026-11-05T10:00:00Z', { login: 'bob' }), null)).toBe(false);
+  });
+
+  it('says an answer is still waiting until someone other than the owner reacts 👀', () => {
+    const c = at('2026-11-05T10:00:00Z');
+    expect(isWaitingAnswer(c, '2026-11-05T09:00:00Z', [])).toBe(true);
+    expect(isWaitingAnswer(c, '2026-11-05T09:00:00Z', [{ login: 'sam-gh', content: 'eyes' }, { login: 'x', content: 'heart' }])).toBe(true);
+    expect(isWaitingAnswer(c, '2026-11-05T09:00:00Z', [{ login: 'danyel-claude', content: 'eyes' }])).toBe(false);
+    expect(isWaitingAnswer(c, '2026-11-05T11:00:00Z', [])).toBe(false);
   });
 });

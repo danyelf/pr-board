@@ -15,8 +15,8 @@ export interface Status {
   editedByHand?: boolean;
 }
 export interface LabelEvent { label: string; action: 'added' | 'removed'; at: string }
-/** An answer comment from the owner. `claimed` is true once someone else has reacted 👀 to it. */
-export interface AnswerSeen { id: string; url: string; at: string; claimed: boolean }
+/** An answer comment from the owner. `claimedAt` is when someone else first reacted 👀 to it; null until then. */
+export interface AnswerSeen { id: string; url: string; at: string; claimedAt: string | null }
 export interface ItemFacts {
   repo: string; number: number; kind: 'pr' | 'issue'; title: string; url: string;
   labels: string[]; body: string; createdAt: string; closedAt: string | null;

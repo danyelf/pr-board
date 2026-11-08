@@ -29,8 +29,8 @@ function mergeBox(f: ItemFacts, s: Status | null, turn: Turn, now: Date): StageB
   return box('Ready for merge', atMergeStep && note ? 'blocked' : 'todo', note ?? '');
 }
 
-export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date()): StageBox[] {
-  const { turn } = effectiveTurn(f.labels, s);
+/** `turn` is passed in when the caller already has it. */
+export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date(), turn: Turn = effectiveTurn(f.labels, s).turn): StageBox[] {
   const isPr = f.kind === 'pr';
   const questions = s?.questions.length ?? 0;
 

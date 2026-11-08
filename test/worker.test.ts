@@ -322,6 +322,26 @@ describe('POST /answer', () => {
     expect(posted[0]!.body).toContain('1. Colour of the button? → **change**');
   });
 
+  it('refuses a second answer while the first is still waiting on the status, with a link to the first', async () => {
+    const answers = [{ id: 'IC_1', url: 'https://github.com/acme/x/pull/5#issuecomment-1', at: '2026-11-05T23:00:00Z', claimedAt: null }];
+    const { h, posted } = answerHandler({ item: { ...item(), answers } });
+    const res = await post(h, good);
+    expect(res.status).toBe(409);
+    const page = await res.text();
+    expect(page).toContain('already answered acme/x#5');
+    expect(page).toContain('href="https://github.com/acme/x/pull/5#issuecomment-1">Your answers ↗</a>');
+    expect(posted).toHaveLength(0);
+  });
+
+  it("refuses answers from a page left open after the item stopped being the owner's turn", async () => {
+    const moved = facts({ repo: 'acme/x', number: 5, labels: ['in-progress'], body: renderStatus({ ...asking, waitingOn: 'claude' }) });
+    const { h, posted } = answerHandler({ item: moved });
+    const res = await post(h, good);
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('isn&#39;t waiting on you any more');
+    expect(posted).toHaveLength(0);
+  });
+
   it("refuses an item the read token can't see, or one that is closed", async () => {
     const hidden = answerHandler({ item: null });
     expect((await post(hidden.h, good)).status).toBe(404);

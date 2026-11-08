@@ -17,7 +17,7 @@ interface FakeOptions {
   behind?: Record<string, number>;        // "base...head" -> behind_by
   status?: number;
   shape?: (repo: string, data: any) => any; // change what GitHub sends for a repo, after the recorded data is read
-  reactions?: Record<string, string[]>;     // comment id -> logins that reacted 👀
+  reactions?: Record<string, (string | { login: string; at: string })[]>; // comment id -> who reacted 👀, and when
   reactionsFail?: boolean;
 }
 
@@ -35,7 +35,10 @@ function fake(opts: FakeOptions = {}) {
       if (query.includes('nodes(ids:')) {
         if (opts.reactionsFail) return Response.json({ data: null, errors: [{ message: 'Something went wrong' }] });
         const nodes = sent.variables.ids.map((id: string) => ({
-          id, reactions: { nodes: (opts.reactions?.[id] ?? []).map((login) => ({ user: { login } })) },
+          id, reactions: { nodes: (opts.reactions?.[id] ?? []).map((r) => {
+            const { login, at } = typeof r === 'string' ? { login: r, at: '2026-11-05T12:00:00Z' } : r;
+            return { content: 'EYES', createdAt: at, user: { login } };
+          }) },
         }));
         return Response.json({ data: { nodes } });
       }
@@ -465,13 +468,18 @@ describe('fetchItems reads answers', () => {
       comment({ id: 'IC_bob', author: { login: 'bob' }, createdAt: '2026-11-05T11:00:00Z' }),
       comment({ id: 'IC_plain', body: 'Answers: 1 leave', createdAt: '2026-11-05T11:30:00Z' }),
     ]);
-    const { fn, calls } = fake({ itemsFor, reactions: { IC_a: ['danyel-claude'], IC_b: ['sam-gh'] } });
+    const reactions = {
+      IC_a: [{ login: 'other-bot', at: '2026-11-05T10:20:00Z' }, { login: 'danyel-claude', at: '2026-11-05T10:02:00Z' }],
+      IC_b: ['sam-gh'],
+    };
+    const { fn, calls } = fake({ itemsFor, reactions });
     const { items, errors } = await fetchItems('tok', NOW, fn);
     expect(errors).toEqual([]);
     expect(items.find((i) => i.number === 573)!.answers).toEqual([
-      { id: 'IC_a', url: 'https://github.com/danyelf/torahmap/pull/573#issuecomment-IC_a', at: '2026-11-05T10:00:00Z', claimed: true },
+      // Claimed when the first watcher reacted.
+      { id: 'IC_a', url: 'https://github.com/danyelf/torahmap/pull/573#issuecomment-IC_a', at: '2026-11-05T10:00:00Z', claimedAt: '2026-11-05T10:02:00Z' },
       // The owner's own 👀 is not a claim.
-      { id: 'IC_b', url: 'https://github.com/danyelf/torahmap/pull/573#issuecomment-IC_b', at: '2026-11-05T10:05:00Z', claimed: false },
+      { id: 'IC_b', url: 'https://github.com/danyelf/torahmap/pull/573#issuecomment-IC_b', at: '2026-11-05T10:05:00Z', claimedAt: null },
     ]);
     expect(reactionQueries(calls)).toHaveLength(1);
     expect(reactionQueries(calls)[0]!.variables).toEqual({ ids: ['IC_a', 'IC_b'] });
@@ -504,7 +512,7 @@ describe('fetchItems reads answers', () => {
     const { fn } = fake({ itemsFor: withComments([comment({ id: 'IC_a' })]), reactions: { IC_a: ['danyel-claude'] }, reactionsFail: true });
     const { items, errors } = await fetchItems('tok', NOW, fn);
     expect(errors).toEqual(["Couldn't check whether answers were picked up: Something went wrong"]);
-    expect(items.find((i) => i.number === 573)!.answers.map((a) => a.claimed)).toEqual([false]);
+    expect(items.find((i) => i.number === 573)!.answers.map((a) => a.claimedAt)).toEqual([null]);
   });
 
   it("doesn't count an answer as a change the status is older than", async () => {

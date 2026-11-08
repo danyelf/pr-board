@@ -47,6 +47,9 @@ export function sha256Hex(text: string): string {
   return [...h].map((v) => v.toString(16).padStart(8, '0')).join('');
 }
 
+/** What a fingerprint looks like: 8 hex digits. */
+export const FINGERPRINT_RE = /^[0-9a-f]{8}$/;
+
 /**
  * A short fingerprint of what a status asks: the ask and the questions, with their choices and
  * defaults. Whose turn it is, since when, and the test steps are left out, so handing the same

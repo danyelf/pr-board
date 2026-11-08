@@ -80,7 +80,7 @@ export function makeHandler(deps: Deps): Handler {
       await deps.cache?.delete(cacheKey(now()));
       return new Response(null, { status: 303, headers: { Location: `/?sent=${encodeURIComponent(result.sent)}` } });
     }
-    return new Response(renderMessage(result.title, result.text), { status: result.status, headers: PAGE_HEADERS });
+    return new Response(renderMessage(result.title, result.text, result.link), { status: result.status, headers: PAGE_HEADERS });
   }
 
   return {
