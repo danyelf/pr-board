@@ -360,7 +360,8 @@ function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
   const commitsSincePrep = prepAt === null ? null : commits.filter((c) => Date.parse(c.committedDate) > Date.parse(prepAt!)).length;
 
   const extra = [...(pr.mergedAt ? [pr.mergedAt] : []), ...commits.map((c) => c.committedDate)];
-  const statusWrittenAt = pr.lastEditedAt ?? pr.createdAt;
+  // The time pr-status wrote into the status, while the text still matches it; else the description's last edit.
+  const statusWrittenAt = parseStatus(body)?.writtenAt ?? pr.lastEditedAt ?? pr.createdAt;
   return {
     ...baseFacts(repo, pr, 'pr', labels, events, comments, extra),
     isDraft: pr.isDraft ?? false, merged: pr.merged ?? false, mergedAt: pr.mergedAt ?? null,
@@ -388,7 +389,7 @@ function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
   const comments = listOfItem(issue.comments, 'comments', COMMENTS_PER_ITEM, where, 'the status comment or an answer may be missing', report);
   const labels = listOfItem(issue.labels, 'labels', LABELS_PER_ITEM, where, 'a turn label may be missing', report).map((l) => l.name);
   const statusComment = pickStatusComment(comments);
-  const statusWrittenAt = statusComment?.updatedAt ?? null;
+  const statusWrittenAt = statusComment ? parseStatus(statusComment.body)?.writtenAt ?? statusComment.updatedAt : null;
   return {
     ...baseFacts(repo, issue, 'issue', labels, events, comments, []),
     isDraft: false, merged: false, mergedAt: null, mergeState: null, behindBase: false,

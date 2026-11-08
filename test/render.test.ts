@@ -32,6 +32,16 @@ describe('renderBoard', () => {
     expect(await page([facts({ number: 900, labels: ['on sam'],lastActivityAt: '2026-11-05T23:00:00Z' })])).toContain('No status written yet');
   });
 
+  it('tags a card whose status text was edited by hand, and shows what the text says', async () => {
+    const body = renderStatus(status({ waitingOn: 'owner', ask: 'look at it' })).replace('**Ask:** look at it', '**Ask:** look at it again');
+    const html = await page([facts({ number: 961, labels: ['on sam'], body, lastActivityAt: '2026-11-05T23:00:00Z' })]);
+    const card = html.slice(html.indexOf('PR #961'));
+    expect(card).toContain('status edited by hand; rewrite it with pr-status set');
+    expect(card).toContain('<div class="ask">look at it again</div>');
+    const clean = await page([facts({ number: 962, labels: ['on sam'], body: renderStatus(status({ waitingOn: 'owner' })), lastActivityAt: '2026-11-05T23:00:00Z' })]);
+    expect(clean).not.toContain('edited by hand');
+  });
+
   it('flags a label that disagrees with the status', async () => {
     expect(await page()).toContain('label out of sync');
   });

@@ -113,6 +113,15 @@ describe('pr-status set', () => {
     expect(parseStatus(w.body)?.since).toBe('2026-11-07T10:00:00.000Z');
   });
 
+  it('records when it wrote the status, each time, even when since stays the same', async () => {
+    const w = world();
+    await run(w, SET, '2026-11-05T10:00:00.000Z');
+    expect(parseStatus(w.body)?.writtenAt).toBe('2026-11-05T10:00:00.000Z');
+    await run(w, SET, '2026-11-06T10:00:00.000Z');
+    expect(parseStatus(w.body)?.writtenAt).toBe('2026-11-06T10:00:00.000Z');
+    expect(parseStatus(w.body)?.since).toBe('2026-11-05T10:00:00.000Z');
+  });
+
   it('refuses a question without a bold default and writes nothing', async () => {
     const r = await run(world(), ['set', 'acme/x#5', '--waiting', 'owner', '--ask', 'a', '--question', 'Colour? (red | green)']);
     expect(r.code).toBe(1);

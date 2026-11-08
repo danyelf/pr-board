@@ -74,7 +74,7 @@ function buildQuestions(texts: string[]): Question[] {
 
 function nextStatus(opts: SetOptions, questions: Question[], previous: Status | null, now: Date): Status {
   const since = previous && previous.waitingOn === opts.waiting && previous.since ? previous.since : now.toISOString();
-  return { waitingOn: opts.waiting, since, ask: opts.ask, questions, toTest: opts.toTest };
+  return { waitingOn: opts.waiting, since, ask: opts.ask, questions, toTest: opts.toTest, writtenAt: now.toISOString() };
 }
 
 /** A PR that has just been handed to the owner, and who opened it; null otherwise. */

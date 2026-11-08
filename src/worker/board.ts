@@ -2,7 +2,7 @@ import type { ItemFacts, StageBox, Status, Turn } from '../shared/types.ts';
 import { asksForLook } from '../shared/answer.ts';
 import { statusFingerprint } from '../shared/fingerprint.ts';
 import { DAY_MS, PICKUP_GRACE_MS } from '../shared/names.ts';
-import { extractToTest, hasStatusSection, parseStatus } from '../shared/status.ts';
+import { extractToTest, hasStatusSection, parseStatus, statusText } from '../shared/status.ts';
 import { stageStrip, whyTag } from '../shared/stage.ts';
 import { effectiveTurn, formatWait, waitingSince } from '../shared/turn.ts';
 
@@ -11,6 +11,7 @@ export interface Card {
   status: Status | null;
   statusUnreadable: boolean;          // a status section is there, but it couldn't be read
   statusStale: boolean;               // there is a status, and a commit or comment has come since it was written
+  statusEditedByHand: boolean;        // its text was changed after pr-status wrote it, so the text was read
   turn: Turn;
   outOfSync: boolean;
   strip: StageBox[];
@@ -49,10 +50,6 @@ function isOpen(f: ItemFacts): boolean {
   return !f.merged && f.closedAt === null;
 }
 
-function statusText(f: ItemFacts): string {
-  return f.kind === 'pr' ? f.body : f.statusCommentBody ?? '';
-}
-
 function statusOf(f: ItemFacts): Status | null {
   return parseStatus(statusText(f));
 }
@@ -88,6 +85,7 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
     status,
     statusUnreadable: status === null && hasStatusSection(statusText(f)),
     statusStale: status !== null && changedSince(f.lastChangeAt, f.statusWrittenAt),
+    statusEditedByHand: status?.editedByHand === true,
     turn: carried ? 'owner' : effective.turn,
     outOfSync: carried || effective.outOfSync,
     strip,

@@ -1,7 +1,7 @@
 import { LOOK_KEY, asksForLook, checkAnswer, renderAnswer } from '../shared/answer.ts';
 import { OWNER_LOGIN } from '../shared/config.ts';
 import { statusFingerprint } from '../shared/fingerprint.ts';
-import { parseStatus } from '../shared/status.ts';
+import { parseStatus, statusText } from '../shared/status.ts';
 import type { fetchItem, postComment } from './github.ts';
 
 export const MAX_BODY_BYTES = 16 * 1024;
@@ -98,7 +98,8 @@ export async function postAnswer(
   }
   if (!item) return refuse(404, 'Not sent', `The board can't see ${ref}.`);
   if (item.merged || item.closedAt !== null) return refuse(409, 'Not sent', `${ref} is closed, so the answers were not sent.`);
-  const status = parseStatus(item.kind === 'pr' ? item.body : item.statusCommentBody ?? '');
+  // Read exactly as the page read it, so a status edited by hand is checked against its text, as shown.
+  const status = parseStatus(statusText(item));
   if (statusFingerprint(status) !== fingerprint) {
     return refuse(409, 'Not sent', `The questions on ${ref} have changed since this page was loaded, so the answers were not sent. Go back to the board to see the new questions.`);
   }

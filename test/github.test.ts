@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fetchItem, fetchItems, postComment } from '../src/worker/github.ts';
+import { renderStatus } from '../src/shared/status.ts';
 import { answerRepo, recordedRepo } from './github-fake.ts';
 
 const NOW = new Date('2026-11-06T06:00:00Z');
@@ -477,6 +478,22 @@ describe('fetchItems reads answers', () => {
     expect(items.find((i) => i.number === 574)!.answers).toEqual([]);
   });
 
+  it('times the status by when pr-status wrote it, when the data line still matches the text', async () => {
+    const written = renderStatus({ waitingOn: 'owner', since: null, ask: 'look', questions: [], toTest: null, writtenAt: '2026-11-05T09:30:00Z' });
+    const itemsFor = (body: string) => () => {
+      const data = withComments([comment({ id: 'IC_early', createdAt: '2026-11-05T09:15:00Z' }), comment({ id: 'IC_a', createdAt: '2026-11-05T10:00:00Z' })])();
+      data.pullRequests.nodes.find((p: any) => p.number === 573).body = body;
+      return data;
+    };
+    const trusted = (await fetchItems('tok', NOW, fake({ itemsFor: itemsFor(written) }).fn)).items.find((i) => i.number === 573)!;
+    expect(trusted.statusWrittenAt).toBe('2026-11-05T09:30:00Z');
+    expect(trusted.answers.map((a) => a.id)).toEqual(['IC_a']);
+    // Edited by hand, the data line's time can't be trusted, so the description's last edit is used.
+    const edited = (await fetchItems('tok', NOW, fake({ itemsFor: itemsFor(written.replace('**Ask:** look', '**Ask:** look again')) }).fn)).items.find((i) => i.number === 573)!;
+    expect(edited.statusWrittenAt).toBe('2026-11-05T09:00:00Z');
+    expect(edited.answers.map((a) => a.id)).toEqual(['IC_early', 'IC_a']);
+  });
+
   it('asks about reactions only when there are answers to ask about', async () => {
     const { fn, calls } = fake();
     await fetchItems('tok', NOW, fn);
@@ -512,6 +529,22 @@ describe('fetchItems reads answers', () => {
     const issue = items.find((i) => i.number === 563)!;
     expect(issue.answers.map((a) => a.id)).toEqual(['IC_a']);
     expect(issue.lastChangeAt).toBeNull();
+  });
+
+  it("times an issue's status by its data line when it can, not by the comment's last edit", async () => {
+    const body = renderStatus({ waitingOn: 'owner', since: null, ask: 'look', questions: [], toTest: null, writtenAt: '2026-11-05T08:00:00Z' });
+    const itemsFor = () => {
+      const data = recordedRepo();
+      const issue = data.issues.nodes.find((i: any) => i.number === 563);
+      issue.comments.nodes = [
+        { ...comment({ id: 'IC_s', author: { login: 'danyel-claude' }, createdAt: '2026-11-05T08:00:00Z' }), body, updatedAt: '2026-11-05T11:00:00Z' },
+        comment({ id: 'IC_a', createdAt: '2026-11-05T10:00:00Z' }),
+      ];
+      return data;
+    };
+    const issue = (await fetchItems('tok', NOW, fake({ itemsFor }).fn)).items.find((i) => i.number === 563)!;
+    expect(issue.statusWrittenAt).toBe('2026-11-05T08:00:00Z');
+    expect(issue.answers.map((a) => a.id)).toEqual(['IC_a']);
   });
 
   it('warns that an answer may be missing when the comments are cut off', async () => {

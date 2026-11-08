@@ -3,7 +3,7 @@ import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from 'jose';
 import { makeHandler, type Env, type Handler } from '../src/worker/index.ts';
 import { LOOK_DEFAULT, parseAnswer } from '../src/shared/answer.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
-import { renderStatus } from '../src/shared/status.ts';
+import { parseStatus, renderStatus } from '../src/shared/status.ts';
 import type { ItemFacts } from '../src/shared/types.ts';
 import { facts, status } from './helpers.ts';
 
@@ -309,6 +309,17 @@ describe('POST /answer', () => {
     expect(res.status).toBe(409);
     expect(await res.text()).toContain('changed since this page was loaded');
     expect(posted).toHaveLength(0);
+  });
+
+  it('checks a status edited by hand against its text, the way the page showed it', async () => {
+    const body = renderStatus(asking).replace('1. Colour?', '1. Colour of the button?');
+    const shown = parseStatus(body)!;
+    expect(shown.editedByHand).toBe(true);
+    const edited = facts({ repo: 'acme/x', number: 5, labels: ['on sam'], body });
+    const { h, posted } = answerHandler({ item: edited });
+    expect((await post(h, good)).status).toBe(409);
+    expect((await post(h, { ...good, fingerprint: statusFingerprint(shown) })).status).toBe(303);
+    expect(posted[0]!.body).toContain('1. Colour of the button? → **change**');
   });
 
   it("refuses an item the read token can't see, or one that is closed", async () => {

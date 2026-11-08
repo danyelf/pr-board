@@ -80,6 +80,7 @@ const updated = new Intl.DateTimeFormat('en-US', {
 });
 
 const STALE_STATUS = 'status older than latest change';
+const HAND_EDITED = 'status edited by hand; rewrite it with pr-status set';
 
 const BOX_CLASS: Record<BoxState, string> = { done: 'd', now: 'now', ready: 'ready', blocked: 'blocked', todo: '' };
 
@@ -182,7 +183,7 @@ function renderCard(c: Card, opts: RenderOptions): string {
 
   return `<div class="card${merge.state === 'ready' ? ' ready' : ''}">
     <div class="row"><div>${ref(f)}${esc(f.title)}</div>
-      <div class="tags">${c.waited ? `<span class="age">waiting ${esc(c.waited)}</span>` : ''}${c.why ? `<span class="why">${esc(c.why)}</span>` : ''}${c.outOfSync ? '<span class="sync">label out of sync</span>' : ''}${c.statusStale ? `<span class="sync">${STALE_STATUS}</span>` : ''}</div></div>
+      <div class="tags">${c.waited ? `<span class="age">waiting ${esc(c.waited)}</span>` : ''}${c.why ? `<span class="why">${esc(c.why)}</span>` : ''}${c.outOfSync ? '<span class="sync">label out of sync</span>' : ''}${c.statusStale ? `<span class="sync">${STALE_STATUS}</span>` : ''}${c.statusEditedByHand ? `<span class="sync">${HAND_EDITED}</span>` : ''}</div></div>
     ${c.status?.ask ? `<div class="ask">${esc(c.status.ask)}</div>` : ''}
     <div class="steps">${strip}</div>
     ${links.length ? `<div class="links">${links.join('')}</div>` : ''}

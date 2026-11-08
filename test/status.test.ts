@@ -90,21 +90,58 @@ describe('the status as data', () => {
     expect(data).toEqual({ v: 1, ...expected, fingerprint: statusFingerprint(expected) });
   });
 
-  it('reads the data in preference to text that disagrees with it', () => {
+  it('reads the text, marked as edited by hand, when the text no longer matches the data', () => {
     const claude: Status = { ...expected, waitingOn: 'claude', ask: 'from the data' };
     const mixed = example.replace('<!-- /status -->', `${dataLine(renderStatus(claude))}\n<!-- /status -->`);
-    expect(parseStatus(mixed)).toEqual(claude);
+    expect(parseStatus(mixed)).toEqual({ ...expected, editedByHand: true });
   });
 
-  it('falls back to the text when the data is broken, the wrong shape, or its fingerprint is wrong', () => {
+  it('notices an edit to any visible line: the ask, a question, a choice, the turn or the test steps', () => {
+    const written = renderStatus({ ...expected, writtenAt: '2026-11-08T10:00:00Z' });
+    for (const [from, to] of [
+      ['look at the preview', 'look at the PR'],
+      ['dull the colours', 'mute the colours'],
+      ['(**leave** | change)', '(leave | **change**)'],
+      ['**Waiting on:** Sam', '**Waiting on:** Claude'],
+      ['press Escape', 'press Enter'],
+    ] as const) {
+      const edited = parseStatus(written.replace(from, to))!;
+      expect(edited.editedByHand).toBe(true);
+      expect(edited.writtenAt).toBeUndefined();
+    }
+  });
+
+  it("doesn't count line endings, blank lines or stray spaces from an editor as an edit", () => {
+    const written = renderStatus({ ...expected, writtenAt: '2026-11-08T10:00:00Z' });
+    const resaved = written.replace(/\n/g, '  \r\n').replace('**Ask:**', '\r\n**Ask:**');
+    expect(parseStatus(resaved)).toEqual({ ...expected, writtenAt: '2026-11-08T10:00:00Z' });
+  });
+
+  it('reads a section with no data line from the text, unmarked, as sections were written before it existed', () => {
+    expect(parseStatus(example)?.editedByHand).toBeUndefined();
+  });
+
+  it('reads the text, marked as edited by hand, when the data is broken, the wrong shape, or its fingerprint is wrong', () => {
     const withData = (line: string) => example.replace('<!-- /status -->', `${line}\n<!-- /status -->`);
-    const good = JSON.parse(dataLine(renderStatus({ ...expected, ask: 'data' }))!.slice(17, -4));
-    expect(parseStatus(withData('<!-- status-data {not json -->'))).toEqual(expected);
-    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify({ ...good, waitingOn: 'someone' })} -->`))).toEqual(expected);
-    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify({ ...good, questions: 'none' })} -->`))).toEqual(expected);
-    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify({ ...good, v: 2 })} -->`))).toEqual(expected);
-    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify({ ...good, fingerprint: '00000000' })} -->`))).toEqual(expected);
-    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify(good)} -->`))?.ask).toBe('data');
+    const good = JSON.parse(dataLine(renderStatus(expected))!.slice(17, -4));
+    const handEdited = { ...expected, editedByHand: true };
+    expect(parseStatus(withData('<!-- status-data {not json -->'))).toEqual(handEdited);
+    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify({ ...good, waitingOn: 'someone' })} -->`))).toEqual(handEdited);
+    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify({ ...good, questions: 'none' })} -->`))).toEqual(handEdited);
+    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify({ ...good, v: 2 })} -->`))).toEqual(handEdited);
+    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify({ ...good, fingerprint: '00000000' })} -->`))).toEqual(handEdited);
+    expect(parseStatus(withData(`<!-- status-data ${JSON.stringify(good)} -->`))).toEqual(expected);
+  });
+
+  it('writes when the status was written into the data, outside the fingerprint, and reads it back', () => {
+    const at = '2026-11-08T10:00:00.000Z';
+    const rendered = renderStatus({ ...expected, writtenAt: at });
+    expect(JSON.parse(dataLine(rendered)!.slice(17, -4)).writtenAt).toBe(at);
+    expect(rendered).not.toContain(`since ${at}`);
+    expect(parseStatus(rendered)?.writtenAt).toBe(at);
+    expect(statusFingerprint({ ...expected, writtenAt: at })).toBe(statusFingerprint(expected));
+    const unreadable = renderStatus(expected).replace('"fingerprint"', '"writtenAt":"soon","fingerprint"');
+    expect(parseStatus(unreadable)?.writtenAt).toBeUndefined();
   });
 
   it('keeps a value holding "-->" from ending the data line early', () => {
