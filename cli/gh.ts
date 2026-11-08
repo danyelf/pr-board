@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { pickStatusComment } from '../src/shared/status.ts';
 
 export type Gh = (args: string[], opts?: { cwd?: string }) => Promise<string>;
 
@@ -47,4 +48,55 @@ export function flattenPages(json: string): unknown[] {
 export function isNotFound(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /\b404\b|Not Found/i.test(message);
+}
+
+/** Reads "owner/repo#N", or "#N" (just the number, in the current directory's repo). Throws on anything else. */
+export function readRef(text: string): Ref | { n: number } {
+  const full = /^([^/\s#]+)\/([^/\s#]+)#(\d+)$/.exec(text);
+  if (full) return { owner: full[1]!, repo: full[2]!, n: Number(full[3]) };
+  const short = /^#(\d+)$/.exec(text);
+  if (!short) throw new Error(`Can't read "${text}" as a reference; use owner/repo#N or #N`);
+  return { n: Number(short[1]) };
+}
+
+/** The item a reference names; "#N" is looked up in the current directory's repo. */
+export async function parseRef(text: string, gh: Gh): Promise<Ref> {
+  const ref = readRef(text);
+  return 'owner' in ref ? ref : { ...(await currentRepo(gh)), n: ref.n };
+}
+
+/** Every comment on the item, oldest first, however many pages there are. */
+export async function issueComments<T extends { body: string }>(gh: Gh, ref: Ref): Promise<T[]> {
+  const url = `repos/${ref.owner}/${ref.repo}/issues/${ref.n}/comments?per_page=100`;
+  return flattenPages(await gh(['api', url, '--paginate', '--slurp'])) as T[];
+}
+
+export interface ItemRead<T> {
+  isPr: boolean;
+  /** Not closed, and for a PR not merged (a merged PR is closed too). */
+  open: boolean;
+  /** The text the status lives in. */
+  statusText: string;
+  /** For an issue, the comment that text comes from; null for a PR, or an issue with no status comment. */
+  statusComment: T | null;
+  comments: T[];
+}
+
+/**
+ * An item and its comments, with the text its status lives in: a PR's description, or an issue's
+ * last status comment. The same rule as `statusText` in src/shared/status.ts, read through `gh`.
+ */
+export async function readItem<T extends { body: string }>(gh: Gh, ref: Ref): Promise<ItemRead<T>> {
+  const item = JSON.parse(await gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}`])) as {
+    state?: string; pull_request?: unknown; body?: string | null;
+  };
+  const comments = await issueComments<T>(gh, ref);
+  const isPr = Boolean(item.pull_request);
+  const statusComment = isPr ? null : pickStatusComment(comments);
+  return { isPr, open: item.state !== 'closed', statusText: isPr ? item.body ?? '' : statusComment?.body ?? '', statusComment, comments };
+}
+
+/** The text that holds an item's status, as the board reads it. */
+export async function readStatusText(gh: Gh, ref: Ref): Promise<string> {
+  return (await readItem(gh, ref)).statusText;
 }

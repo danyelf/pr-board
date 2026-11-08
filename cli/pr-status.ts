@@ -4,21 +4,13 @@ import { OWNER_LOGIN } from '../src/shared/config.ts';
 import { LABEL_ON_OWNER, LABEL_PARKED, WAITING_ON, type WaitingOn } from '../src/shared/names.ts';
 import { STATUS_CLOSE, STATUS_OPEN, parseStatus, pickStatusComment, renderStatus, replaceStatus, statusValueProblem } from '../src/shared/status.ts';
 import type { Question, Status } from '../src/shared/types.ts';
-import { currentRepo, flattenPages, gh, isNotFound, refString } from './gh.ts';
+import { gh, isNotFound, issueComments, parseRef, readStatusText, refString } from './gh.ts';
 import type { Deps as BaseDeps, Gh, Ref } from './gh.ts';
 
 export interface Deps extends BaseDeps {
   now: () => Date;
   /** The home folder, where the list of "status is still right" notes is kept. */
   home: string;
-}
-
-export async function parseRef(text: string, gh: Gh): Promise<Ref> {
-  const full = /^([^/\s#]+)\/([^/\s#]+)#(\d+)$/.exec(text);
-  if (full) return { owner: full[1]!, repo: full[2]!, n: Number(full[3]) };
-  const short = /^#(\d+)$/.exec(text);
-  if (!short) throw new Error(`Can't read "${text}" as a reference; use owner/repo#N or #N`);
-  return { ...(await currentRepo(gh)), n: Number(short[1]) };
 }
 
 interface SetOptions {
@@ -117,19 +109,6 @@ async function requestReview(gh: Gh, ref: Ref, author: string | null): Promise<s
   } catch (e) {
     return `Couldn't ask ${OWNER_LOGIN} to review ${refString(ref)}: ${e instanceof Error ? e.message : String(e)}`;
   }
-}
-
-/** Every comment on the item, oldest first, however many pages there are. */
-async function issueComments<T extends { body: string }>(gh: Gh, ref: Ref): Promise<T[]> {
-  const url = `repos/${ref.owner}/${ref.repo}/issues/${ref.n}/comments?per_page=100`;
-  return flattenPages(await gh(['api', url, '--paginate', '--slurp'])) as T[];
-}
-
-/** The text that holds an item's status, as the board reads it: a PR's description, or an issue's last status comment. */
-export async function readStatusText(gh: Gh, ref: Ref): Promise<string> {
-  const item = JSON.parse(await gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}`])) as { pull_request?: unknown; body?: string | null };
-  if (item.pull_request) return item.body ?? '';
-  return pickStatusComment(await issueComments(gh, ref))?.body ?? '';
 }
 
 /** Returns the names of labels that were wanted but don't exist in the repo. */
