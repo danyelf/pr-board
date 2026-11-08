@@ -9,14 +9,14 @@ import { spawn as spawnChild } from 'node:child_process';
 import { accessSync, appendFileSync, closeSync, constants, mkdirSync, openSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { OWNER_LOGIN, OWNER_NAME } from '../src/shared/config.ts';
-import { LABEL_ON_OWNER, PICKUP_GRACE_MS } from '../src/shared/names.ts';
-import { flattenPages, gh as realGh, git as realGit, refString } from './gh.ts';
+import { OWNER_NAME } from '../src/shared/config.ts';
+import { CLAUDE_BOT_KEY, LABEL_ON_OWNER, PICKUP_GRACE_MS, SERVICE_GRACE_MS } from '../src/shared/names.ts';
+import { claim, describe, waitingAnswers, type Found } from './answers.ts';
+import { OwnerError, flattenPages, gh as realGh, git as realGit, refString, refuseOwner } from './gh.ts';
 import type { Gh, Ref } from './gh.ts';
-import { claim, describe, waitingAnswers, type Found } from './watch-answers.ts';
+import { backoff, message } from './poll.ts';
 
 const MIN = 60_000;
-const MAX_BACKOFF_MS = 5 * MIN;
 const USAGE = 'Usage: mac-service [--config <file>] [--dry-run] [--once]';
 
 export interface RepoConfig { owner: string; repo: string; clone: string }
@@ -66,7 +66,6 @@ export interface ServiceDeps {
   err?: (line: string) => void;
 }
 
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const SETTINGS = ['repos', 'graceMinutes', 'maxSessions', 'pollSeconds', 'logDir', 'tokenFile', 'claude', 'claudeArgs'];
 
 /** Reads the service's config file, filling in the defaults. Throws, naming the file, on anything it can't use. */
@@ -108,7 +107,7 @@ export function loadConfig(text: string, home: string, path: string): Config {
   if (!Array.isArray(claudeArgs) || !claudeArgs.every((a) => typeof a === 'string')) return fail('"claudeArgs" must be a list of strings');
   return {
     repos,
-    graceMs: num('graceMinutes', 5, (n) => n >= 0, 'a number of minutes, 0 or more') * MIN,
+    graceMs: num('graceMinutes', SERVICE_GRACE_MS / MIN,(n) => n >= 0, 'a number of minutes, 0 or more') * MIN,
     maxSessions: num('maxSessions', 2, (n) => Number.isInteger(n) && n >= 1, 'a whole number, 1 or more'),
     pollMs: num('pollSeconds', 60, (n) => n >= 1, 'a number of seconds, 1 or more') * 1000,
     logDir: d.logDir === undefined ? join(home, '.pr-board', 'logs') : absolute(d.logDir, 'logDir'),
@@ -198,14 +197,15 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     return deps.gh(args, { ...opts, env: token ? { ...deps.env, GH_TOKEN: token } : deps.env });
   };
 
+  const ownerAdvice = `The token in ${config.tokenFile} is the owner's; put Claude's own token there.`;
   try {
-    const me = (await gh(['api', 'user', '-q', '.login'])).trim();
-    if (me === OWNER_LOGIN) {
-      err(`gh is signed in as ${me}, the board's owner, and ${config.tokenFile} has no token to use instead. The board doesn't count the owner's own 👀 as a claim. Put Claude's own token in that file.`);
+    await refuseOwner(gh, ownerAdvice);
+  } catch (e) {
+    if (e instanceof OwnerError) {
+      err(e.message);
       return 1;
     }
-  } catch (e) {
-    err(`Couldn't tell which account gh is signed in as (${message(e)}); going on anyway.`);
+    err(`Couldn't tell which account the token in ${config.tokenFile} belongs to (${message(e)}); going on anyway.`);
   }
 
   const running = new Map<string, Session>();
@@ -240,9 +240,9 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   async function startSession(repo: RepoConfig, ref: Ref, isPr: boolean, answers: Found[]): Promise<void> {
     const name = refString(ref);
     // These checks come before the claim, so an answer this service can't serve stays free for others.
-    const marked = await deps.git(['-C', repo.clone, 'config', '--local', '--get', 'claude.bot']).then((s) => s.trim(), () => '');
+    const marked = await deps.git(['-C', repo.clone, 'config', '--local', '--get', CLAUDE_BOT_KEY]).then((s) => s.trim(), () => '');
     if (marked !== 'true') {
-      err(`Not starting a session for ${name}: ${repo.clone} is not marked claude.bot=true, so the session would act as ${OWNER_NAME}'s own GitHub account. To let Claude act there under its own account: git -C ${repo.clone} config claude.bot true`);
+      err(`Not starting a session for ${name}: ${repo.clone} is not marked ${CLAUDE_BOT_KEY}=true, so the session would act as ${OWNER_NAME}'s own GitHub account. To let Claude act there under its own account: git -C ${repo.clone} config ${CLAUDE_BOT_KEY} true`);
       return;
     }
     const token = readToken();
@@ -299,13 +299,12 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     const rows = flattenPages(await gh(['api', `repos/${repo.owner}/${repo.repo}/issues?labels=${label}&state=open&per_page=100`, '--paginate', '--slurp'])) as
       { number: number; comments?: number; pull_request?: unknown }[];
     let ripe = 0;
+    // An item with no comments has no answers, so it isn't read any further.
+    const readable = rows.filter((r) => r.comments !== 0);
     if (once) {
-      const read = rows.filter((r) => r.comments !== 0).length;
-      out(`${repo.owner}/${repo.repo}: ${rows.length} open ${rows.length === 1 ? 'item carries' : 'items carry'} "${LABEL_ON_OWNER}"; ${read} with comments read for answers.`);
+      out(`${repo.owner}/${repo.repo}: ${rows.length} open ${rows.length === 1 ? 'item carries' : 'items carry'} "${LABEL_ON_OWNER}"; ${readable.length} with comments read for answers.`);
     }
-    for (const row of rows) {
-      // An item with no comments has no answers, so it isn't read any further.
-      if (row.comments === 0) continue;
+    for (const row of readable) {
       const ref: Ref = { owner: repo.owner, repo: repo.repo, n: row.number };
       const name = refString(ref);
       if (running.has(name)) continue;
@@ -344,7 +343,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       return failed ? 1 : 0;
     }
     failures = failed ? failures + 1 : 0;
-    const wait = failures > 0 ? Math.min(config.pollMs * 2 ** failures, MAX_BACKOFF_MS) : config.pollMs;
+    const wait = backoff(config.pollMs, failures);
     if (failures > 0) err(`Trying again in ${wait / 1000} s.`);
     if (deps.signal?.aborted) break;
     await deps.sleep(wait, deps.signal);

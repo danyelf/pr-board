@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { OWNER_LOGIN } from '../src/shared/config.ts';
 import { pickStatusComment } from '../src/shared/status.ts';
 
 /** Runs a command. `env`, when given, replaces the environment it runs in. */
@@ -39,6 +40,20 @@ function run(command: string): Gh {
 
 export const gh: Gh = run('gh');
 export const git: Gh = run('git');
+
+/** Thrown when `gh` would act as the board's owner, whose 👀 the board doesn't count as a claim. */
+export class OwnerError extends Error {}
+
+/**
+ * Returns the login `gh` acts as. Throws an OwnerError when that is the board's owner, since an
+ * answer claimed by the owner would look to the board as if nobody had picked it up. Other
+ * failures (GitHub unreachable) are thrown as they are, for the caller to decide on.
+ */
+export async function refuseOwner(gh: Gh, advice: string): Promise<string> {
+  const login = (await gh(['api', 'user', '-q', '.login'])).trim();
+  if (login === OWNER_LOGIN) throw new OwnerError(`gh is signed in as ${login}, the board's owner. The board doesn't count the owner's own 👀 as a claim. ${advice}`);
+  return login;
+}
 
 /** `gh api --paginate --slurp` returns an array of pages; flatten to one list. */
 export function flattenPages(json: string): unknown[] {
