@@ -42,24 +42,24 @@ export async function boardItems(): Promise<ItemFacts[]> {
   }
 
   const section = (since: string, extra: Partial<ReturnType<typeof status>> = {}) =>
-    renderStatus(status({ waitingOn: 'Danyel', since, ask: 'Take a look', ...extra }));
+    renderStatus(status({ waitingOn: 'owner', since, ask: 'Take a look', ...extra }));
 
   const p573 = get(573);
   p573.body = `${section('2026-11-04T07:20:00Z')}\n\n${p573.body}`;
-  p573.labels = ['on danyel'];
-  p573.labelEvents.push({ label: 'on danyel', action: 'added', at: '2026-11-04T07:20:00Z' });
+  p573.labels = ['on sam'];
+  p573.labelEvents.push({ label: 'on sam', action: 'added', at: '2026-11-04T07:20:00Z' });
 
   const p574 = get(574);
   p574.body = `${section('2026-11-04T07:32:00Z', {
     questions: [{ n: 1, text: 'Should the popup follow the pointer?', choices: ['leave', 'change'], defaultChoice: 'leave' }],
   })}\n\n${p574.body}`;
-  p574.labels = ['on danyel'];
-  p574.labelEvents.push({ label: 'on danyel', action: 'added', at: '2026-11-04T07:32:00Z' });
+  p574.labels = ['on sam'];
+  p574.labelEvents.push({ label: 'on sam', action: 'added', at: '2026-11-04T07:32:00Z' });
 
   const p578 = get(578);
   p578.body = `${section('2026-11-05T23:39:00Z')}\n\n${p578.body}`;
-  p578.labels = ['on danyel'];
-  p578.labelEvents.push({ label: 'on danyel', action: 'added', at: '2026-11-05T23:39:00Z' });
+  p578.labels = ['on sam'];
+  p578.labelEvents.push({ label: 'on sam', action: 'added', at: '2026-11-05T23:39:00Z' });
 
   const p564 = get(564);
   p564.body = `${section('2026-11-05T12:00:00Z')}\n\n${p564.body}`;

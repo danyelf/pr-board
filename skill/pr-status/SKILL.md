@@ -17,13 +17,14 @@ Run `set` whenever the turn changes (you hand it to Danyel, he hands it back, or
 
 ```
 pr-status set <owner/repo#N | #N> \
-  --waiting danyel|claude|nobody \
+  --waiting owner|claude|nobody \
   --ask "what you need from him, in one line" \
   --question "Colour of the button? (**red** | green)" \
   --to-test "what to click on the preview, and what you should see"
 ```
 
-- `--waiting danyel` puts the `on danyel` label on; `nobody` marks it `parked`; `claude` clears both.
+- `--waiting owner` hands it to Danyel and puts his `on <name>` label on; `nobody` marks it `parked`; `claude` clears both.
+- When a PR's turn moves to him, the command also asks him to review it, so GitHub notifies him. It doesn't ask again while the PR stays with him; it asks again when the PR comes back to him after more work.
 - Every `--question` needs choices with exactly one in bold as the default, like `(**leave** | change)`. The command refuses a question without one.
 - Put the test protocol (what to open, what to try, what should happen) in `--to-test`.
 - Each of `--ask`, `--to-test` and `--question` is one line. The command refuses line breaks, so write several steps as `1) … 2) … 3) …` on one line.

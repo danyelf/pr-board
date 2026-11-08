@@ -1,6 +1,7 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { LABEL_ON_DANYEL, LABEL_PARKED, WAITING_ON, type WaitingOption } from '../src/shared/names.ts';
+import { OWNER_LOGIN } from '../src/shared/config.ts';
+import { LABEL_ON_OWNER, LABEL_PARKED, WAITING_ON, type WaitingOn } from '../src/shared/names.ts';
 import { STATUS_CLOSE, STATUS_OPEN, parseStatus, pickStatusComment, renderStatus, replaceStatus, statusValueProblem } from '../src/shared/status.ts';
 import type { Question, Status } from '../src/shared/types.ts';
 import { currentRepo, flattenPages, gh, isNotFound, refString } from './gh.ts';
@@ -21,7 +22,7 @@ export async function parseRef(text: string, gh: Gh): Promise<Ref> {
 }
 
 interface SetOptions {
-  waiting: WaitingOption;
+  waiting: WaitingOn;
   ask: string;
   questions: string[];
   toTest: string | null;
@@ -50,12 +51,11 @@ function parseSetArgs(args: string[]): SetOptions {
     else if (flag === '--to-test') opts.toTest = need();
     else throw new Error(`Unknown option ${flag}`);
   }
-  const chosen = WAITING_ON.find((w) => w.option === waiting);
-  if (!chosen) {
-    const options = WAITING_ON.map((w) => w.option);
-    throw new Error(`--waiting must be ${options.slice(0, -1).join(', ')} or ${options.at(-1)}`);
+  const roles: readonly string[] = WAITING_ON.map((w) => w.role);
+  if (waiting === null || !roles.includes(waiting)) {
+    throw new Error(`--waiting must be ${roles.slice(0, -1).join(', ')} or ${roles.at(-1)}`);
   }
-  opts.waiting = chosen.option;
+  opts.waiting = waiting as WaitingOn;
   return opts;
 }
 
@@ -73,19 +73,27 @@ function buildQuestions(texts: string[]): Question[] {
 }
 
 function nextStatus(opts: SetOptions, questions: Question[], previous: Status | null, now: Date): Status {
-  const waitingOn = WAITING_ON.find((w) => w.option === opts.waiting)!.status;
-  const since = previous && previous.waitingOn === waitingOn && previous.since ? previous.since : now.toISOString();
-  return { waitingOn, since, ask: opts.ask, questions, toTest: opts.toTest };
+  const since = previous && previous.waitingOn === opts.waiting && previous.since ? previous.since : now.toISOString();
+  return { waitingOn: opts.waiting, since, ask: opts.ask, questions, toTest: opts.toTest };
 }
 
-async function writeStatus(gh: Gh, ref: Ref, opts: SetOptions, questions: Question[], now: Date): Promise<void> {
+/** A PR that has just been handed to the owner, and who opened it; null otherwise. */
+type HandedOver = { author: string | null } | null;
+
+async function writeStatus(gh: Gh, ref: Ref, opts: SetOptions, questions: Question[], now: Date): Promise<HandedOver> {
   const base = `repos/${ref.owner}/${ref.repo}`;
-  const item = JSON.parse(await gh(['api', `${base}/issues/${ref.n}`])) as { pull_request?: unknown; body?: string | null };
+  const item = JSON.parse(await gh(['api', `${base}/issues/${ref.n}`])) as {
+    pull_request?: unknown;
+    body?: string | null;
+    user?: { login: string } | null;
+  };
   if (item.pull_request) {
     const body = item.body ?? '';
-    const status = nextStatus(opts, questions, parseStatus(body), now);
+    const previous = parseStatus(body);
+    const status = nextStatus(opts, questions, previous, now);
     await gh(['api', '-X', 'PATCH', `${base}/pulls/${ref.n}`, '-f', `body=${replaceStatus(body, status)}`]);
-    return;
+    const handedOver = opts.waiting === 'owner' && previous?.waitingOn !== status.waitingOn;
+    return handedOver ? { author: item.user?.login ?? null } : null;
   }
   const login = (await gh(['api', 'user', '-q', '.login'])).trim();
   const comments = await issueComments<{ id: number; body: string; user: { login: string } | null }>(gh, ref);
@@ -96,6 +104,18 @@ async function writeStatus(gh: Gh, ref: Ref, opts: SetOptions, questions: Questi
     await gh(['api', '-X', 'PATCH', `${base}/issues/comments/${current.id}`, '-f', `body=${replaceStatus(current.body, status)}`]);
   } else {
     await gh(['api', '-X', 'POST', `${base}/issues/${ref.n}/comments`, '-f', `body=${renderStatus(status)}`]);
+  }
+  return null;
+}
+
+/** Asks the board's owner to review, so GitHub notifies them. Returns what went wrong, or null. */
+async function requestReview(gh: Gh, ref: Ref, author: string | null): Promise<string | null> {
+  if (author === OWNER_LOGIN) return null; // GitHub won't ask someone to review their own PR.
+  try {
+    await gh(['api', '-X', 'POST', `repos/${ref.owner}/${ref.repo}/pulls/${ref.n}/requested_reviewers`, '-f', `reviewers[]=${OWNER_LOGIN}`]);
+    return null;
+  } catch (e) {
+    return `Couldn't ask ${OWNER_LOGIN} to review ${refString(ref)}: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
@@ -108,8 +128,8 @@ async function issueComments<T extends { body: string }>(gh: Gh, ref: Ref): Prom
 /** Returns the names of labels that were wanted but don't exist in the repo. */
 async function syncLabels(gh: Gh, ref: Ref, waiting: SetOptions['waiting']): Promise<string[]> {
   const base = `repos/${ref.owner}/${ref.repo}`;
-  const add = waiting === 'danyel' ? [LABEL_ON_DANYEL] : waiting === 'nobody' ? [LABEL_PARKED] : [];
-  const remove = waiting === 'danyel' ? [LABEL_PARKED] : waiting === 'nobody' ? [LABEL_ON_DANYEL] : [LABEL_ON_DANYEL, LABEL_PARKED];
+  const add = waiting === 'owner' ? [LABEL_ON_OWNER] : waiting === 'nobody' ? [LABEL_PARKED] : [];
+  const remove = waiting === 'owner' ? [LABEL_PARKED] : waiting === 'nobody' ? [LABEL_ON_OWNER] : [LABEL_ON_OWNER, LABEL_PARKED];
   const missing: string[] = [];
   for (const name of add) {
     try {
@@ -161,12 +181,14 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
 
     const opts = parseSetArgs(rest);
     const questions = buildQuestions(opts.questions);
-    await writeStatus(deps.gh, ref, opts, questions, deps.now());
+    const handedOver = await writeStatus(deps.gh, ref, opts, questions, deps.now());
     const missing = await syncLabels(deps.gh, ref, opts.waiting);
     for (const name of missing) {
       err(`Label "${name}" doesn't exist in ${ref.owner}/${ref.repo}; run cli/setup-labels.ts`);
     }
-    return missing.length > 0 ? 1 : 0;
+    const reviewProblem = handedOver ? await requestReview(deps.gh, ref, handedOver.author) : null;
+    if (reviewProblem) err(reviewProblem);
+    return missing.length > 0 || reviewProblem ? 1 : 0;
   } catch (e) {
     err(e instanceof Error ? e.message : String(e));
     return 1;

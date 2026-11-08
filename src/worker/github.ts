@@ -1,4 +1,4 @@
-import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_DANYEL, LABEL_PARKED, REPO_WINDOW_DAYS, WRITTEN_ELSEWHERE } from '../shared/names.ts';
+import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_OWNER, LABEL_PARKED, REPO_WINDOW_DAYS, WRITTEN_ELSEWHERE } from '../shared/names.ts';
 import { parseStatus, pickStatusComment } from '../shared/status.ts';
 import { effectiveTurn } from '../shared/turn.ts';
 import type { ItemFacts, LabelEvent } from '../shared/types.ts';
@@ -17,7 +17,7 @@ const COMMITS_PER_PR = 100;
 const CLOSING_ISSUES_PER_PR = 5;
 // One issues connection per label, so GitHub does the filtering and each label has its own limit.
 const TURN_LABELS = [
-  { label: LABEL_ON_DANYEL, alias: 'onDanyel' },
+  { label: LABEL_ON_OWNER, alias: 'onOwner' },
   { label: LABEL_PARKED, alias: 'parked' },
   { label: LABEL_IN_PROGRESS, alias: 'inProgress' },
 ] as const;
@@ -62,7 +62,7 @@ interface RawItem {
 }
 interface RepoData {
   openPrs: Connection<RawItem> | null;
-  onDanyel: Connection<RawItem> | null;
+  onOwner: Connection<RawItem> | null;
   parked: Connection<RawItem> | null;
   inProgress: Connection<RawItem> | null;
 }
@@ -71,7 +71,7 @@ interface GraphqlResponse<T> { data?: T | null; errors?: { message: string; path
 interface Pending {
   facts: ItemFacts; base: string; head: string;
   fromFork: boolean;
-  /** Prep is done and it is Danyel's turn, so this PR could be one he is about to merge. */
+  /** Prep is done and it is the owner's turn, so this PR could be one they are about to merge. */
   couldBeReady: boolean;
 }
 
@@ -206,7 +206,7 @@ function readRepo(name: string, data: RepoData, report: Report): { open: Set<num
     pending.push({
       facts, base: pr.baseRefName ?? '', head: pr.headRefName ?? '',
       fromFork: pr.isCrossRepository === true,
-      couldBeReady: facts.prepDone && turn === 'danyel',
+      couldBeReady: facts.prepDone && turn === 'owner',
     });
   }
 

@@ -4,7 +4,10 @@ import type { Question, Status } from './types.ts';
 export const STATUS_OPEN = '<!-- status -->';
 export const STATUS_CLOSE = '<!-- /status -->';
 
-const WAITING_LINE = new RegExp(`^(${WAITING_ON.map((w) => w.status).join('|')})(?:,\\s*since\\s+(\\S+))?$`);
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const WAITING_LINE = new RegExp(`^(${WAITING_ON.map((w) => escapeRegExp(w.spelling)).join('|')})(?:,\\s*since\\s+(\\S+))?$`);
+const roleOf = (spelling: string): WaitingOn | null => WAITING_ON.find((w) => w.spelling === spelling)?.role ?? null;
+const spellingOf = (role: WaitingOn): string => WAITING_ON.find((w) => w.role === role)!.spelling;
 
 function findSection(text: string): { start: number; end: number; inner: string } | null {
   const start = text.indexOf(STATUS_OPEN);
@@ -73,7 +76,7 @@ export function parseStatus(text: string): Status | null {
         case 'Waiting on': {
           const m = WAITING_LINE.exec(value);
           if (m) {
-            waitingOn = m[1] as WaitingOn;
+            waitingOn = roleOf(m[1]!);
             // A time we can't read is no use for working out how long it has waited.
             since = m[2] && !Number.isNaN(Date.parse(m[2])) ? m[2] : null;
           }
@@ -126,7 +129,7 @@ export function renderStatus(s: Status): string {
     checkValue(`question ${q.n}`, q.text);
     for (const c of q.choices) checkValue(`question ${q.n} choice`, c);
   }
-  const lines = [STATUS_OPEN, `**Waiting on:** ${s.waitingOn}${s.since ? `, since ${s.since}` : ''}`, `**Ask:** ${s.ask}`];
+  const lines = [STATUS_OPEN, `**Waiting on:** ${spellingOf(s.waitingOn)}${s.since ? `, since ${s.since}` : ''}`, `**Ask:** ${s.ask}`];
   if (s.questions.length > 0) {
     lines.push('**Questions:**');
     for (const q of s.questions) {

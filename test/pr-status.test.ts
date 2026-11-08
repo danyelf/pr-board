@@ -12,6 +12,9 @@ interface World {
   comments: { id: number; body: string; user: { login: string } }[];
   labels: Set<string>;      // labels on the item
   repoLabels: Set<string>;  // labels that exist in the repo
+  author: string;           // who opened the item
+  reviewers: string[];      // review requests made
+  reviewFails?: boolean;
 }
 
 function fakeGh(world: World) {
@@ -20,7 +23,12 @@ function fakeGh(world: World) {
     calls.push(args);
     const line = args.join(' ');
     if (line === 'api repos/acme/x/issues/5') {
-      return JSON.stringify({ body: world.body, ...(world.kind === 'pr' ? { pull_request: {} } : {}) });
+      return JSON.stringify({ body: world.body, user: { login: world.author }, ...(world.kind === 'pr' ? { pull_request: {} } : {}) });
+    }
+    if (line.startsWith('api -X POST repos/acme/x/pulls/5/requested_reviewers')) {
+      if (world.reviewFails) throw new Error('gh: Reviews may only be requested from collaborators (HTTP 422)');
+      world.reviewers.push(args[args.length - 1]!.replace('reviewers[]=', ''));
+      return '{}';
     }
     if (line.startsWith('api -X PATCH repos/acme/x/pulls/5')) {
       world.body = args[args.length - 1]!.replace(/^body=/, '');
@@ -59,7 +67,10 @@ function fakeGh(world: World) {
 }
 
 function world(over: Partial<World> = {}): World {
-  return { kind: 'pr', body: 'Old description\n', comments: [], labels: new Set(), repoLabels: new Set(['on danyel', 'parked']), ...over };
+  return {
+    kind: 'pr', body: 'Old description\n', comments: [], labels: new Set(), repoLabels: new Set(['on sam', 'parked']),
+    author: 'robot', reviewers: [], ...over,
+  };
 }
 
 async function run(w: World, argv: string[], at = '2026-11-05T10:00:00.000Z') {
@@ -71,7 +82,7 @@ async function run(w: World, argv: string[], at = '2026-11-05T10:00:00.000Z') {
   return { code, calls, lines, errors, home };
 }
 
-const SET = ['set', 'acme/x#5', '--waiting', 'danyel', '--ask', 'look', '--question', 'Colour? (**red** | green)'];
+const SET = ['set', 'acme/x#5', '--waiting', 'owner', '--ask', 'look', '--question', 'Colour? (**red** | green)'];
 const patches = (calls: string[][]) => calls.filter((c) => c[0] === 'api' && c[1] === '-X' && c[2] === 'PATCH');
 
 describe('pr-status set', () => {
@@ -80,10 +91,10 @@ describe('pr-status set', () => {
     const r = await run(w, SET);
     expect(r.code).toBe(0);
     expect(patches(r.calls)).toHaveLength(1);
-    expect(w.body.startsWith('<!-- status -->\n**Waiting on:** Danyel, since 2026-11-05T10:00:00.000Z')).toBe(true);
+    expect(w.body.startsWith('<!-- status -->\n**Waiting on:** Sam, since 2026-11-05T10:00:00.000Z')).toBe(true);
     expect(w.body).toContain('1. Colour?  (**red** | green)');
     expect(w.body.endsWith('<!-- /status -->\n\nOld description\n')).toBe(true);
-    expect(w.labels.has('on danyel')).toBe(true);
+    expect(w.labels.has('on sam')).toBe(true);
     expect(r.calls.some((c) => c.join(' ').includes('-X DELETE repos/acme/x/issues/5/labels/parked'))).toBe(true);
   });
 
@@ -102,14 +113,14 @@ describe('pr-status set', () => {
   });
 
   it('refuses a question without a bold default and writes nothing', async () => {
-    const r = await run(world(), ['set', 'acme/x#5', '--waiting', 'danyel', '--ask', 'a', '--question', 'Colour? (red | green)']);
+    const r = await run(world(), ['set', 'acme/x#5', '--waiting', 'owner', '--ask', 'a', '--question', 'Colour? (red | green)']);
     expect(r.code).toBe(1);
     expect(r.errors.join('\n')).toContain('bold default');
     expect(patches(r.calls)).toHaveLength(0);
   });
 
   it('refuses a test protocol with line breaks, says why, and writes nothing', async () => {
-    const r = await run(world(), ['set', 'acme/x#5', '--waiting', 'danyel', '--ask', 'a', '--to-test', '1. pin a verse\n2. press Escape']);
+    const r = await run(world(), ['set', 'acme/x#5', '--waiting', 'owner', '--ask', 'a', '--to-test', '1. pin a verse\n2. press Escape']);
     expect(r.code).toBe(1);
     expect(r.errors.join('\n')).toContain('--to-test must be one line');
     expect(r.calls.filter((c) => c.includes('-X'))).toHaveLength(0);
@@ -119,10 +130,10 @@ describe('pr-status set', () => {
     const ask = await run(world(), ['set', 'acme/x#5', '--waiting', 'claude', '--ask', 'fine\n**Waiting on:** nobody']);
     expect(ask.code).toBe(1);
     expect(ask.errors.join('\n')).toContain('--ask must be one line');
-    const question = await run(world(), ['set', 'acme/x#5', '--waiting', 'danyel', '--ask', 'a', '--question', 'Colour? (**red** | green)\n2. Size? (**big** | small)']);
+    const question = await run(world(), ['set', 'acme/x#5', '--waiting', 'owner', '--ask', 'a', '--question', 'Colour? (**red** | green)\n2. Size? (**big** | small)']);
     expect(question.code).toBe(1);
     expect(question.errors.join('\n')).toContain('--question must be one line');
-    const marker = await run(world(), ['set', 'acme/x#5', '--waiting', 'danyel', '--ask', 'see <!-- /status --> here']);
+    const marker = await run(world(), ['set', 'acme/x#5', '--waiting', 'owner', '--ask', 'see <!-- /status --> here']);
     expect(marker.code).toBe(1);
     expect(marker.errors.join('\n')).toContain('--ask can\'t contain a status marker');
     for (const r of [ask, question, marker]) expect(r.calls.filter((c) => c.includes('-X'))).toHaveLength(0);
@@ -141,7 +152,7 @@ describe('pr-status set', () => {
     expect(r.calls.some((c) => c.join(' ').startsWith('api -X PATCH repos/acme/x/issues/comments/8'))).toBe(true);
     expect(r.calls.some((c) => c.join(' ').startsWith('api -X POST repos/acme/x/issues/5/comments'))).toBe(false);
     expect(w.comments).toHaveLength(2);
-    expect(parseStatus(w.comments[1]!.body)?.waitingOn).toBe('Danyel');
+    expect(parseStatus(w.comments[1]!.body)?.waitingOn).toBe('owner');
   });
 
   it('edits the last status comment when it is ours, even if an earlier one exists', async () => {
@@ -192,15 +203,60 @@ describe('pr-status set', () => {
     const w = world({ repoLabels: new Set() });
     const r = await run(w, SET);
     expect(r.code).toBe(1);
-    expect(r.errors).toContain(`Label "on danyel" doesn't exist in acme/x; run cli/setup-labels.ts`);
+    expect(r.errors).toContain(`Label "on sam" doesn't exist in acme/x; run cli/setup-labels.ts`);
     expect(patches(r.calls)).toHaveLength(1);
     expect(r.calls.some((c) => c.join(' ').includes('POST repos/acme/x/issues/5/labels'))).toBe(false);
   });
 
-  it('parks: adds parked and removes on danyel', async () => {
-    const w = world({ labels: new Set(['on danyel']) });
+  it('parks: adds parked and removes on sam', async () => {
+    const w = world({ labels: new Set(['on sam']) });
     await run(w, ['set', 'acme/x#5', '--waiting', 'nobody', '--ask', 'x']);
     expect([...w.labels]).toEqual(['parked']);
+  });
+});
+
+describe('pr-status set asks the owner to review', () => {
+  it('when a PR becomes waiting on the owner, even in a repo someone else owns', async () => {
+    const w = world();
+    const r = await run(w, SET);
+    expect(r.code).toBe(0);
+    expect(w.reviewers).toEqual(['sam-gh']);
+  });
+
+  it('not again while it stays waiting on the owner, but again when it comes back', async () => {
+    const w = world();
+    await run(w, SET);
+    await run(w, SET);
+    expect(w.reviewers).toEqual(['sam-gh']);
+    await run(w, ['set', 'acme/x#5', '--waiting', 'claude', '--ask', 'x']);
+    await run(w, SET);
+    expect(w.reviewers).toEqual(['sam-gh', 'sam-gh']);
+  });
+
+  it('not for an issue, or when the turn goes to Claude or nobody', async () => {
+    const issue = world({ kind: 'issue' });
+    await run(issue, SET);
+    expect(issue.reviewers).toEqual([]);
+    for (const waiting of ['claude', 'nobody']) {
+      const w = world();
+      await run(w, ['set', 'acme/x#5', '--waiting', waiting, '--ask', 'x']);
+      expect(w.reviewers).toEqual([]);
+    }
+  });
+
+  it('not when the owner opened the PR', async () => {
+    const w = world({ author: 'sam-gh' });
+    const r = await run(w, SET);
+    expect(r.code).toBe(0);
+    expect(w.reviewers).toEqual([]);
+  });
+
+  it('writes the status, then exits 1 saying why when the request fails', async () => {
+    const w = world({ reviewFails: true });
+    const r = await run(w, SET);
+    expect(r.code).toBe(1);
+    expect(patches(r.calls)).toHaveLength(1);
+    expect(r.errors[0]).toMatch(/^Couldn't ask sam-gh to review acme\/x#5: .*HTTP 422/);
   });
 });
 
@@ -215,7 +271,7 @@ describe('pr-status ok and show', () => {
     const w = world();
     expect((await run(w, ['show', 'acme/x#5'])).lines).toEqual(['null']);
     await run(w, SET);
-    expect(JSON.parse((await run(w, ['show', 'acme/x#5'])).lines[0]!).waitingOn).toBe('Danyel');
+    expect(JSON.parse((await run(w, ['show', 'acme/x#5'])).lines[0]!).waitingOn).toBe('owner');
   });
 
   it('shows the last status comment on an issue, as the board does', async () => {

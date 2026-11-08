@@ -46,7 +46,7 @@ function changedSince(change: string | null, written: string | null): boolean {
   return Date.parse(change) > Date.parse(written);
 }
 
-/** An issue hidden behind an open PR, whose labels or status say it is waiting on Danyel. */
+/** An issue hidden behind an open PR, whose labels or status say it is waiting on the owner. */
 interface HiddenWait { issue: number; since: string | null }
 
 function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card {
@@ -55,16 +55,16 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
   const own = waitingSince(f, status);
   const strip = stageStrip(f, status, now);
   const why = whyTag(status, strip, effective.turn);
-  // The PR stands in for an issue that is waiting on Danyel, so the PR waits too. Unless the PR
+  // The PR stands in for an issue that is waiting on the owner, so the PR waits too. Unless the PR
   // already says so itself, its labels are out of step with that.
-  const carried = hidden !== undefined && effective.turn !== 'danyel';
+  const carried = hidden !== undefined && effective.turn !== 'owner';
   const since = carried ? own ?? hidden.since : own;
   return {
     facts: f,
     status,
     statusUnreadable: status === null && hasStatusSection(statusText(f)),
     statusStale: status !== null && changedSince(f.lastChangeAt, f.statusWrittenAt),
-    turn: carried ? 'danyel' : effective.turn,
+    turn: carried ? 'owner' : effective.turn,
     outOfSync: carried || effective.outOfSync,
     strip,
     why: carried && !why ? `Issue #${hidden.issue} is waiting on you` : why,
@@ -91,12 +91,12 @@ export function buildBoard(items: ItemFacts[], errors: string[], now: Date): Boa
   }
   const hasPr = (f: ItemFacts) => f.kind === 'issue' && openPrsFor.has(key(f.repo, f.number));
 
-  // A hidden issue that is waiting on Danyel must not take that signal with it.
+  // A hidden issue that is waiting on the owner must not take that signal with it.
   const hiddenWaits = new Map<string, HiddenWait>();
   for (const issue of open) {
     if (!hasPr(issue)) continue;
     const status = statusOf(issue);
-    if (effectiveTurn(issue.labels, status).turn !== 'danyel') continue;
+    if (effectiveTurn(issue.labels, status).turn !== 'owner') continue;
     for (const pr of openPrsFor.get(key(issue.repo, issue.number))!) {
       hiddenWaits.set(key(pr.repo, pr.number), { issue: issue.number, since: waitingSince(issue, status) });
     }
@@ -109,7 +109,7 @@ export function buildBoard(items: ItemFacts[], errors: string[], now: Date): Boa
   const quiet: Card[] = [];
   for (const c of cards) {
     const stale = now.getTime() - time(c.facts.lastActivityAt) > QUIET_AFTER;
-    if (c.turn === 'danyel') waiting.push(c);
+    if (c.turn === 'owner') waiting.push(c);
     else if (c.turn === 'nobody' || stale) quiet.push(c);
     else onClaude.push(c);
   }

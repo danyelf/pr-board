@@ -14,7 +14,7 @@ describe('buildBoard', () => {
     const board = buildBoard(await boardItems(), [], NOW);
     const card = board.waiting.find((c) => c.facts.number === 564)!;
     expect(card.outOfSync).toBe(true);
-    expect(card.turn).toBe('danyel');
+    expect(card.turn).toBe('owner');
   });
 
   it('computes waiting time from the on-danyel label', async () => {
@@ -39,7 +39,7 @@ describe('buildBoard', () => {
   });
 
   it('keeps an open issue waiting on Danyel when the PR that refers to it has merged', () => {
-    const issue = facts({ number: 10, kind: 'issue', labels: ['on danyel'], createdAt: '2026-11-05T09:00:00Z', lastActivityAt: '2026-11-05T20:00:00Z' });
+    const issue = facts({ number: 10, kind: 'issue', labels: ['on sam'], createdAt: '2026-11-05T09:00:00Z', lastActivityAt: '2026-11-05T20:00:00Z' });
     const pr = facts({ number: 11, linkedIssue: 10, merged: true, mergedAt: '2026-11-05T21:00:00Z', closedAt: '2026-11-05T21:00:00Z', createdAt: '2026-11-05T10:00:00Z' });
     const board = buildBoard([issue, pr], [], NOW);
     expect(board.waiting.map((c) => c.facts.number)).toEqual([10]);
@@ -47,14 +47,14 @@ describe('buildBoard', () => {
 
   it("carries a hidden issue's wait onto its open PR, flagged out of sync", () => {
     const issue = facts({
-      number: 10, kind: 'issue', labels: ['on danyel'], lastActivityAt: '2026-11-05T20:00:00Z',
-      labelEvents: [{ label: 'on danyel', action: 'added', at: '2026-11-05T12:00:00Z' }],
+      number: 10, kind: 'issue', labels: ['on sam'], lastActivityAt: '2026-11-05T20:00:00Z',
+      labelEvents: [{ label: 'on sam', action: 'added', at: '2026-11-05T12:00:00Z' }],
     });
     const pr = facts({ number: 11, linkedIssue: 10, labels: ['in-progress'], createdAt: '2026-11-05T10:00:00Z', lastActivityAt: '2026-11-05T21:00:00Z' });
     const board = buildBoard([issue, pr], [], NOW);
     expect(board.waiting.map((c) => c.facts.number)).toEqual([11]);
     const card = board.waiting[0]!;
-    expect(card.turn).toBe('danyel');
+    expect(card.turn).toBe('owner');
     expect(card.outOfSync).toBe(true);
     expect(card.waitingSince).toBe('2026-11-05T12:00:00Z');
     expect(card.why).toBe('Issue #10 is waiting on you');
@@ -64,7 +64,7 @@ describe('buildBoard', () => {
   it("carries an issue's wait when only its status comment says so", () => {
     const issue = facts({
       number: 10, kind: 'issue', labels: [], lastActivityAt: '2026-11-05T20:00:00Z',
-      statusCommentBody: renderStatus(status({ waitingOn: 'Danyel', since: '2026-11-05T13:00:00Z' })),
+      statusCommentBody: renderStatus(status({ waitingOn: 'owner', since: '2026-11-05T13:00:00Z' })),
     });
     const pr = facts({ number: 11, linkedIssue: 10, createdAt: '2026-11-05T10:00:00Z', lastActivityAt: '2026-11-05T21:00:00Z' });
     const board = buildBoard([issue, pr], [], NOW);
@@ -73,10 +73,10 @@ describe('buildBoard', () => {
   });
 
   it('does not flag the PR when it already says it is waiting on Danyel', () => {
-    const issue = facts({ number: 10, kind: 'issue', labels: ['on danyel'], lastActivityAt: '2026-11-05T20:00:00Z' });
+    const issue = facts({ number: 10, kind: 'issue', labels: ['on sam'], lastActivityAt: '2026-11-05T20:00:00Z' });
     const pr = facts({
-      number: 11, linkedIssue: 10, labels: ['on danyel'], createdAt: '2026-11-05T10:00:00Z', lastActivityAt: '2026-11-05T21:00:00Z',
-      labelEvents: [{ label: 'on danyel', action: 'added', at: '2026-11-05T15:00:00Z' }],
+      number: 11, linkedIssue: 10, labels: ['on sam'], createdAt: '2026-11-05T10:00:00Z', lastActivityAt: '2026-11-05T21:00:00Z',
+      labelEvents: [{ label: 'on sam', action: 'added', at: '2026-11-05T15:00:00Z' }],
     });
     const board = buildBoard([issue, pr], [], NOW);
     const card = board.waiting[0]!;
@@ -94,9 +94,9 @@ describe('buildBoard', () => {
 
   it('sorts waiting by wait start, nulls last, ties by number', () => {
     const items = [
-      facts({ number: 5, labels: ['on danyel'], lastActivityAt: '2026-11-05T23:00:00Z' }),
-      facts({ number: 4, labels: ['on danyel'], labelEvents: [{ label: 'on danyel', action: 'added', at: '2026-11-05T10:00:00Z' }] }),
-      facts({ number: 3, labels: ['on danyel'], labelEvents: [{ label: 'on danyel', action: 'added', at: '2026-11-05T10:00:00Z' }] }),
+      facts({ number: 5, labels: ['on sam'], lastActivityAt: '2026-11-05T23:00:00Z' }),
+      facts({ number: 4, labels: ['on sam'], labelEvents: [{ label: 'on sam', action: 'added', at: '2026-11-05T10:00:00Z' }] }),
+      facts({ number: 3, labels: ['on sam'], labelEvents: [{ label: 'on sam', action: 'added', at: '2026-11-05T10:00:00Z' }] }),
     ];
     const board = buildBoard(items, [], NOW);
     expect(board.waiting.map((c) => c.facts.number)).toEqual([3, 4, 5]);
@@ -132,7 +132,7 @@ describe('buildBoard', () => {
     const pr = facts({ number: 1, labels: ['in-progress'], lastActivityAt: '2026-11-05T20:00:00Z' });
     const issue = facts({
       number: 2, kind: 'issue', labels: ['in-progress'], lastActivityAt: '2026-11-05T21:00:00Z',
-      statusCommentBody: renderStatus(status({ waitingOn: 'Claude', toTest: 'try it' })),
+      statusCommentBody: renderStatus(status({ waitingOn: 'claude', toTest: 'try it' })),
     });
     const board = buildBoard([pr, issue], [], NOW);
     expect(board.onClaude.find((c) => c.facts.number === 1)!.status).toBeNull();
@@ -140,9 +140,9 @@ describe('buildBoard', () => {
   });
 
   describe('a status older than the latest change', () => {
-    const body = renderStatus(status({ waitingOn: 'Danyel' }));
+    const body = renderStatus(status({ waitingOn: 'owner' }));
     const stale = (over: Partial<ReturnType<typeof facts>>) =>
-      buildBoard([facts({ number: 30, labels: ['on danyel'], body, lastActivityAt: '2026-11-05T23:00:00Z', ...over })], [], NOW).waiting[0]!.statusStale;
+      buildBoard([facts({ number: 30, labels: ['on sam'], body, lastActivityAt: '2026-11-05T23:00:00Z', ...over })], [], NOW).waiting[0]!.statusStale;
 
     it('is flagged when a commit or comment came after the status was written', () => {
       expect(stale({ statusWrittenAt: '2026-11-05T10:00:00Z', lastChangeAt: '2026-11-05T12:00:00Z' })).toBe(true);
@@ -162,12 +162,12 @@ describe('buildBoard', () => {
 
   it('puts a status whose "since" is not a date last, with no waiting time', () => {
     const odd = facts({
-      number: 40, labels: ['on danyel'], lastActivityAt: '2026-11-05T23:00:00Z',
-      body: '<!-- status -->\n**Waiting on:** Danyel, since yesterday\n**Ask:** look\n<!-- /status -->',
+      number: 40, labels: ['on sam'], lastActivityAt: '2026-11-05T23:00:00Z',
+      body: '<!-- status -->\n**Waiting on:** Sam, since yesterday\n**Ask:** look\n<!-- /status -->',
     });
     const dated = facts({
-      number: 41, labels: ['on danyel'], lastActivityAt: '2026-11-05T23:00:00Z',
-      labelEvents: [{ label: 'on danyel', action: 'added', at: '2026-11-05T10:00:00Z' }],
+      number: 41, labels: ['on sam'], lastActivityAt: '2026-11-05T23:00:00Z',
+      labelEvents: [{ label: 'on sam', action: 'added', at: '2026-11-05T10:00:00Z' }],
     });
     const board = buildBoard([odd, dated], [], NOW);
     expect(board.waiting.map((c) => c.facts.number)).toEqual([41, 40]);

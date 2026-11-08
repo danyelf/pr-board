@@ -189,7 +189,7 @@ describe('fetchItems', () => {
       const open = data.pullRequests.nodes.find((p: any) => p.number === 564);
       for (let n = 1000; n < 1024; n++) data.pullRequests.nodes.unshift({ ...structuredClone(open), number: n });
       // 578 has had prep for merge; with the turn label it could be about to merge, and it is last in the list.
-      data.pullRequests.nodes.find((p: any) => p.number === 578).labels.nodes = [{ name: 'on danyel' }];
+      data.pullRequests.nodes.find((p: any) => p.number === 578).labels.nodes = [{ name: 'on sam' }];
       return data;
     };
     const { fn, calls } = fake({ itemsFor, behind: { 'main...vis-paper-list': 2 } });
@@ -235,7 +235,7 @@ describe('fetchItems', () => {
       data.openPrs.nodes.push(null);
       data.openPrs.nodes[0].comments.nodes.unshift(null);
       data.openPrs.nodes[0].commits.nodes.push(null);
-      data.onDanyel.nodes.push(null);
+      data.onOwner.nodes.push(null);
       return data;
     };
     const { items, errors } = await fetchItems('tok', NOW, fake({ shape }).fn);
@@ -378,7 +378,7 @@ describe('fetchItems', () => {
     const itemsFor = () => {
       const data = recordedRepo();
       const labelled = data.issues.nodes.find((i: any) => i.number === 563);
-      labelled.labels.nodes.push({ name: 'on danyel' });
+      labelled.labels.nodes.push({ name: 'on sam' });
       const newer = Array.from({ length: 50 }, (_, k) => {
         const copy = structuredClone(labelled);
         copy.number = 4000 + k; copy.labels.nodes = [{ name: 'P2' }];
@@ -401,14 +401,14 @@ describe('fetchItems', () => {
       for (let k = 0; k < 50; k++) data.pullRequests.nodes.push({ ...structuredClone(open), number: 5000 + k });
       for (let k = 0; k < 51; k++) {
         const copy = structuredClone(issue);
-        copy.number = 6000 + k; copy.labels.nodes = [{ name: 'on danyel' }];
+        copy.number = 6000 + k; copy.labels.nodes = [{ name: 'on sam' }];
         data.issues.nodes.push(copy);
       }
       return data;
     };
     const { errors } = await fetchItems('tok', NOW, fake({ itemsFor }).fn);
     expect(errors).toContain('More than 50 open PRs in danyelf/torahmap; some may be missing from this page');
-    expect(errors).toContain('More than 50 open issues labelled "on danyel" in danyelf/torahmap; some may be missing from this page');
+    expect(errors).toContain('More than 50 open issues labelled "on sam" in danyelf/torahmap; some may be missing from this page');
   });
 
   it('sends the token and user agent', async () => {
