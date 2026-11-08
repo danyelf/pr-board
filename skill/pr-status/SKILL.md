@@ -37,3 +37,24 @@ pr-status ok <owner/repo#N>
 ```
 
 `show <ref>` prints the current status as JSON. A Stop hook blocks the end of a turn when you changed a PR or issue and did neither.
+
+## Answers from the board
+
+Danyel answers on the board: one choice per question, a "How does it look?" answer on every PR waiting for his look (looks good, prep for merge | needs changes | file an issue), and a free-text note. The board posts them as one comment from his account. Don't add your own "how does it look" question; the board asks it.
+
+**After every `set --waiting owner`**, start the watcher in the background for the items you just handed over (all of them, in one command), with the Bash tool's background option:
+
+```
+node /Users/danyel/code/MISC/pr-board/cli/watch-answers.ts <owner/repo#N> [<owner/repo#M> ...]
+```
+
+It costs nothing while it waits. Don't stop it, and don't start a second one for the same items. When answers come it claims each one with a 👀 reaction (that is how the board knows a session has them), prints them, and exits, which wakes you. Then, for each answer:
+
+- If it says the fingerprint does **not** match the current status, the questions changed after he answered. Don't apply anything; ask the current questions again with `set --waiting owner`.
+- **looks good, prep for merge**: run prep for merge (the `prep-for-merge` skill).
+- **needs changes**: make the changes the note asks for; the PR stays before prep.
+- A question's own choice: do that.
+- **file an issue** (on a question, or on the look): take the default, then file a new issue holding the question, its choices, any screenshots and a link back to the PR. Mark the question on the PR "default taken; moved to #NNN". Don't start work on the new issue.
+- The note: read it whatever the choices say; it can change what they mean.
+
+Then run `set` again with the new state (`--waiting claude` while you work, `--waiting owner` with what is left when you hand it back) and start the watcher again for whatever you handed back.

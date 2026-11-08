@@ -29,3 +29,9 @@ All the go-live steps are done (2026-11-08). They are in the order they were don
 9. **Should cards show the "Ask" line?** Answered: yes. Cards show the status section's `Ask:` line as one line under the title.
 
 10. **Some commits still ask for your approval.** Most likely settled: the commit example used `git -c user.name=…`, which your allowlist doesn't cover. With a plain `git -C <path> commit`, commits since 2026-11-06 have gone through without a prompt. If one prompts again, the prompt's wording should name the check.
+
+## Answering from the board (built 2026-11-08, while you slept)
+
+11. **Make the token that posts your answers?** (**yes** | wait) README step 8. A second fine-grained token from your account (danyelf), with issues and pull requests read and write, stored as the Worker secret `GITHUB_ANSWER_TOKEN`. I haven't created it or set it. Until it exists the cards show the answer controls with Send disabled, and the board works as before.
+
+12. **Are the calls I made for answering right?** (**yes** | let's talk) They are written down in the design under "Settled for answering", each marked as my call. The ones most worth a look: the Worker never touches labels or the status (the board works out "answered" from your comment being newer than the status); the status section now carries a hidden data line, which wins over the text if someone edits the text by hand on GitHub; and an answer with no 👀 after 10 minutes puts the card back at the top.
