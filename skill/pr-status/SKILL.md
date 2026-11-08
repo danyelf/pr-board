@@ -58,3 +58,5 @@ It costs nothing while it waits. Don't stop it, and don't start a second one for
 - The note: read it whatever the choices say; it can change what they mean.
 
 Then run `set` again with the new state (`--waiting claude` while you work, `--waiting owner` with what is left when you hand it back) and start the watcher again for whatever you handed back.
+
+**A session can also start with the answers in its first message.** When no open session picks an answer up within 5 minutes, the PR Board service on the Mac claims it and starts a fresh session (`claude -p`) in the item's worktree, with the answers in the prompt, printed the way the watcher prints them. That session has no chat memory: read the PR or issue and its status (`show`) first, check the branch is up to date, then act on the answers as above and end with `set`. Don't start the watcher in such a session; it ends when you finish, and the service starts a new one for the next answers.
