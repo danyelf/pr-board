@@ -93,6 +93,7 @@ describe('pr-status set', () => {
     expect(patches(r.calls)).toHaveLength(1);
     expect(w.body.startsWith('<!-- status -->\n**Waiting on:** Sam, since 2026-11-05T10:00:00.000Z')).toBe(true);
     expect(w.body).toContain('1. Colour?  (**red** | green)');
+    expect(w.body).toMatch(/\n<!-- status-data \{"v":1,"waitingOn":"owner",.*"fingerprint":"[0-9a-f]{8}"\} -->\n<!-- \/status -->/);
     expect(w.body.endsWith('<!-- /status -->\n\nOld description\n')).toBe(true);
     expect(w.labels.has('on sam')).toBe(true);
     expect(r.calls.some((c) => c.join(' ').includes('-X DELETE repos/acme/x/issues/5/labels/parked'))).toBe(true);
@@ -110,6 +111,15 @@ describe('pr-status set', () => {
     expect(parseStatus(w.body)?.since).toBe('2026-11-05T10:00:00.000Z');
     await run(w, ['set', 'acme/x#5', '--waiting', 'claude', '--ask', 'x'], '2026-11-07T10:00:00.000Z');
     expect(parseStatus(w.body)?.since).toBe('2026-11-07T10:00:00.000Z');
+  });
+
+  it('records when it wrote the status, each time, even when since stays the same', async () => {
+    const w = world();
+    await run(w, SET, '2026-11-05T10:00:00.000Z');
+    expect(parseStatus(w.body)?.writtenAt).toBe('2026-11-05T10:00:00.000Z');
+    await run(w, SET, '2026-11-06T10:00:00.000Z');
+    expect(parseStatus(w.body)?.writtenAt).toBe('2026-11-06T10:00:00.000Z');
+    expect(parseStatus(w.body)?.since).toBe('2026-11-05T10:00:00.000Z');
   });
 
   it('refuses a question without a bold default and writes nothing', async () => {

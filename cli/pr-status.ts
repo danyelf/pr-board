@@ -4,21 +4,13 @@ import { OWNER_LOGIN } from '../src/shared/config.ts';
 import { LABEL_ON_OWNER, LABEL_PARKED, WAITING_ON, type WaitingOn } from '../src/shared/names.ts';
 import { STATUS_CLOSE, STATUS_OPEN, parseStatus, pickStatusComment, renderStatus, replaceStatus, statusValueProblem } from '../src/shared/status.ts';
 import type { Question, Status } from '../src/shared/types.ts';
-import { currentRepo, flattenPages, gh, isNotFound, refString } from './gh.ts';
+import { gh, isNotFound, issueComments, parseRef, readStatusText, refString } from './gh.ts';
 import type { Deps as BaseDeps, Gh, Ref } from './gh.ts';
 
 export interface Deps extends BaseDeps {
   now: () => Date;
   /** The home folder, where the list of "status is still right" notes is kept. */
   home: string;
-}
-
-export async function parseRef(text: string, gh: Gh): Promise<Ref> {
-  const full = /^([^/\s#]+)\/([^/\s#]+)#(\d+)$/.exec(text);
-  if (full) return { owner: full[1]!, repo: full[2]!, n: Number(full[3]) };
-  const short = /^#(\d+)$/.exec(text);
-  if (!short) throw new Error(`Can't read "${text}" as a reference; use owner/repo#N or #N`);
-  return { ...(await currentRepo(gh)), n: Number(short[1]) };
 }
 
 interface SetOptions {
@@ -74,7 +66,7 @@ function buildQuestions(texts: string[]): Question[] {
 
 function nextStatus(opts: SetOptions, questions: Question[], previous: Status | null, now: Date): Status {
   const since = previous && previous.waitingOn === opts.waiting && previous.since ? previous.since : now.toISOString();
-  return { waitingOn: opts.waiting, since, ask: opts.ask, questions, toTest: opts.toTest };
+  return { waitingOn: opts.waiting, since, ask: opts.ask, questions, toTest: opts.toTest, writtenAt: now.toISOString() };
 }
 
 /** A PR that has just been handed to the owner, and who opened it; null otherwise. */
@@ -119,12 +111,6 @@ async function requestReview(gh: Gh, ref: Ref, author: string | null): Promise<s
   }
 }
 
-/** Every comment on the item, oldest first, however many pages there are. */
-async function issueComments<T extends { body: string }>(gh: Gh, ref: Ref): Promise<T[]> {
-  const url = `repos/${ref.owner}/${ref.repo}/issues/${ref.n}/comments?per_page=100`;
-  return flattenPages(await gh(['api', url, '--paginate', '--slurp'])) as T[];
-}
-
 /** Returns the names of labels that were wanted but don't exist in the repo. */
 async function syncLabels(gh: Gh, ref: Ref, waiting: SetOptions['waiting']): Promise<string[]> {
   const base = `repos/${ref.owner}/${ref.repo}`;
@@ -163,12 +149,7 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
     const ref = await parseRef(refText, deps.gh);
 
     if (command === 'show') {
-      const item = JSON.parse(await deps.gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}`])) as { pull_request?: unknown; body?: string | null };
-      let text = item.body ?? '';
-      if (!item.pull_request) {
-        text = pickStatusComment(await issueComments(deps.gh, ref))?.body ?? '';
-      }
-      out(JSON.stringify(parseStatus(text), null, 2));
+      out(JSON.stringify(parseStatus(await readStatusText(deps.gh, ref)), null, 2));
       return 0;
     }
 

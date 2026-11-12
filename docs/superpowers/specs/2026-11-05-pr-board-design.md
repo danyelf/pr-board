@@ -73,7 +73,7 @@ The problem: the state of each PR lives in chat scrollback. When something urgen
 - `on danyel` (new): it's Danyel's turn. A look, an answer, or a merge.
 - `parked` (new): waiting on something outside the two of them (for example #411, waiting on a licence question).
 
-Whose turn it is: `on danyel` means Danyel's; `parked` means nobody's; otherwise, if it's `in-progress`, it's whoever picked it up. When Claude hands an item back it adds `on danyel`; when Danyel answers, the Worker removes it. Created in every repo the tool covers.
+Whose turn it is: `on danyel` means Danyel's; `parked` means nobody's; otherwise, if it's `in-progress`, it's whoever picked it up. When Claude hands an item back it adds `on danyel`; Claude removes it when it picks up his answers (see "Settled for answering"). Created in every repo the tool covers.
 
 The existing `review pending` label keeps its current meaning. Priority and map labels are untouched.
 
@@ -132,7 +132,7 @@ A Claude Code `Stop` hook on the Mac. When Claude finishes a turn in which it pu
 
 Every Your look card also has a free-text note box, so "the tint is too strong, otherwise good" has somewhere to go on a card with no questions. "Looks good, prep for merge" is what moves the PR from Your look to Prep. "Needs changes" sends the note back to Claude and the PR stays before Prep. Because the answer is posted as a comment, the board can show that the look happened, rather than guessing it from Prep having run.
 
-1. Danyel clicks choices on a card and presses **Send answers** (or types a note). The Worker posts one comment from danyelf on the PR, in a form a program can read (for example `Answers: 1 fix it here; 2 leave it`, plus the note), and removes the `on danyel` label.
+1. Danyel clicks choices on a card and presses **Send answers** (or types a note). The Worker posts one comment from danyelf on the PR, in a form a program can read, plus the note. (Built differently from first planned: the Worker leaves the `on danyel` label alone; see "Settled for answering".)
 2. **Whichever Claude session is open picks it up.** A session that hands a PR to Danyel starts a background watcher script. It checks GitHub about once a minute for new answer comments not yet picked up. It exits only when it finds one, and waits about a minute after the first new answer to collect the rest. Exiting wakes the session (Claude Code re-invokes a session when its background command finishes). Claude acts on the answers, then restarts the watcher.
    - The watcher costs no tokens while it waits. It must never exit on a timer or a repeated error, because each exit is a paid wake-up.
    - Only one session may pick up a given answer. The builder decides how it is claimed (for example, an acknowledgement comment or reaction on the answer).
@@ -223,12 +223,26 @@ One small background service started with the Mac at login. It does three jobs:
 - **Starting labels.** A one-off pass where Claude reads each open item and its last session and proposes which ones get `on danyel` or `parked`. Danyel approves the list before any label changes (for example, #564 would get `on danyel`).
 - **Which repos.** Whatever the token sees (Danyel decided). Today that is mainly `danyelf/torahmap` and `danyelf/danyelfisher.info`.
 
-## To settle before answering is built
+## Settled for answering (Claude's calls, for Danyel to confirm)
 
-These came out of the review of part 1 and must be decided when the page starts posting answers.
+Decided on 2026-11-08 while building answering, with nobody awake to ask. Each is a call Danyel can overturn. They replace the two open questions from the review of part 1 (two records of whose turn it is; the status as data as well as text).
 
-- **Two records of whose turn it is.** Both the turn label and the status section's `Waiting on:` line say whose turn it is, and they are written one after the other, not together. Today that's safe: if either says Danyel, the card counts as waiting on him and says "label out of sync". But the plan above has the Worker remove `on danyel` when Danyel answers, while the description still says `Waiting on: Danyel` until Claude rewrites it. The card would then stay in "Waiting on you", flagged out of sync, which is the opposite of what answering should do. Options: the Worker only posts the answer, and the board shows "answered, not yet picked up" from an answer newer than the wait; or the label becomes the only record of whose turn it is, and the status section only holds the ask, questions and test steps.
-- **Store the status as data as well as text.** The board reads the status section with text matching. For example, a question's choices are the last bracketed group containing a `|`. Answering needs exact question numbers and the fingerprint above. Since Claude always writes the section through `pr-status`, that command could also write the same content as data (JSON) inside the status markers: people read the text, and the Worker reads the data.
+- **The Worker never changes whose turn it is.** It posts the answer and nothing else: no label change, no edit to the status section. The board works out "answered" from an answer comment by `ownerLogin` newer than the status, and moves the card to "On Claude" until a session claims it with 👀; with no claim after 10 minutes it comes back to the top as "Answered, not picked up". Once Claude rewrites the status, the answer is older than it and the card follows the labels again. Reasons: whose turn it is keeps one writer, Claude, so an answer can't leave the label and the status disagreeing. And the label is how answered items are found: the board fetches issues by label, and the Mac service looks for answers only on items labelled `on danyel`, so taking the label off at answer time would hide the very items that still need Claude. The label means "the last status Claude wrote says it's Danyel's turn", which stays true until Claude acts on the answer.
+- **The status as data too, trusted only while the text agrees.** `pr-status set` also writes the status as a hidden data line inside the markers, with a fingerprint of what it asks and the time it was written. The board uses the data only while the visible lines are exactly what it would render; after a hand edit it reads the text and tags the card "status edited by hand". Reason: the data survives odd characters, and its write time tells answers to this status from older ones; a hand edit is shown as written, never silently overruled. The fingerprint is a short non-cryptographic hash, since it only has to notice changed questions.
+- **The look question.** Every PR at Your look asks "How does it look?" after Claude's questions, with "looks good, prep for merge" as the default. Reason: it is the one question every PR has, so Claude doesn't have to write it each time. Choices are radio buttons, so the page needs no script.
+- **One answer comment, in one shared format.** The answers go up as one comment from Danyel's account: a line for programs, then the same answers for people. `src/shared/answer.ts` holds the format and the rules for an answer that is still waiting, and both the Worker and the watcher use it. Reason: GitHub stays the only record, and the two sides can't drift apart.
+- **One token to read and to post.** `GITHUB_TOKEN`, from Danyel's account, with write access to issues and pull requests. If GitHub refuses the comment (403 or 404), the page says the token needs that access. Reason: a second token would sit beside the first in the same Worker's secrets, so it would add a secret to renew without making a leak any smaller, and the reading code never calls anything that writes. The Worker checks the comment went up as `ownerLogin`, because the watcher reads only that account's answers.
+- **POST /answer refuses rather than guesses.** Same Access check as the page, and only from the page's own origin. It reads the item again and refuses when it is closed, already answered since its status, no longer Danyel's turn, or asking different questions from the page that sent the answers. Reason: answers must never land on changed questions, or go up twice.
+- **The watcher.** Started by the session that handed the items over. It waits for answers to the current status, claims them with 👀, prints them and exits; it never exits on a timer or an error, and refuses to start under Danyel's own account. Reason: every exit is a paid wake-up for the session, and the board doesn't count Danyel's own 👀 as a claim.
+- **Reading claims without a bigger query.** Only the answers since each status get a second, small query for their 👀. If it fails, they count as not picked up. Reason: the main query stays its size, and a failure errs toward showing an answer as still waiting.
+
+## Next parts
+
+Left for later, in no fixed order:
+
+- **The always-on Mac service:** a fresh Claude session for answers nobody picked up (after its 5-minute grace period, before the board's 10), and a heartbeat with the page's "Mac offline: answers will wait" note.
+- **File an issue** at the top of the page, and **Pick up** on backlog issues.
+- **Activity upload and the timeline.**
 
 ## Left to the builder
 

@@ -9,8 +9,14 @@ export interface Status {
   ask: string;
   questions: Question[];
   toTest: string | null;
+  /** When `pr-status set` wrote it. Read back only from a data line the text still matches; not part of the fingerprint. */
+  writtenAt?: string;
+  /** The text no longer matches the data line under it (someone edited it), so the text was read instead. */
+  editedByHand?: boolean;
 }
 export interface LabelEvent { label: string; action: 'added' | 'removed'; at: string }
+/** An answer comment from the owner. `claimedAt` is when someone else first reacted 👀 to it; null until then. */
+export interface AnswerSeen { id: string; url: string; at: string; claimedAt: string | null }
 export interface ItemFacts {
   repo: string; number: number; kind: 'pr' | 'issue'; title: string; url: string;
   labels: string[]; body: string; createdAt: string; closedAt: string | null;
@@ -22,9 +28,10 @@ export interface ItemFacts {
   reviewSha: string | null; reviewUrl: string | null; commitsSinceReview: number | null;
   prepDone: boolean; commitsSincePrep: number | null;
   statusCommentBody: string | null;   // issues only
-  statusWrittenAt: string | null;     // when the status was last written: a PR's description edit, or the issue's status comment
+  statusWrittenAt: string | null;     // when the status was last written: the time pr-status recorded in it, else a PR's description edit or the issue's status comment
   lastChangeAt: string | null;        // latest commit or comment, not counting the issue's status comment
   labelEvents: LabelEvent[];
+  answers: AnswerSeen[];              // the owner's answers written since the status was, oldest first
   lastActivityAt: string;             // latest of commits, comments, label changes, created/merged/closed
 }
 export type BoxState = 'done' | 'now' | 'ready' | 'blocked' | 'todo';

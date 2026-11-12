@@ -1,6 +1,7 @@
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
 
 export interface Env {
+  /** The owner's token. The board reads with it, and posts the owner's answers with it. */
   GITHUB_TOKEN: string;
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;

@@ -1,6 +1,8 @@
 import type { ItemFacts, StageBox, Status, Turn } from '../shared/types.ts';
-import { DAY_MS } from '../shared/names.ts';
-import { extractToTest, hasStatusSection, parseStatus } from '../shared/status.ts';
+import { asksForLook } from '../shared/answer.ts';
+import { statusFingerprint } from '../shared/fingerprint.ts';
+import { DAY_MS, PICKUP_GRACE_MS } from '../shared/names.ts';
+import { extractToTest, hasStatusSection, parseStatus, statusText } from '../shared/status.ts';
 import { stageStrip, whyTag } from '../shared/stage.ts';
 import { effectiveTurn, formatWait, waitingSince } from '../shared/turn.ts';
 
@@ -9,6 +11,7 @@ export interface Card {
   status: Status | null;
   statusUnreadable: boolean;          // a status section is there, but it couldn't be read
   statusStale: boolean;               // there is a status, and a commit or comment has come since it was written
+  statusEditedByHand: boolean;        // its text was changed after pr-status wrote it, so the text was read
   turn: Turn;
   outOfSync: boolean;
   strip: StageBox[];
@@ -16,7 +19,24 @@ export interface Card {
   waitingSince: string | null;
   waited: string;
   toTest: string | null;
+  /** The card asks the look question: a PR on the owner's turn that hasn't had prep. */
+  asksLook: boolean;
+  /** The fingerprint of what the card asks, sent with the answers. */
+  fingerprint: string;
+  /** Where the owner's answers since the status was written have got to; null when there are none. */
+  answerState: AnswerState | null;
+  /** The newest of those answers. */
+  answerUrl: string | null;
+  /** When the last of them was picked up, once every one has been; null otherwise. */
+  pickedUpAt: string | null;
 }
+
+/**
+ * 'awaiting-pickup': answered, and no session has claimed it yet, for up to the grace period.
+ * 'not-picked-up': still unclaimed after that, so it is back with the owner to notice.
+ * 'picked-up': every answer has been claimed by a Claude session.
+ */
+type AnswerState = 'awaiting-pickup' | 'not-picked-up' | 'picked-up';
 
 export interface Board {
   waiting: Card[];
@@ -30,10 +50,6 @@ const QUIET_AFTER = 3 * DAY_MS;
 
 function isOpen(f: ItemFacts): boolean {
   return !f.merged && f.closedAt === null;
-}
-
-function statusText(f: ItemFacts): string {
-  return f.kind === 'pr' ? f.body : f.statusCommentBody ?? '';
 }
 
 function statusOf(f: ItemFacts): Status | null {
@@ -50,27 +66,43 @@ function changedSince(change: string | null, written: string | null): boolean {
 interface HiddenWait { issue: number; since: string | null }
 
 function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card {
-  const status = statusOf(f);
+  // Read once here; everything below works from these.
+  const text = statusText(f);
+  const status = parseStatus(text);
   const effective = effectiveTurn(f.labels, status);
   const own = waitingSince(f, status);
-  const strip = stageStrip(f, status, now);
+  const strip = stageStrip(f, status, now, effective.turn);
   const why = whyTag(status, strip, effective.turn);
   // The PR stands in for an issue that is waiting on the owner, so the PR waits too. Unless the PR
   // already says so itself, its labels are out of step with that.
   const carried = hidden !== undefined && effective.turn !== 'owner';
-  const since = carried ? own ?? hidden.since : own;
+  const unclaimed = f.answers.filter((a) => a.claimedAt === null);
+  const claimTimes = f.answers.map((a) => a.claimedAt).filter((t): t is string => t !== null);
+  const answerState: AnswerState | null =
+    f.answers.length === 0 ? null
+    : unclaimed.length === 0 ? 'picked-up'
+    : now.getTime() - time(unclaimed[0]!.at) >= PICKUP_GRACE_MS ? 'not-picked-up'
+    : 'awaiting-pickup';
+  // An answer nobody picked up has waited since it was sent, not since the item was handed over.
+  const since = answerState === 'not-picked-up' ? unclaimed[0]!.at : carried ? own ?? hidden.since : own;
   return {
     facts: f,
     status,
-    statusUnreadable: status === null && hasStatusSection(statusText(f)),
+    statusUnreadable: status === null && hasStatusSection(text),
     statusStale: status !== null && changedSince(f.lastChangeAt, f.statusWrittenAt),
+    statusEditedByHand: status?.editedByHand === true,
     turn: carried ? 'owner' : effective.turn,
     outOfSync: carried || effective.outOfSync,
     strip,
-    why: carried && !why ? `Issue #${hidden.issue} is waiting on you` : why,
+    why: answerState === 'not-picked-up' ? 'Answered, not picked up' : carried && !why ? `Issue #${hidden.issue} is waiting on you` : why,
     waitingSince: since,
     waited: since ? formatWait(since, now) : '',
     toTest: status?.toTest ?? extractToTest(f.body),
+    asksLook: asksForLook(f, effective.turn),
+    fingerprint: statusFingerprint(status),
+    answerState,
+    answerUrl: f.answers.at(-1)?.url ?? null,
+    pickedUpAt: answerState === 'picked-up' ? claimTimes.reduce((a, b) => (time(b) > time(a) ? b : a)) : null,
   };
 }
 
@@ -109,7 +141,10 @@ export function buildBoard(items: ItemFacts[], errors: string[], now: Date): Boa
   const quiet: Card[] = [];
   for (const c of cards) {
     const stale = now.getTime() - time(c.facts.lastActivityAt) > QUIET_AFTER;
-    if (c.turn === 'owner') waiting.push(c);
+    // Answered is Claude's turn until the answer has gone unclaimed too long, whatever the labels still say.
+    if (c.answerState === 'not-picked-up') waiting.push(c);
+    else if (c.answerState !== null) onClaude.push(c);
+    else if (c.turn === 'owner') waiting.push(c);
     else if (c.turn === 'nobody' || stale) quiet.push(c);
     else onClaude.push(c);
   }
