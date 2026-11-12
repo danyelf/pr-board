@@ -24,7 +24,8 @@ const PAGE_HEADERS = {
   'Cache-Control': 'no-store',
   // The page has only inline styles and images from the web, and its forms post only to itself; no scripts, no frames.
   'Content-Security-Policy': "default-src 'none'; img-src https:; style-src 'unsafe-inline'; form-action 'self'",
-  'Referrer-Policy': 'no-referrer',
+  // Not no-referrer: under that, browsers send "Origin: null" on the page's own form posts, and /answer refuses them.
+  'Referrer-Policy': 'same-origin',
 };
 
 // The part of Cloudflare's ExportedHandler this Worker uses, so the tests can type-check without the Workers type definitions.

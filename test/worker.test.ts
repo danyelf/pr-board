@@ -75,7 +75,7 @@ describe('worker', () => {
     expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
     expect(res.headers.get('Cache-Control')).toBe('no-store');
     expect(res.headers.get('Content-Security-Policy')).toBe("default-src 'none'; img-src https:; style-src 'unsafe-inline'; form-action 'self'");
-    expect(res.headers.get('Referrer-Policy')).toBe('no-referrer');
+    expect(res.headers.get('Referrer-Policy')).toBe('same-origin');
     expect(await res.text()).toContain('#1');
   });
 
