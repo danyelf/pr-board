@@ -127,9 +127,12 @@ export function isOwnerAnswer(login: string | null | undefined, body: string): b
   return login === OWNER_LOGIN && parseAnswer(body) !== null;
 }
 
+/** The reaction a Claude session claims an answer with: 👀, as GitHub's REST API spells it (GraphQL uses upper case). */
+export const CLAIM_REACTION = 'eyes';
+
 /** A reaction that claims an answer for a Claude session: 👀 from anyone but the owner. */
 export function isClaimReaction(login: string | null | undefined, content: string): boolean {
-  return typeof login === 'string' && login !== OWNER_LOGIN && content.toLowerCase() === 'eyes';
+  return typeof login === 'string' && login !== OWNER_LOGIN && content.toLowerCase() === CLAIM_REACTION;
 }
 
 /** A comment as both GitHub's APIs give it, reduced to what the answer rules need. */
@@ -141,14 +144,4 @@ export interface CommentSeen { login: string | null | undefined; body: string; c
  */
 export function answersCurrentStatus(c: CommentSeen, statusWrittenAt: string | null): boolean {
   return isOwnerAnswer(c.login, c.body) && (statusWrittenAt === null || Date.parse(c.createdAt) > Date.parse(statusWrittenAt));
-}
-
-/**
- * An answer still waiting for a Claude session: the owner's answer to the current status that
- * nobody but the owner has reacted 👀 to. Its reactions only need reading once the first part holds.
- */
-export function isWaitingAnswer(
-  c: CommentSeen, statusWrittenAt: string | null, reactions: { login: string | null | undefined; content: string }[],
-): boolean {
-  return answersCurrentStatus(c, statusWrittenAt) && !reactions.some((r) => isClaimReaction(r.login, r.content));
 }

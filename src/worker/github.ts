@@ -1,4 +1,4 @@
-import { answersCurrentStatus, isClaimReaction, isOwnerAnswer, parseAnswer } from '../shared/answer.ts';
+import { CLAIM_REACTION, answersCurrentStatus, isClaimReaction, isOwnerAnswer, parseAnswer } from '../shared/answer.ts';
 import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_OWNER, LABEL_PARKED, REPO_WINDOW_DAYS, WRITTEN_ELSEWHERE } from '../shared/names.ts';
 import { parseStatus, pickStatusComment } from '../shared/status.ts';
 import { effectiveTurn } from '../shared/turn.ts';
@@ -114,7 +114,7 @@ function graphqlWith(token: string, fetchFn: typeof fetch) {
 }
 
 const CLAIMS_QUERY = `query($ids: [ID!]!) {
-  nodes(ids: $ids) { ... on IssueComment { id reactions(content: EYES, first: ${CLAIMS_PER_ANSWER}) { nodes { content createdAt user { login } } } } }
+  nodes(ids: $ids) { ... on IssueComment { id reactions(content: ${CLAIM_REACTION.toUpperCase()}, first: ${CLAIMS_PER_ANSWER}) { nodes { content createdAt user { login } } } } }
 }`;
 
 /**

@@ -3,12 +3,11 @@
 //   node cli/watch-answers.ts owner/repo#N [owner/repo#M ...]
 // It costs nothing while it waits, and it never exits on a timer or because of errors, since every
 // exit is a paid wake-up for the session.
-import { LOOK_KEY, LOOK_QUESTION, answersCurrentStatus, isWaitingAnswer, parseAnswer, type Answer, type CommentSeen } from '../src/shared/answer.ts';
+import { CLAIM_REACTION, LOOK_KEY, LOOK_QUESTION, answersCurrentStatus, isClaimReaction, parseAnswer, type Answer, type CommentSeen } from '../src/shared/answer.ts';
 import { OWNER_LOGIN } from '../src/shared/config.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
 import { parseStatus } from '../src/shared/status.ts';
-import type { Status } from '../src/shared/types.ts';
-import { currentRepo, flattenPages, gh, readItem, readRef, readStatusText, refString } from './gh.ts';
+import { currentRepo, flattenPages, gh, readItem, readRef, refString } from './gh.ts';
 import type { Deps as BaseDeps, Gh, ItemRead, Ref } from './gh.ts';
 
 export interface Deps extends BaseDeps {
@@ -25,8 +24,8 @@ interface RestComment {
   reactions?: { eyes?: number };
 }
 
-/** An answer comment nobody has claimed yet. */
-interface Found { ref: Ref; id: number; url: string; answer: Answer }
+/** An answer comment nobody has claimed yet, with the text the item's status lived in when it was read. */
+interface Found { ref: Ref; id: number; url: string; answer: Answer; statusText: string }
 
 const base = (ref: Ref) => `repos/${ref.owner}/${ref.repo}`;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -51,33 +50,47 @@ async function statusWrittenAt(gh: Gh, ref: Ref, item: ItemRead<RestComment>): P
 /** The 👀 reactions on a comment. Skips the call when GitHub's count says there are none. */
 async function eyesOn(gh: Gh, ref: Ref, c: RestComment): Promise<{ login: string | undefined; content: string }[]> {
   if (c.reactions?.eyes === 0) return [];
-  const url = `${base(ref)}/issues/comments/${c.id}/reactions?content=eyes&per_page=100`;
+  const url = `${base(ref)}/issues/comments/${c.id}/reactions?content=${CLAIM_REACTION}&per_page=100`;
   const reactions = flattenPages(await gh(['api', url, '--paginate', '--slurp'])) as { user: { login: string } | null; content?: string }[];
-  return reactions.map((r) => ({ login: r.user?.login, content: r.content ?? 'eyes' }));
+  return reactions.map((r) => ({ login: r.user?.login, content: r.content ?? CLAIM_REACTION }));
+}
+
+/** The owner's answers on one open item that nobody has claimed, oldest first. */
+async function waitingOn(gh: Gh, ref: Ref, item: ItemRead<RestComment>): Promise<Found[]> {
+  const writtenAt = await statusWrittenAt(gh, ref, item);
+  const found: Found[] = [];
+  for (const c of item.comments) {
+    const seen: CommentSeen = { login: c.user?.login, body: c.body, createdAt: c.created_at };
+    if (!answersCurrentStatus(seen, writtenAt)) continue;
+    // Reactions are read only for the answers to the current status.
+    if ((await eyesOn(gh, ref, c)).some((r) => isClaimReaction(r.login, r.content))) continue;
+    found.push({ ref, id: c.id, url: c.html_url, answer: parseAnswer(c.body)!, statusText: item.statusText });
+  }
+  return found;
 }
 
 /**
  * Reads each item. Drops, saying so, the ones that are closed or merged, since no answer will come
- * for them. Returns the owner's answers still waiting on the rest, oldest first within each item.
+ * for them. Returns the owner's answers still waiting on the rest, and why any item couldn't be read,
+ * so one bad item doesn't hide the others.
  */
-async function waitingAnswers(gh: Gh, refs: Ref[], say: (line: string) => void): Promise<Found[]> {
+async function waitingAnswers(gh: Gh, refs: Ref[], say: (line: string) => void): Promise<{ found: Found[]; failed: string[] }> {
   const found: Found[] = [];
+  const failed: string[] = [];
   for (const ref of [...refs]) {
-    const item = await readItem<RestComment>(gh, ref);
-    if (!item.open) {
-      refs.splice(refs.indexOf(ref), 1);
-      say(`${refString(ref)} is closed or merged; no longer watching it.`);
-      continue;
-    }
-    const writtenAt = await statusWrittenAt(gh, ref, item);
-    for (const c of item.comments) {
-      const seen: CommentSeen = { login: c.user?.login, body: c.body, createdAt: c.created_at };
-      // Reactions are read only for the answers to the current status.
-      if (!answersCurrentStatus(seen, writtenAt) || !isWaitingAnswer(seen, writtenAt, await eyesOn(gh, ref, c))) continue;
-      found.push({ ref, id: c.id, url: c.html_url, answer: parseAnswer(c.body)! });
+    try {
+      const item = await readItem<RestComment>(gh, ref);
+      if (!item.open) {
+        refs.splice(refs.indexOf(ref), 1);
+        say(`${refString(ref)} is closed or merged; no longer watching it.`);
+        continue;
+      }
+      found.push(...(await waitingOn(gh, ref, item)));
+    } catch (e) {
+      failed.push(`Couldn't read ${refString(ref)}: ${message(e)}`);
     }
   }
-  return found;
+  return { found, failed };
 }
 
 /**
@@ -85,27 +98,19 @@ async function waitingAnswers(gh: Gh, refs: Ref[], say: (line: string) => void):
  * account had already reacted, which means another session running as the same account claimed it first.
  */
 async function claim(gh: Gh, f: Found): Promise<boolean> {
-  const res = await gh(['api', '-X', 'POST', `${base(f.ref)}/issues/comments/${f.id}/reactions`, '-f', 'content=eyes', '--include']);
+  const res = await gh(['api', '-X', 'POST', `${base(f.ref)}/issues/comments/${f.id}/reactions`, '-f', `content=${CLAIM_REACTION}`, '--include']);
   return /^HTTP\/\S+\s+201\b/.test(res);
 }
 
-/** The answers in words, with whether they still answer the item's current questions. */
-async function describe(gh: Gh, f: Found): Promise<string> {
+/** The answers in words, with whether they still answer the item's questions as they were just read. */
+function describe(f: Found): string {
   const lines = [`${refString(f.ref)}: ${f.url}`];
-  let current: string | null = null;
-  let status: Status | null = null;
-  try {
-    status = parseStatus(await readStatusText(gh, f.ref));
-    current = statusFingerprint(status);
-  } catch (e) {
-    lines.push(`  Couldn't read the current status (${message(e)}); check the fingerprint ${f.answer.fingerprint} by hand before applying these.`);
-  }
+  const status = parseStatus(f.statusText);
+  const current = statusFingerprint(status);
   const matches = current === f.answer.fingerprint;
-  if (current !== null) {
-    lines.push(matches
-      ? `  fingerprint ${f.answer.fingerprint} matches the current status`
-      : `  fingerprint ${f.answer.fingerprint} does NOT match the current status (${current}): the questions changed after these answers were sent. Don't apply them; ask again.`);
-  }
+  lines.push(matches
+    ? `  fingerprint ${f.answer.fingerprint} matches the current status`
+    : `  fingerprint ${f.answer.fingerprint} does NOT match the current status (${current}): the questions changed after these answers were sent. Don't apply them; ask again.`);
   for (const [key, value] of Object.entries(f.answer.answers)) {
     if (key === LOOK_KEY) continue;
     const q = matches ? status?.questions.find((x) => String(x.n) === key) : undefined;
@@ -158,10 +163,15 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
         out('Every item it was watching is closed or merged; nothing left to watch.');
         return 0;
       }
-      if (first.length > 0) {
+      // With nothing found, a failure is reason to wait longer; with an answer found, it waits its turn.
+      if (first.found.length === 0 && first.failed.length > 0) throw new Error(first.failed.join('; '));
+      for (const line of first.failed) err(line);
+      if (first.found.length > 0) {
         await deps.sleep(COLLECT_MS);
         const claimed: Found[] = [];
-        for (const f of await waitingAnswers(deps.gh, refs, out)) {
+        const second = await waitingAnswers(deps.gh, refs, out);
+        for (const line of second.failed) err(line);
+        for (const f of second.found) {
           try {
             if (await claim(deps.gh, f)) claimed.push(f);
           } catch (e) {
@@ -171,7 +181,7 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
         }
         if (claimed.length > 0) {
           out(`Picked up ${claimed.length === 1 ? 'one answer' : `${claimed.length} answers`} (each now has a 👀):`);
-          for (const f of claimed) out(`\n${await describe(deps.gh, f)}`);
+          for (const f of claimed) out(`\n${describe(f)}`);
           return 0;
         }
       }

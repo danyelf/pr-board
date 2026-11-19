@@ -24,6 +24,8 @@ class World {
   lostRace = new Set<number>();
   failChecks = 0;
   failRepoLookups = 0;
+  /** Items GitHub can't find, as if deleted or mistyped. */
+  missing = new Set<string>();
   nextId = 100;
   /** Minutes after WRITTEN, moved on by each comment. */
   clock = 1;
@@ -64,6 +66,7 @@ class World {
     }
     const item = /^api repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(line);
     if (item) {
+      if (this.missing.has(`${item[1]}#${item[2]}`)) throw new Error('gh: HTTP 404 Not Found');
       const it = this.items.get(`${item[1]}#${item[2]}`)!;
       return JSON.stringify({ state: it.state, body: it.kind === 'pr' ? it.body : 'issue text', ...(it.kind === 'pr' ? { pull_request: {} } : {}) });
     }
@@ -239,6 +242,18 @@ describe('watch-answers', () => {
     expect(r.sleeps).toEqual([120_000, 240_000, MAX_BACKOFF, MAX_BACKOFF, MAX_BACKOFF, MAX_BACKOFF, COLLECT]);
     expect(r.err).toContain('HTTP 502 Bad Gateway');
     expect(r.err.split('\n').filter((l) => l.includes('trying again')).length).toBe(6);
+  });
+
+  it("keeps reading the other items when one can't be read, and says which", async () => {
+    const w = new World();
+    w.missing.add('acme/gone#3');
+    w.item('acme/x#5');
+    const id = w.answer('acme/x#5', { '1': 'leave' });
+    const r = await watch(w, ['acme/gone#3', 'acme/x#5']);
+    expect(r.code).toBe(0);
+    expect(r.sleeps).toEqual([COLLECT]);
+    expect(w.reactions.get(id)).toEqual(['robot']);
+    expect(r.err).toContain("Couldn't read acme/gone#3: gh: HTTP 404 Not Found");
   });
 
   it('goes back to the ordinary wait once a check works again', async () => {

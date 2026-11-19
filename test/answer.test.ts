@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   FILE_AN_ISSUE, FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, NOTE_MAX, answersCurrentStatus, asksForLook, checkAnswer, choicesFor,
-  isClaimReaction, isOwnerAnswer, isWaitingAnswer, parseAnswer, questionField, questionOfField, renderAnswer, type CommentSeen,
+  isClaimReaction, isOwnerAnswer, parseAnswer, questionField, questionOfField, renderAnswer, type CommentSeen,
 } from '../src/shared/answer.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
 import type { Status } from '../src/shared/types.ts';
@@ -160,13 +160,5 @@ describe('the rules for an answer', () => {
     expect(answersCurrentStatus(at('2026-11-05T08:00:00Z'), '2026-11-05T09:00:00Z')).toBe(false);
     expect(answersCurrentStatus(at('2026-11-05T08:00:00Z'), null)).toBe(true);
     expect(answersCurrentStatus(at('2026-11-05T10:00:00Z', { login: 'bob' }), null)).toBe(false);
-  });
-
-  it('says an answer is still waiting until someone other than the owner reacts 👀', () => {
-    const c = at('2026-11-05T10:00:00Z');
-    expect(isWaitingAnswer(c, '2026-11-05T09:00:00Z', [])).toBe(true);
-    expect(isWaitingAnswer(c, '2026-11-05T09:00:00Z', [{ login: 'sam-gh', content: 'eyes' }, { login: 'x', content: 'heart' }])).toBe(true);
-    expect(isWaitingAnswer(c, '2026-11-05T09:00:00Z', [{ login: 'danyel-claude', content: 'eyes' }])).toBe(false);
-    expect(isWaitingAnswer(c, '2026-11-05T11:00:00Z', [])).toBe(false);
   });
 });
