@@ -576,7 +576,8 @@ describe('fetchItem', () => {
       const sent = JSON.parse(init.body);
       calls.push(sent);
       const { o, r, n } = sent.variables;
-      if (`${o}/${r}` !== 'danyelf/torahmap') return Response.json({ data: { repository: null }, errors: [{ message: 'Could not resolve to a Repository' }] });
+      if (`${o}/${r}` === 'danyelf/limited') return Response.json({ data: { repository: null }, errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded' }] });
+      if (`${o}/${r}` !== 'danyelf/torahmap') return Response.json({ data: { repository: null }, errors: [{ type: 'NOT_FOUND', message: 'Could not resolve to a Repository' }] });
       const pr = world.pullRequests.nodes.find((p: any) => p.number === n);
       const issue = world.issues.nodes.find((i: any) => i.number === n);
       const node = pr ? { __typename: 'PullRequest', ...pr } : issue ? { __typename: 'Issue', ...issue } : null;
@@ -599,6 +600,11 @@ describe('fetchItem', () => {
     const { fn } = fakeOne();
     expect(await fetchItem('tok', 'danyelf/torahmap', 99999, fn)).toBeNull();
     expect(await fetchItem('tok', 'someone/private', 1, fn)).toBeNull();
+  });
+
+  it('throws, rather than saying the item is missing, when GitHub reports any other error', async () => {
+    const { fn } = fakeOne();
+    await expect(fetchItem('tok', 'danyelf/limited', 1, fn)).rejects.toThrow('API rate limit exceeded');
   });
 
   it('throws when GitHub answers with an error status', async () => {

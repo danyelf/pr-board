@@ -70,7 +70,7 @@ interface RepoData {
   parked: Connection<RawItem> | null;
   inProgress: Connection<RawItem> | null;
 }
-interface GraphqlResponse<T> { data?: T | null; errors?: { message: string; path?: (string | number)[] }[] }
+interface GraphqlResponse<T> { data?: T | null; errors?: { message: string; type?: string; path?: (string | number)[] }[] }
 
 interface Pending {
   facts: ItemFacts; base: string; head: string;
@@ -105,10 +105,22 @@ function headersFor(token: string): Record<string, string> {
   return { Authorization: `bearer ${token}`, 'User-Agent': 'pr-board', 'Content-Type': 'application/json' };
 }
 
+/** GitHub answered with an error status. */
+export class GitHubRefused extends Error {
+  readonly status: number;
+  // GitHub's own explanation from the response body, when it gave one.
+  readonly githubMessage?: string;
+  constructor(status: number, statusText: string, githubMessage?: string) {
+    super(`GitHub said ${status} ${statusText}${githubMessage ? `: ${githubMessage}` : ''}`);
+    this.status = status;
+    this.githubMessage = githubMessage;
+  }
+}
+
 function graphqlWith(token: string, fetchFn: typeof fetch) {
   return async <T>(query: string, variables?: Record<string, unknown>): Promise<GraphqlResponse<T>> => {
     const res = await fetchFn(GRAPHQL_URL, { method: 'POST', headers: headersFor(token), body: JSON.stringify({ query, variables }) });
-    if (!res.ok) throw new HttpError(`GitHub said ${res.status} ${res.statusText}`);
+    if (!res.ok) throw new GitHubRefused(res.status, res.statusText);
     return (await res.json()) as GraphqlResponse<T>;
   };
 }
@@ -233,12 +245,10 @@ ${issues.join('\n')}
 
     return { items: pending.map((p) => p.facts), errors };
   } catch (e) {
-    if (e instanceof HttpError) return { items: [], errors: [e.message] };
+    if (e instanceof GitHubRefused) return { items: [], errors: [e.message] };
     throw e;
   }
 }
-
-class HttpError extends Error {}
 
 /** Everything wanted from one repo's answer. Throws if a list GitHub should have sent is missing. */
 function readRepo(name: string, data: RepoData, report: Report): { open: Set<number>; pending: Pending[] } {
@@ -411,19 +421,7 @@ function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
   };
 }
 
-/** Posts a comment on a PR or issue, and says which account it went up under. Throws if GitHub refuses. */
-/** GitHub answered a write with an error status. */
-export class GitHubRefused extends Error {
-  readonly status: number;
-  // GitHub's own explanation from the response body, when it gave one.
-  readonly githubMessage?: string;
-  constructor(status: number, statusText: string, githubMessage?: string) {
-    super(`GitHub said ${status} ${statusText}${githubMessage ? `: ${githubMessage}` : ''}`);
-    this.status = status;
-    this.githubMessage = githubMessage;
-  }
-}
-
+/** GitHub's own explanation of a refusal: the message in its JSON, else the start of the body. */
 async function refusalMessage(res: Response): Promise<string | undefined> {
   const text = (await res.text().catch(() => '')).trim();
   if (!text) return undefined;
@@ -436,6 +434,7 @@ async function refusalMessage(res: Response): Promise<string | undefined> {
   return text.slice(0, 300);
 }
 
+/** Posts a comment on a PR or issue, and says which account it went up under. Throws if GitHub refuses. */
 export async function postComment(
   token: string, repo: string, n: number, body: string, fetchFn: typeof fetch = defaultFetch,
 ): Promise<{ login: string | null }> {
@@ -456,7 +455,8 @@ const ITEM_QUERY = `query($o: String!, $r: String!, $n: Int!) {
 
 /**
  * One PR or issue, read the way the board reads it, or null when the token can't see it. For checking
- * an item just before acting on it. Whether its answers have been picked up is not read.
+ * an item just before acting on it. Whether its answers have been picked up is not read. Throws when
+ * GitHub reports anything but "not found", such as a rate limit, so that isn't taken for a missing item.
  */
 export async function fetchItem(token: string, repo: string, n: number, fetchFn: typeof fetch = defaultFetch): Promise<ItemFacts | null> {
   const [o, r] = repo.split('/');
@@ -464,7 +464,11 @@ export async function fetchItem(token: string, repo: string, n: number, fetchFn:
     ITEM_QUERY, { o, r, n },
   );
   const item = res.data?.repository?.issueOrPullRequest;
-  if (!item) return null;
+  if (!item) {
+    const other = res.errors?.find((e) => e.type !== 'NOT_FOUND');
+    if (other) throw new Error(`GitHub said: ${other.message}`);
+    return null;
+  }
   const ignore: Report = () => {};
   return item.__typename === 'PullRequest' ? prFacts(repo, item, ignore) : issueFacts(repo, item, ignore);
 }
