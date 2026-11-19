@@ -1,6 +1,6 @@
 import type { Board, Card } from './board.ts';
 import type { BoxState, ItemFacts } from '../shared/types.ts';
-import { FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, LOOK_QUESTION, NOTE_MAX, answerLines, choicesFor, questionField } from '../shared/answer.ts';
+import { FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, LOOK_QUESTION, NOTE_MAX, answerLines, choicesFor, codeWrittenStatus, questionField } from '../shared/answer.ts';
 import { DAY_MS } from '../shared/names.ts';
 import { boxNamed } from '../shared/stage.ts';
 import { formatWait } from '../shared/turn.ts';
@@ -195,9 +195,10 @@ function renderCard(c: Card, opts: RenderOptions, now: Date): string {
   if (c.statusUnreadable) parts.push(`<div class="detail age">${esc("The status section couldn't be read")}</div>`);
   else if (c.status === null) parts.push('<div class="detail age">No status written yet</div>');
   if (c.toTest) parts.push(`<div class="detail"><b>To test:</b> ${esc(c.toTest)}</div>`);
-  // Once answered, the answers are on GitHub; asking again here would only send them twice.
-  if (c.answerState === null) parts.push(answerForm(c));
-  if (c.answerState === 'not-picked-up') parts.push(yourAnswer(c, now));
+  // Once answered, the answers are on GitHub; asking again here would only send them twice. After a
+  // session gave up, the item is back with the owner to answer afresh, beside what they sent before.
+  if (c.answerState === 'not-picked-up' || c.answerState === 'stalled' || c.answerState === 'gave-up') parts.push(yourAnswer(c, now));
+  if (c.answerState === null || c.answerState === 'gave-up') parts.push(answerForm(c));
   if (f.screenshots.length > 0) {
     const shots = f.screenshots
       .slice(0, 4)
@@ -226,9 +227,12 @@ function listRow(c: Card, note: string): string {
 }
 
 function claudeRow(c: Card, now: Date): string {
+  const working = codeWrittenStatus(c.status);
   const lead =
     c.answerState === 'awaiting-pickup' ? 'answered, waiting for Claude to pick it up'
     : c.answerState === 'picked-up' ? `Claude picked up your answers${c.pickedUpAt ? ` ${ago(c.pickedUpAt, now)}` : ''}`
+    : working === 'service-working' ? `Mac session working on it, since ${ago(c.status!.since ?? c.facts.lastActivityAt, now)}`
+    : working === 'working' ? `Claude is working on your answers, since ${ago(c.status!.since ?? c.facts.lastActivityAt, now)}`
     : `last activity ${ago(c.facts.lastActivityAt, now)}`;
   const notes = [
     ...(c.turn === 'none' ? ['no turn label'] : []),

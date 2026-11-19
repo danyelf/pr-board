@@ -1,5 +1,5 @@
 import type { AnswerSeen, ItemFacts, StageBox, Status, Turn } from '../shared/types.ts';
-import { asksForLook } from '../shared/answer.ts';
+import { asksForLook, codeWrittenStatus } from '../shared/answer.ts';
 import { statusFingerprint } from '../shared/fingerprint.ts';
 import { DAY_MS, PICKUP_GRACE_MS } from '../shared/names.ts';
 import { extractToTest, hasStatusSection, parseStatus, statusText } from '../shared/status.ts';
@@ -25,7 +25,7 @@ export interface Card {
   fingerprint: string;
   /** Where the owner's answers since the status was written have got to; null when there are none. */
   answerState: AnswerState | null;
-  /** The newest of those answers. */
+  /** The newest of those answers; for 'gave-up', the answer the session gave up on. */
   answer: AnswerSeen | null;
   /** When the last of them was picked up, once every one has been; null otherwise. */
   pickedUpAt: string | null;
@@ -35,8 +35,21 @@ export interface Card {
  * 'awaiting-pickup': answered, and no session has claimed it yet, for up to the grace period.
  * 'not-picked-up': still unclaimed after that, so it is back with the owner to notice.
  * 'picked-up': every answer has been claimed by a Claude session.
+ * 'stalled': claimed that long ago, and the status still not rewritten: the session that claimed it
+ *   seems to be gone (whoever claims an answer rewrites the status at once).
+ * 'gave-up': the Mac service's session ended without handing the item on, and the service handed it
+ *   to the owner; the answer is the one it gave up on.
  */
-type AnswerState = 'awaiting-pickup' | 'not-picked-up' | 'picked-up';
+type AnswerState = 'awaiting-pickup' | 'not-picked-up' | 'picked-up' | 'stalled' | 'gave-up';
+
+/** The states that put the card back in front of the owner. */
+const BACK_WITH_OWNER: ReadonlySet<AnswerState> = new Set(['not-picked-up', 'stalled', 'gave-up']);
+
+const WHY: Partial<Record<AnswerState, string>> = {
+  'not-picked-up': 'Answered, not picked up',
+  stalled: 'Picked up, but nothing since',
+  'gave-up': 'A session tried and gave up',
+};
 
 export interface Board {
   waiting: Card[];
@@ -79,13 +92,16 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
   const carried = hidden !== undefined && effective.turn !== 'owner';
   const unclaimed = f.answers.filter((a) => a.claimedAt === null);
   const claimTimes = f.answers.map((a) => a.claimedAt).filter((t): t is string => t !== null);
+  const lastClaim = claimTimes.length > 0 ? claimTimes.reduce((a, b) => (time(b) > time(a) ? b : a)) : null;
+  const longAgo = (iso: string) => now.getTime() - time(iso) >= PICKUP_GRACE_MS;
   const answerState: AnswerState | null =
-    f.answers.length === 0 ? null
-    : unclaimed.length === 0 ? 'picked-up'
-    : now.getTime() - time(unclaimed[0]!.at) >= PICKUP_GRACE_MS ? 'not-picked-up'
+    codeWrittenStatus(status) === 'gave-up' ? 'gave-up'
+    : f.answers.length === 0 ? null
+    : unclaimed.length === 0 ? (longAgo(lastClaim!) ? 'stalled' : 'picked-up')
+    : longAgo(unclaimed[0]!.at) ? 'not-picked-up'
     : 'awaiting-pickup';
-  // An answer nobody picked up has waited since it was sent, not since the item was handed over.
-  const since = answerState === 'not-picked-up' ? unclaimed[0]!.at : carried ? own ?? hidden.since : own;
+  // Back with the owner since the answer was sent, or since the claim that came to nothing; not since the item was handed over.
+  const since = answerState === 'not-picked-up' ? unclaimed[0]!.at : answerState === 'stalled' ? lastClaim : carried ? own ?? hidden.since : own;
   return {
     facts: f,
     status,
@@ -95,15 +111,15 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
     turn: carried ? 'owner' : effective.turn,
     outOfSync: carried || effective.outOfSync,
     strip,
-    why: answerState === 'not-picked-up' ? 'Answered, not picked up' : carried && !why ? `Issue #${hidden.issue} is waiting on you` : why,
+    why: (answerState && WHY[answerState]) ?? (carried && !why ? `Issue #${hidden.issue} is waiting on you` : why),
     waitingSince: since,
     waited: since ? formatWait(since, now) : '',
     toTest: status?.toTest ?? extractToTest(f.body),
     asksLook: asksForLook(f, effective.turn),
     fingerprint: statusFingerprint(status),
     answerState,
-    answer,
-    pickedUpAt: answerState === 'picked-up' ? claimTimes.reduce((a, b) => (time(b) > time(a) ? b : a)) : null,
+    answer: answerState === 'gave-up' ? f.lastAnswer : answer,
+    pickedUpAt: answerState === 'picked-up' ? lastClaim : null,
   };
 }
 
@@ -142,8 +158,8 @@ export function buildBoard(items: ItemFacts[], errors: string[], now: Date): Boa
   const quiet: Card[] = [];
   for (const c of cards) {
     const stale = now.getTime() - time(c.facts.lastActivityAt) > QUIET_AFTER;
-    // Answered is Claude's turn until the answer has gone unclaimed too long, whatever the labels still say.
-    if (c.answerState === 'not-picked-up') waiting.push(c);
+    // Answered is Claude's turn until the answer has gone unclaimed or untouched too long, whatever the labels still say.
+    if (c.answerState && BACK_WITH_OWNER.has(c.answerState)) waiting.push(c);
     else if (c.answerState !== null) onClaude.push(c);
     else if (c.turn === 'owner') waiting.push(c);
     else if (c.turn === 'nobody' || stale) quiet.push(c);

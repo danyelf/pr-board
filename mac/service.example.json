@@ -8,7 +8,6 @@
   "sessionMinutes": 60,
   "pollSeconds": 60,
   "logDir": "~/.pr-board/logs",
-  "stateDir": "~/.pr-board",
   "tokenFile": "~/.config/claude-github/token",
   "claude": "~/.local/bin/claude",
   "claudeArgs": []

@@ -3,13 +3,15 @@
 //   node cli/watch-answers.ts owner/repo#N [owner/repo#M ...]
 // It costs nothing while it waits, and it never exits on a timer or because of errors, since every
 // exit is a paid wake-up for the session.
-import { claim, describe, waitingAnswers, type Found } from './answers.ts';
-import { OwnerError, currentRepo, gh, readRef, refuseOwner } from './gh.ts';
+import { WORKING_ASK } from '../src/shared/answer.ts';
+import { claim, describe, uniqueRefs, waitingAnswers, writeCodeStatus, type Found } from './answers.ts';
+import { OwnerError, currentRepo, gh, readRef, refString, refuseOwner } from './gh.ts';
 import type { Deps as BaseDeps, Ref } from './gh.ts';
 import { POLL_MS, backoff, message } from './poll.ts';
 
 export interface Deps extends BaseDeps {
   sleep: (ms: number) => Promise<void>;
+  now?: () => Date;
 }
 
 /** After the first answer, how long to wait for the rest, so one wake-up takes them all. */
@@ -18,6 +20,7 @@ const COLLECT_MS = 60_000;
 export async function main(argv: string[], deps: Deps): Promise<number> {
   const out = deps.out ?? ((l) => console.log(l));
   const err = deps.err ?? ((l) => console.error(l));
+  const now = deps.now ?? (() => new Date());
   const refs: Ref[] = [];
   // "#N" needs the current directory's repo, which is looked up in the loop so a passing failure is retried.
   const unresolved: number[] = [];
@@ -74,6 +77,15 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
         if (claimed.length > 0) {
           out(`Picked up ${claimed.length === 1 ? 'one answer' : `${claimed.length} answers`} (each now has a 👀):`);
           for (const f of claimed) out(`\n${describe(f)}`);
+          // Done here rather than left to the session, so the board shows the answers taken in hand at once.
+          for (const ref of uniqueRefs(claimed)) {
+            try {
+              for (const p of await writeCodeStatus(deps.gh, ref, 'claude', WORKING_ASK, null, now())) err(p);
+              out(`\n${refString(ref)}'s status now says "${WORKING_ASK}", waiting on Claude.`);
+            } catch (e) {
+              err(`Couldn't set ${refString(ref)}'s status to "${WORKING_ASK}" (${message(e)}); set it yourself before anything else.`);
+            }
+          }
           return 0;
         }
       }

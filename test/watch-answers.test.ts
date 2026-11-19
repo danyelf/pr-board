@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { LOOK_DEFAULT, renderAnswer } from '../src/shared/answer.ts';
+import { LOOK_DEFAULT, WORKING_ASK, renderAnswer } from '../src/shared/answer.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
-import { renderStatus } from '../src/shared/status.ts';
+import { parseStatus, renderStatus } from '../src/shared/status.ts';
 import type { Status } from '../src/shared/types.ts';
 import type { Gh } from '../cli/gh.ts';
 import { main } from '../cli/watch-answers.ts';
@@ -30,6 +30,8 @@ class World {
   /** Minutes after WRITTEN, moved on by each comment. */
   clock = 1;
   calls: string[] = [];
+  /** The items whose status was written, in order. */
+  statusWrites: string[] = [];
 
   item(ref: string, kind: 'pr' | 'issue' = 'pr', status: Status = asking): Item {
     const it: Item = { kind, body: renderStatus(status), comments: [], state: 'open', lastEditedAt: null, createdAt: '2026-11-01T00:00:00Z' };
@@ -62,15 +64,30 @@ class World {
     if (comments) {
       if (this.failChecks > 0) { this.failChecks--; throw new Error('gh: HTTP 502 Bad Gateway'); }
       const item = this.items.get(`${comments[1]}#${comments[2]}`)!;
-      return JSON.stringify([item.comments.map((c) => ({ ...c, reactions: { eyes: (this.reactions.get(c.id) ?? []).length } }))]);
+      return JSON.stringify([item.comments.map((c) => ({ ...c, reactions: { total_count: (this.reactions.get(c.id) ?? []).length } }))]);
     }
+    // Writing the status, as pr-status does: the PR's description, or a status comment on an issue.
+    const patchPr = /^api -X PATCH repos\/([^/]+\/[^/]+)\/pulls\/(\d+) -f body=([\s\S]*)$/.exec(line);
+    if (patchPr) {
+      this.items.get(`${patchPr[1]}#${patchPr[2]}`)!.body = patchPr[3]!;
+      this.statusWrites.push(`${patchPr[1]}#${patchPr[2]}`);
+      return '{}';
+    }
+    const postStatus = /^api -X POST repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments -f body=([\s\S]*)$/.exec(line);
+    if (postStatus) {
+      const at = new Date(Date.parse(WRITTEN) + this.clock++ * 60_000).toISOString();
+      this.items.get(`${postStatus[1]}#${postStatus[2]}`)!.comments.push({ id: this.nextId++, user: { login: this.me }, body: postStatus[3]!, html_url: 'x', created_at: at, updated_at: at });
+      this.statusWrites.push(`${postStatus[1]}#${postStatus[2]}`);
+      return '{}';
+    }
+    if (/^api -X DELETE repos\/[^/]+\/[^/]+\/issues\/\d+\/labels\/.+$/.test(line)) return '';
     const item = /^api repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(line);
     if (item) {
       if (this.missing.has(`${item[1]}#${item[2]}`)) throw new Error('gh: HTTP 404 Not Found');
       const it = this.items.get(`${item[1]}#${item[2]}`)!;
       return JSON.stringify({ state: it.state, body: it.kind === 'pr' ? it.body : 'issue text', ...(it.kind === 'pr' ? { pull_request: {} } : {}) });
     }
-    const list = /^api repos\/[^/]+\/[^/]+\/issues\/comments\/(\d+)\/reactions\?content=eyes&per_page=100 --paginate --slurp$/.exec(line);
+    const list = /^api repos\/[^/]+\/[^/]+\/issues\/comments\/(\d+)\/reactions\?per_page=100 --paginate --slurp$/.exec(line);
     if (list) return JSON.stringify([(this.reactions.get(Number(list[1])) ?? []).map((login) => ({ user: { login }, content: 'eyes' }))]);
     const react = /^api -X POST repos\/[^/]+\/[^/]+\/issues\/comments\/(\d+)\/reactions -f content=eyes --include$/.exec(line);
     if (react) {
@@ -111,6 +128,39 @@ describe('watch-answers', () => {
     expect(r.out).toContain('1. Colour? → change');
     expect(r.out).toContain('How does it look? → looks good, prep for merge');
     expect(r.out).toContain('Note: tint is strong\n    but fine');
+  });
+
+  it('sets each item it claimed an answer on to "Working on your answers", waiting on Claude, before it wakes the session', async () => {
+    const w = new World();
+    w.item('acme/x#5');
+    w.item('acme/y#7', 'issue');
+    w.answer('acme/x#5', { '1': 'change' });
+    w.answer('acme/x#5', { '1': 'leave' });
+    w.answer('acme/y#7', { '1': 'change' });
+    const r = await watch(w, ['acme/x#5', 'acme/y#7']);
+    expect(r.code).toBe(0);
+    expect(w.statusWrites).toEqual(['acme/x#5', 'acme/y#7']);
+    expect(parseStatus(w.items.get('acme/x#5')!.body)).toMatchObject({ waitingOn: 'claude', ask: WORKING_ASK, questions: [] });
+    const issueStatus = w.items.get('acme/y#7')!.comments.at(-1)!.body;
+    expect(parseStatus(issueStatus)).toMatchObject({ waitingOn: 'claude', ask: WORKING_ASK });
+    expect(r.out).toContain(`acme/x#5's status now says "${WORKING_ASK}"`);
+    // The answers are described from the status as it was when they were found, so the questions still read in full.
+    expect(r.out).toContain('1. Colour? → change');
+    expect(r.err).toBe('');
+  });
+
+  it('tells the session to set the status itself when it could not', async () => {
+    const w = new World();
+    w.item('acme/x#5');
+    w.answer('acme/x#5', { '1': 'change' });
+    const gh = w.gh;
+    w.gh = async (args, opts) => {
+      if (args.includes('PATCH')) throw new Error('gh: HTTP 403 Forbidden');
+      return gh(args, opts);
+    };
+    const r = await watch(w, ['acme/x#5']);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain(`Couldn't set acme/x#5's status to "${WORKING_ASK}" (gh: HTTP 403 Forbidden); set it yourself before anything else.`);
   });
 
   it('passes over answers written before the status, and reads no reactions for them', async () => {

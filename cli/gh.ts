@@ -40,6 +40,7 @@ function run(command: string): Gh {
 
 export const gh: Gh = run('gh');
 export const git: Gh = run('git');
+export const ps: Gh = run('ps');
 
 /** Thrown when `gh` would act as the board's owner, whose 👀 the board doesn't count as a claim. */
 export class OwnerError extends Error {}

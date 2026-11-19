@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GAVE_UP_ASK } from '../src/shared/answer.ts';
 import { renderStatus } from '../src/shared/status.ts';
 import { buildBoard } from '../src/worker/board.ts';
 import { facts, status } from './helpers.ts';
@@ -213,12 +214,37 @@ describe('buildBoard and answers', () => {
     expect(card.waitingSince).toBe(minutesAgo(11));
   });
 
-  it('keeps it on Claude once every answer is picked up, however long ago', () => {
-    const b = buildBoard([waitingPr([answer('a', 60, 58), answer('b', 30, 29)])], [], NOW);
+  it('keeps it on Claude once every answer is picked up, for 10 minutes after the last claim', () => {
+    const b = buildBoard([waitingPr([answer('a', 60, 58), answer('b', 12, 9)])], [], NOW);
     expect(where(b)).toBe('onClaude');
     expect(b.onClaude[0]!.answerState).toBe('picked-up');
     expect(b.onClaude[0]!.answer?.url).toBe('https://example.com/b');
-    expect(b.onClaude[0]!.pickedUpAt).toBe(minutesAgo(29));
+    expect(b.onClaude[0]!.pickedUpAt).toBe(minutesAgo(9));
+  });
+
+  it('brings it back to the top when the status is still not rewritten 10 minutes after the last claim', () => {
+    const b = buildBoard([waitingPr([answer('a', 60, 58), answer('b', 30, 29)])], [], NOW);
+    expect(where(b)).toBe('waiting');
+    const card = b.waiting[0]!;
+    expect(card.answerState).toBe('stalled');
+    expect(card.why).toBe('Picked up, but nothing since');
+    expect(card.waitingSince).toBe(minutesAgo(29));
+    expect(card.answer?.url).toBe('https://example.com/b');
+  });
+
+  it('puts the card in front of the owner when the Mac service gave up, with the answer it gave up on', () => {
+    const gaveUp = answer('g', 90, 80);
+    const b = buildBoard([facts({
+      number: 700, labels: ['on sam'], lastActivityAt: minutesAgo(1),
+      body: renderStatus({ waitingOn: 'owner', since: minutesAgo(5), ask: GAVE_UP_ASK, questions: [], toTest: 'its log', writtenAt: minutesAgo(5) }),
+      answers: [], lastAnswer: gaveUp,
+    })], [], NOW);
+    expect(where(b)).toBe('waiting');
+    const card = b.waiting[0]!;
+    expect(card.answerState).toBe('gave-up');
+    expect(card.why).toBe('A session tried and gave up');
+    expect(card.answer).toBe(gaveUp);
+    expect(card.waitingSince).toBe(minutesAgo(5));
   });
 
   it('times the wait for pickup from the oldest answer not yet picked up', () => {

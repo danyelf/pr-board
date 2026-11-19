@@ -1,15 +1,16 @@
 // Finding, claiming and describing the owner's answers from the board. The watcher and the Mac
 // service both use this, so the rule for a waiting answer and the printed form have one definition.
-import { CLAIM_REACTION, answerLines, answersCurrentStatus, isClaimReaction, parseAnswer, type Answer, type CommentSeen } from '../src/shared/answer.ts';
+import { CLAIM_REACTION, answerLines, answersCurrentStatus, fromClaudeSide, parseAnswer, type Answer, type CommentSeen } from '../src/shared/answer.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
 import { descriptionEditedAt, parseStatus, statusWrittenAt } from '../src/shared/status.ts';
 import { flattenPages, readItem, refString } from './gh.ts';
 import type { Gh, ItemRead, Ref } from './gh.ts';
 import { message } from './poll.ts';
+import { setStatus } from './pr-status.ts';
 
 export interface RestComment {
   id: number; user: { login: string } | null; body: string; html_url: string; created_at: string; updated_at: string;
-  reactions?: { eyes?: number };
+  reactions?: { total_count?: number };
 }
 
 /** An answer comment nobody has claimed yet, with the text the item's status lived in when it was read. */
@@ -33,12 +34,14 @@ export async function writtenAt(gh: Gh, ref: Ref, item: ItemRead<RestComment>): 
   return pr ? descriptionEditedAt(pr) : null;
 }
 
-/** The 👀 reactions on a comment. Skips the call when GitHub's count says there are none. */
-async function eyesOn(gh: Gh, ref: Ref, c: RestComment): Promise<{ login: string | undefined; content: string }[]> {
-  if (c.reactions?.eyes === 0) return [];
-  const url = `${base(ref)}/issues/comments/${c.id}/reactions?content=${CLAIM_REACTION}&per_page=100`;
+/** The kinds of reaction Claude's side has put on a comment (👀, 🚀, 😕). Skips the call when GitHub's count says there are none. */
+export async function claudeReactions(gh: Gh, ref: Ref, c: RestComment): Promise<Set<string>> {
+  if (c.reactions?.total_count === 0) return new Set();
+  const url = `${base(ref)}/issues/comments/${c.id}/reactions?per_page=100`;
   const reactions = flattenPages(await gh(['api', url, '--paginate', '--slurp'])) as { user: { login: string } | null; content?: string }[];
-  return reactions.map((r) => ({ login: r.user?.login, content: r.content ?? CLAIM_REACTION }));
+  const kinds = new Set<string>();
+  for (const r of reactions) if (fromClaudeSide(r.user?.login) && r.content) kinds.add(r.content.toLowerCase());
+  return kinds;
 }
 
 /** The owner's answers on one open item that nobody has claimed, oldest first. */
@@ -49,7 +52,7 @@ async function waitingOn(gh: Gh, ref: Ref, item: ItemRead<RestComment>): Promise
     const seen: CommentSeen = { login: c.user?.login, body: c.body, createdAt: c.created_at };
     if (!answersCurrentStatus(seen, written)) continue;
     // Reactions are read only for the answers to the current status.
-    if ((await eyesOn(gh, ref, c)).some((r) => isClaimReaction(r.login, r.content))) continue;
+    if ((await claudeReactions(gh, ref, c)).has(CLAIM_REACTION)) continue;
     found.push({ ref, id: c.id, url: c.html_url, createdAt: c.created_at, answer: parseAnswer(c.body)!, statusText: item.statusText });
   }
   return found;
@@ -80,12 +83,12 @@ export async function waitingAnswers(gh: Gh, refs: Ref[], say: (line: string) =>
 }
 
 /**
- * Adds this account's 👀 to the answer. GitHub says 201 when the reaction is new and 200 when this
- * account had already reacted, which means another session running as the same account claimed it
- * first (null). The reaction's id is what unclaim needs; it is null if GitHub's reply held none.
+ * Adds this account's reaction of one kind to a comment. GitHub says 201 when the reaction is new and
+ * 200 when this account had already made it (for a 👀, another session running as the same account
+ * claimed it first): null then. The reaction's id is what `unreact` needs; it is null if GitHub's reply held none.
  */
-export async function claim(gh: Gh, f: Pick<Found, 'ref' | 'id'>): Promise<{ reactionId: number | null } | null> {
-  const res = await gh(['api', '-X', 'POST', `${base(f.ref)}/issues/comments/${f.id}/reactions`, '-f', `content=${CLAIM_REACTION}`, '--include']);
+export async function react(gh: Gh, f: Pick<Found, 'ref' | 'id'>, kind: string): Promise<{ reactionId: number | null } | null> {
+  const res = await gh(['api', '-X', 'POST', `${base(f.ref)}/issues/comments/${f.id}/reactions`, '-f', `content=${kind}`, '--include']);
   if (!/^HTTP\/\S+\s+201\b/.test(res)) return null;
   let id: unknown = null;
   try {
@@ -96,10 +99,30 @@ export async function claim(gh: Gh, f: Pick<Found, 'ref' | 'id'>): Promise<{ rea
   return { reactionId: typeof id === 'number' ? id : null };
 }
 
-/** Takes this account's 👀 back off an answer, so the board shows it as waiting again. */
-export async function unclaim(gh: Gh, f: Pick<Found, 'ref' | 'id'>, reactionId: number | null): Promise<void> {
-  if (reactionId === null) throw new Error(`GitHub didn't say which reaction was the claim on comment ${f.id}; take this account's 👀 off by hand`);
+/** Claims an answer with this account's 👀. */
+export function claim(gh: Gh, f: Pick<Found, 'ref' | 'id'>): Promise<{ reactionId: number | null } | null> {
+  return react(gh, f, CLAIM_REACTION);
+}
+
+/** Takes one of this account's reactions back off a comment. */
+export async function unreact(gh: Gh, f: Pick<Found, 'ref' | 'id'>, reactionId: number | null): Promise<void> {
+  if (reactionId === null) throw new Error(`GitHub didn't say which reaction was this account's on comment ${f.id}; take it off by hand`);
   await gh(['api', '-X', 'DELETE', `${base(f.ref)}/issues/comments/${f.id}/reactions/${reactionId}`]);
+}
+
+/**
+ * Writes one of the statuses that code writes rather than a session (see `codeWrittenStatus`).
+ * Returns the problems that didn't stop it, as `setStatus` does; throws when it couldn't be written.
+ */
+export function writeCodeStatus(gh: Gh, ref: Ref, waiting: 'claude' | 'owner', ask: string, toTest: string | null, now: Date): Promise<string[]> {
+  return setStatus(gh, ref, { waiting, ask, questions: [], toTest }, now);
+}
+
+/** The items these answers are on, each once, in order. */
+export function uniqueRefs(found: Found[]): Ref[] {
+  const seen = new Map<string, Ref>();
+  for (const f of found) if (!seen.has(refString(f.ref))) seen.set(refString(f.ref), f.ref);
+  return [...seen.values()];
 }
 
 /** The answers in words, with whether they still answer the item's questions as they were just read. */
