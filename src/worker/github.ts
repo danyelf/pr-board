@@ -1,4 +1,4 @@
-import { answersCurrentStatus, isClaimReaction, isOwnerAnswer } from '../shared/answer.ts';
+import { answersCurrentStatus, isClaimReaction, isOwnerAnswer, parseAnswer } from '../shared/answer.ts';
 import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_OWNER, LABEL_PARKED, REPO_WINDOW_DAYS, WRITTEN_ELSEWHERE } from '../shared/names.ts';
 import { parseStatus, pickStatusComment } from '../shared/status.ts';
 import { effectiveTurn } from '../shared/turn.ts';
@@ -322,7 +322,11 @@ function answersSince(comments: Comment[], writtenAt: string | null): AnswerSeen
   return comments
     .filter((c): c is Comment & { id: string } =>
       c.id !== undefined && answersCurrentStatus({ login: c.author?.login, body: c.body, createdAt: c.createdAt }, writtenAt))
-    .map((c) => ({ id: c.id, url: c.url, at: c.createdAt, claimedAt: null }));
+    .map((c) => {
+      // Already known to parse: answersCurrentStatus only passes answer comments.
+      const answer = parseAnswer(c.body)!;
+      return { id: c.id, url: c.url, at: c.createdAt, claimedAt: null, choices: answer.answers, note: answer.note };
+    });
 }
 
 function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {

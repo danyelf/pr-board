@@ -187,7 +187,7 @@ describe('buildBoard and answers', () => {
     number: 700, labels: ['on sam'], body: renderStatus(status({ waitingOn: 'owner' }, 1)), lastActivityAt: minutesAgo(1), answers,
   });
   /** An answer sent m minutes ago, claimed `claimed` minutes ago or not at all. */
-  const answer = (id: string, m: number, claimed: number | null) => ({ id, url: `https://example.com/${id}`, at: minutesAgo(m), claimedAt: claimed === null ? null : minutesAgo(claimed) });
+  const answer = (id: string, m: number, claimed: number | null) => ({ id, url: `https://example.com/${id}`, at: minutesAgo(m), claimedAt: claimed === null ? null : minutesAgo(claimed), choices: {}, note: '' });
   const where = (b: ReturnType<typeof buildBoard>) =>
     b.waiting.some((c) => c.facts.number === 700) ? 'waiting' : b.onClaude.some((c) => c.facts.number === 700) ? 'onClaude' : 'quiet';
 

@@ -343,7 +343,7 @@ describe('POST /answer', () => {
   });
 
   it('refuses a second answer while the first is still waiting on the status, with a link to the first', async () => {
-    const answers = [{ id: 'IC_1', url: 'https://github.com/acme/x/pull/5#issuecomment-1', at: '2026-11-05T23:00:00Z', claimedAt: null }];
+    const answers = [{ id: 'IC_1', url: 'https://github.com/acme/x/pull/5#issuecomment-1', at: '2026-11-05T23:00:00Z', claimedAt: null, choices: {}, note: '' }];
     const { h, posted } = answerHandler({ item: { ...item(), answers } });
     const res = await post(h, good);
     expect(res.status).toBe(409);

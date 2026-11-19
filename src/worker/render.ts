@@ -49,6 +49,13 @@ const CSS = `
   label.btn:has(input:checked) { background:#efede7; }
   .answer textarea { display:block; width:100%; min-height:3.2em; margin-top:8px; font:inherit; font-size:12.5px; padding:6px 8px; border:1px solid #cfccc3; border-radius:5px; }
   .answer .sendrow { display:flex; justify-content:flex-end; gap:10px; align-items:baseline; flex-wrap:wrap; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+  .yours { margin-top:10px; padding:8px 12px; border-left:3px solid var(--wait); background:var(--waitbg); border-radius:0 6px 6px 0; font-size:12.5px; overflow-wrap:anywhere; }
+  .yours .h { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#8a5a10; margin-bottom:4px; }
+  .yours .note { margin-top:4px; color:#3b3a37; white-space:pre-wrap; }
+  .yours details.note { white-space:normal; }
+  .yours summary { cursor:pointer; }
+  .yours details[open] summary { display:none; }
+  .yours details .all { white-space:pre-wrap; }
   .btn.send { font-size:13.5px; font-weight:600; padding:7px 18px; background:var(--ok); color:#fff; border-color:var(--ok); }
   .ok { margin:6px 0 0; padding:6px 10px; border:1px solid #b9dcc3; background:#e9f5ec; color:#245e36; border-radius:6px; font-size:12.5px; }
   .shots { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
@@ -146,7 +153,32 @@ function answerForm(c: Card): string {
   return parts.join('\n    ');
 }
 
-function renderCard(c: Card, opts: RenderOptions): string {
+/** A note longer than this, or on more than two lines, shows only its start until it is opened. */
+const NOTE_SHOWN = 160;
+
+/** What the owner sent, for a card whose answer nobody picked up: each choice, then the note. */
+function yourAnswer(c: Card, now: Date): string {
+  const a = c.answer;
+  if (!a) return '';
+  const lines: string[] = [];
+  for (const q of c.status?.questions ?? []) {
+    const picked = a.choices[String(q.n)];
+    if (picked) lines.push(`<div>${q.n}. ${esc(q.text)} → <b>${esc(picked)}</b></div>`);
+  }
+  const look = a.choices[FORM_FIELD.look];
+  if (look) lines.push(`<div>${esc(LOOK_QUESTION)} → <b>${esc(look)}</b></div>`);
+  const note = a.note.trim();
+  if (note) {
+    const flat = note.replace(/\s+/g, ' ');
+    const long = flat.length > NOTE_SHOWN || note.split('\n').length > 2;
+    lines.push(long
+      ? `<details class="note"><summary>${esc(flat.slice(0, NOTE_SHOWN).trimEnd())}…</summary><div class="all">${esc(note)}</div></details>`
+      : `<div class="note">${esc(note)}</div>`);
+  }
+  return `<div class="yours"><div class="h">Your answer · sent ${esc(ago(a.at, now))}</div>${lines.join('')}</div>`;
+}
+
+function renderCard(c: Card, opts: RenderOptions, now: Date): string {
   const f = c.facts;
   const merge = boxNamed(c.strip, 'Ready for merge');
   const strip = c.strip
@@ -169,6 +201,7 @@ function renderCard(c: Card, opts: RenderOptions): string {
   if (c.toTest) parts.push(`<div class="detail"><b>To test:</b> ${esc(c.toTest)}</div>`);
   // Once answered, the answers are on GitHub; asking again here would only send them twice.
   if (c.answerState === null) parts.push(answerForm(c));
+  if (c.answerState === 'not-picked-up') parts.push(yourAnswer(c, now));
   if (f.screenshots.length > 0) {
     const shots = f.screenshots
       .slice(0, 4)
@@ -234,7 +267,7 @@ export function renderBoard(b: Board, opts: RenderOptions = {}): string {
   const nothingWaiting = b.errors.length
     ? esc("Couldn't read everything from GitHub, so this list may be incomplete.")
     : 'Nothing is waiting on you.';
-  const waiting = b.waiting.length ? byProject(b.waiting, (c) => renderCard(c, opts)) : `<div class="empty">${nothingWaiting}</div>`;
+  const waiting = b.waiting.length ? byProject(b.waiting, (c) => renderCard(c, opts, now)) : `<div class="empty">${nothingWaiting}</div>`;
   const claude = b.onClaude.length ? byProject(b.onClaude, (c) => claudeRow(c, now)) : '<div class="empty">Nothing in progress.</div>';
   const quiet = b.quiet.length ? byProject(b.quiet, (c) => quietRow(c, now)) : '<div class="empty">Nothing quiet.</div>';
 

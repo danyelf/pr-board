@@ -219,10 +219,13 @@ describe('renderBoard answering', () => {
     const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
     const answered = (n: number, m: number, claimed: number | null, over: Partial<ReturnType<typeof facts>> = {}) => facts({
       number: n, labels: ['on sam'], lastActivityAt: at,
-      answers: [{ id: `c${n}`, url: `https://github.com/acme/x/pull/${n}#issuecomment-1`, at: minutesAgo(m), claimedAt: claimed === null ? null : minutesAgo(claimed) }],
+      answers: [{ id: `c${n}`, url: `https://github.com/acme/x/pull/${n}#issuecomment-1`, at: minutesAgo(m), claimedAt: claimed === null ? null : minutesAgo(claimed), choices: {}, note: '' }],
       ...over,
     });
-    const html = board([answered(970, 2, null), answered(971, 200, 180), answered(972, 20, null)]);
+    const html = board([answered(970, 2, null), answered(971, 200, 180), answered(972, 20, null, {
+      body: renderStatus(asking),
+      answers: [{ id: 'c972', url: 'https://github.com/acme/x/pull/972#issuecomment-1', at: minutesAgo(20), claimedAt: null, choices: { '1': 'c', look: 'needs changes' }, note: 'tidy <the> layout' }],
+    })]);
     const claude = html.slice(html.indexOf('On Claude'), html.indexOf('Quiet:'));
     expect(claude).toMatch(/PR #970<\/a>.*answered, waiting for Claude to pick it up<\/span>/);
     expect(claude).toMatch(/PR #971<\/a>.*Claude picked up your answers 3 h ago<\/span>/);
@@ -231,11 +234,30 @@ describe('renderBoard answering', () => {
     expect(card).toContain('<span class="why">Answered, not picked up</span>');
     expect(card).toContain('href="https://github.com/acme/x/pull/972#issuecomment-1">Your answers ↗</a>');
     expect(card).not.toContain('<form');
+    // The answer itself, so the owner can see what was said without opening GitHub.
+    expect(card).toContain('Your answer · sent 20 min ago');
+    expect(card).toContain('1. Colour? → <b>c</b>');
+    expect(card).toContain('How does it look? → <b>needs changes</b>');
+    expect(card).toContain('<div class="note">tidy &lt;the&gt; layout</div>');
+    expect(card).not.toContain('<details');
+  });
+
+  it('cuts a long note to its start, with the whole of it a click away on the card', () => {
+    const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
+    const note = `first line\n${'word '.repeat(60)}\nlast line`;
+    const html = board([facts({
+      number: 976, labels: ['on sam'], lastActivityAt: at,
+      answers: [{ id: 'c', url: 'https://github.com/acme/x/pull/976#issuecomment-1', at: minutesAgo(20), claimedAt: null, choices: { look: 'needs changes' }, note }],
+    })]);
+    const card = cardOf(html, 976);
+    expect(card).toContain('<details class="note">');
+    expect(card).toMatch(/<summary>first line word .*…<\/summary>/);
+    expect(card).toContain('last line');
   });
 
   it('keeps the notes on an answered row: no turn label, label out of sync, and a status older than the latest change', () => {
     const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
-    const answers = [{ id: 'c', url: 'https://github.com/acme/x/pull/973#issuecomment-1', at: minutesAgo(2), claimedAt: null }];
+    const answers = [{ id: 'c', url: 'https://github.com/acme/x/pull/973#issuecomment-1', at: minutesAgo(2), claimedAt: null, choices: {}, note: '' }];
     const noLabel = facts({ number: 973, labels: [], body: renderStatus(status({ waitingOn: 'claude' })), lastActivityAt: at, answers });
     const outOfStep = facts({ number: 974, labels: ['in-progress'], body: renderStatus(status({ waitingOn: 'nobody' })), lastActivityAt: at, answers });
     const stale = facts({

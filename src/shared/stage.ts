@@ -1,4 +1,5 @@
 import type { BoxState, ItemFacts, StageBox, Status, Turn } from './types.ts';
+import { LOOK_KEY } from './answer.ts';
 import { effectiveTurn, formatWait, mergeBlockers, waitingSince } from './turn.ts';
 
 function count(n: number, noun: string): string {
@@ -60,9 +61,14 @@ export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date(
     : sincePrep > 0 ? box('Prep', 'done', `✓ ${count(sincePrep, 'commit')} since`)
     : box('Prep', 'done', '✓');
 
+  // Once the owner has answered the current status, their look is done, even though the turn label
+  // stays on them until Claude picks the answer up and rewrites the status.
+  const answered = f.answers.at(-1);
   let look: StageBox;
   if (f.merged || f.prepDone) {
     look = box('Your look', 'done');
+  } else if (answered) {
+    look = box('Your look', 'done', `✓ ${answered.choices[LOOK_KEY] ?? 'answered'}`);
   } else if (turn === 'owner') {
     // How long it has waited is already in the card's header, so the box only counts questions.
     look = box('Your look', 'now', questions > 0 ? count(questions, 'question') : '');
@@ -73,14 +79,17 @@ export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date(
   return [issue, design, build, look, prep, mergeBox(f, s, turn, now)];
 }
 
-/** The short reason a card is where it is. `strip` and `turn` are the ones already worked out for the item. */
-export function whyTag(s: Status | null, strip: StageBox[], turn: Turn): string {
+/**
+ * The short reason a card is where it is. `strip` and `turn` are the ones already worked out for the item;
+ * `answered` is true once the owner has answered its current status, so its questions aren't waiting any more.
+ */
+export function whyTag(s: Status | null, strip: StageBox[], turn: Turn, answered = false): string {
   const merge = boxNamed(strip, 'Ready for merge');
   const look = boxNamed(strip, 'Your look');
   const questions = s?.questions.length ?? 0;
   if (merge.state === 'ready') return 'Ready to merge';
   if (merge.state === 'blocked') return `Can't merge yet: ${merge.note}`;
-  if (questions > 0 && turn === 'owner') return `${count(questions, 'decision')} + your look`;
+  if (questions > 0 && turn === 'owner' && !answered) return `${count(questions, 'decision')} + your look`;
   if (look.state === 'now') return 'Needs your look';
   if (turn === 'nobody') return 'Parked';
   return '';

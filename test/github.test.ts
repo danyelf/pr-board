@@ -477,9 +477,9 @@ describe('fetchItems reads answers', () => {
     expect(errors).toEqual([]);
     expect(items.find((i) => i.number === 573)!.answers).toEqual([
       // Claimed when the first watcher reacted.
-      { id: 'IC_a', url: 'https://github.com/danyelf/torahmap/pull/573#issuecomment-IC_a', at: '2026-11-05T10:00:00Z', claimedAt: '2026-11-05T10:02:00Z' },
+      { id: 'IC_a', url: 'https://github.com/danyelf/torahmap/pull/573#issuecomment-IC_a', at: '2026-11-05T10:00:00Z', claimedAt: '2026-11-05T10:02:00Z', choices: { '1': 'leave' }, note: '' },
       // The owner's own 👀 is not a claim.
-      { id: 'IC_b', url: 'https://github.com/danyelf/torahmap/pull/573#issuecomment-IC_b', at: '2026-11-05T10:05:00Z', claimedAt: null },
+      { id: 'IC_b', url: 'https://github.com/danyelf/torahmap/pull/573#issuecomment-IC_b', at: '2026-11-05T10:05:00Z', claimedAt: null, choices: { '1': 'leave' }, note: '' },
     ]);
     expect(reactionQueries(calls)).toHaveLength(1);
     expect(reactionQueries(calls)[0]!.variables).toEqual({ ids: ['IC_a', 'IC_b'] });

@@ -15,8 +15,11 @@ export interface Status {
   editedByHand?: boolean;
 }
 export interface LabelEvent { label: string; action: 'added' | 'removed'; at: string }
-/** An answer comment from the owner. `claimedAt` is when someone else first reacted 👀 to it; null until then. */
-export interface AnswerSeen { id: string; url: string; at: string; claimedAt: string | null }
+/**
+ * An answer comment from the owner. `claimedAt` is when someone else first reacted 👀 to it; null until then.
+ * `choices` holds the choice for each question by number, and the look answer under "look".
+ */
+export interface AnswerSeen { id: string; url: string; at: string; claimedAt: string | null; choices: Record<string, string>; note: string }
 export interface ItemFacts {
   repo: string; number: number; kind: 'pr' | 'issue'; title: string; url: string;
   labels: string[]; body: string; createdAt: string; closedAt: string | null;
