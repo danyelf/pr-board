@@ -25,9 +25,8 @@ export interface Card {
   fingerprint: string;
   /** Where the owner's answers since the status was written have got to; null when there are none. */
   answerState: AnswerState | null;
-  /** The newest of those answers, and where it is on GitHub. */
+  /** The newest of those answers. */
   answer: AnswerSeen | null;
-  answerUrl: string | null;
   /** When the last of them was picked up, once every one has been; null otherwise. */
   pickedUpAt: string | null;
 }
@@ -73,7 +72,8 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
   const effective = effectiveTurn(f.labels, status);
   const own = waitingSince(f, status);
   const strip = stageStrip(f, status, now, effective.turn);
-  const why = whyTag(status, strip, effective.turn, f.answers.length > 0);
+  const answer = f.answers.at(-1) ?? null;
+  const why = whyTag(status, strip, effective.turn, answer !== null);
   // The PR stands in for an issue that is waiting on the owner, so the PR waits too. Unless the PR
   // already says so itself, its labels are out of step with that.
   const carried = hidden !== undefined && effective.turn !== 'owner';
@@ -102,8 +102,7 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
     asksLook: asksForLook(f, effective.turn),
     fingerprint: statusFingerprint(status),
     answerState,
-    answer: f.answers.at(-1) ?? null,
-    answerUrl: f.answers.at(-1)?.url ?? null,
+    answer,
     pickedUpAt: answerState === 'picked-up' ? claimTimes.reduce((a, b) => (time(b) > time(a) ? b : a)) : null,
   };
 }

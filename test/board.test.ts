@@ -201,7 +201,7 @@ describe('buildBoard and answers', () => {
     const b = buildBoard([waitingPr([answer('a', 9, null)])], [], NOW);
     expect(where(b)).toBe('onClaude');
     expect(b.onClaude[0]!.answerState).toBe('awaiting-pickup');
-    expect(b.onClaude[0]!.answerUrl).toBe('https://example.com/a');
+    expect(b.onClaude[0]!.answer?.url).toBe('https://example.com/a');
   });
 
   it('brings it back to the top, saying so, once 10 minutes pass with no claim', () => {
@@ -217,7 +217,7 @@ describe('buildBoard and answers', () => {
     const b = buildBoard([waitingPr([answer('a', 60, 58), answer('b', 30, 29)])], [], NOW);
     expect(where(b)).toBe('onClaude');
     expect(b.onClaude[0]!.answerState).toBe('picked-up');
-    expect(b.onClaude[0]!.answerUrl).toBe('https://example.com/b');
+    expect(b.onClaude[0]!.answer?.url).toBe('https://example.com/b');
     expect(b.onClaude[0]!.pickedUpAt).toBe(minutesAgo(29));
   });
 

@@ -189,7 +189,7 @@ function renderCard(c: Card, opts: RenderOptions, now: Date): string {
   if (issue) links.push(link(issue, 'Issue'));
   for (const d of f.addedDocs) links.push(link(d.url, `Design doc ${d.path.split('/').pop() ?? ''}`.trim()));
   if (merge.state === 'ready') links.push(link(f.url, 'Merge on GitHub'));
-  if (c.answerUrl) links.push(link(c.answerUrl, 'Your answers'));
+  if (c.answer) links.push(link(c.answer.url, 'Your answers'));
 
   const parts: string[] = [];
   if (c.statusUnreadable) parts.push(`<div class="detail age">${esc("The status section couldn't be read")}</div>`);
