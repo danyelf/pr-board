@@ -10,9 +10,11 @@ import { GitHubRefused, type fetchItem, type postComment } from './github.ts';
 const MAX_BODY_BYTES = 32 * 1024;
 
 /** owner/repo#N, the way the board names an item. */
-export const ITEM_REF = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d{0,9})$/;
-const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const NUMBER = /^[1-9]\d{0,9}$/;
+const REPO_PART = '[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+';
+const NUMBER_PART = '[1-9]\\d{0,9}';
+export const ITEM_REF = new RegExp(`^(${REPO_PART})#(${NUMBER_PART})$`);
+const REPO = new RegExp(`^${REPO_PART}$`);
+const NUMBER = new RegExp(`^${NUMBER_PART}$`);
 const KNOWN_FIELDS: readonly string[] = [FORM_FIELD.repo, FORM_FIELD.number, FORM_FIELD.fingerprint, FORM_FIELD.note];
 
 interface AnswerDeps {
