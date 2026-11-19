@@ -10,7 +10,7 @@ Collected while building part 1 (a board you can read). Newest at the bottom. Ea
 
 All the go-live steps are done (2026-11-08). They are in the order they were done. The steps themselves are written out once, in `README.md` under "Going live"; each question here names its step and gives only the decision and my default, in bold.
 
-2. **Make the GitHub token for the Worker?** Done: a fine-grained token from your account (read-only contents, issues and pull requests on your repos), stored as the Worker secret `GITHUB_TOKEN` by piping it in with `pbpaste`, because `wrangler secret put` run through Claude's `!` has no terminal to ask for it.
+2. **Make the GitHub token for the Worker?** Done: a fine-grained token from your account (read-only contents; issues and pull requests read-only at first, read and write since answering), stored as the Worker secret `GITHUB_TOKEN` by piping it in with `pbpaste`, because `wrangler secret put` run through Claude's `!` has no terminal to ask for it.
 
 3. **Which hostname, and shall I set up the login gate?** Done: `pr-board.danyelfisher.info`, behind the Cloudflare Access application of the team `fisherinsights.cloudflareaccess.com`, with a one-time emailed code as the login.
 
@@ -29,3 +29,9 @@ All the go-live steps are done (2026-11-08). They are in the order they were don
 9. **Should cards show the "Ask" line?** Answered: yes. Cards show the status section's `Ask:` line as one line under the title.
 
 10. **Some commits still ask for your approval.** Most likely settled: the commit example used `git -c user.name=…`, which your allowlist doesn't cover. With a plain `git -C <path> commit`, commits since 2026-11-06 have gone through without a prompt. If one prompts again, the prompt's wording should name the check.
+
+## Answering from the board
+
+11. **Make the owner token, which posts your answers?** Done differently: no second token. The board's `GITHUB_TOKEN` has write access to issues (2026-11-08) and pull requests (2026-11-19), and the Worker posts with it.
+
+12. **Are the calls I made for answering right?** (**yes** | let's talk) They are in the design under "Settled for answering". The first, that the Worker never changes whose turn it is, you kept on 2026-11-19 when you chose to have the stage strip read the answer instead. Still to confirm: the hidden data line in the status section, and the card coming back to the top when an answer has no 👀 after 10 minutes.

@@ -9,7 +9,7 @@ const states = (f: ReturnType<typeof facts>, s: ReturnType<typeof status> | null
 const box = (f: ReturnType<typeof facts>, s: ReturnType<typeof status> | null, name: StageBox['name']) =>
   boxNamed(stageStrip(f, s, now), name);
 const why = (f: ReturnType<typeof facts>, s: ReturnType<typeof status> | null) =>
-  whyTag(s, stageStrip(f, s, now), effectiveTurn(f.labels, s).turn);
+  whyTag(s, stageStrip(f, s, now), effectiveTurn(f.labels, s).turn, f.answers.length > 0);
 
 const pr573 = () => facts({
   number: 573, linkedIssue: 569,
@@ -48,6 +48,17 @@ describe('stage strip', () => {
     const s = status({}, 1);
     expect(box(f, s, 'Your look').note).toBe('1 question');
     expect(why(f, s)).toBe('1 decision + your look');
+  });
+
+  it('shows Your look as done, with the look answer, once the owner has answered, though the label still says owner', () => {
+    const answer = (choices: Record<string, string>) =>
+      ({ id: 'c', url: 'https://example.com/c', at: '2026-11-05T11:00:00-08:00', claimedAt: null, choices, note: '' });
+    const s = status({}, 1);
+    const looked = facts({ number: 576, labels: ['on sam'], answers: [answer({ '1': 'a', look: 'needs changes' })] });
+    expect(box(looked, s, 'Your look')).toEqual({ name: 'Your look', state: 'done', note: '✓ needs changes' });
+    expect(why(looked, s)).toBe('');
+    const decided = facts({ number: 577, labels: ['on sam'], answers: [answer({ '1': 'a' })] });
+    expect(box(decided, s, 'Your look')).toEqual({ name: 'Your look', state: 'done', note: '✓ answered' });
   });
 
   describe('578 after prep', () => {

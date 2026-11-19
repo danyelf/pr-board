@@ -9,7 +9,7 @@ export function facts(over: Partial<ItemFacts> = {}): ItemFacts {
     previewUrl: null, addedDocs: [], screenshots: [],
     reviewSha: null, reviewUrl: null, commitsSinceReview: null,
     prepDone: false, commitsSincePrep: null, statusCommentBody: null, statusWrittenAt: null, lastChangeAt: null,
-    labelEvents: [], lastActivityAt: '2026-11-01T10:00:00-08:00',
+    labelEvents: [], answers: [], lastActivityAt: '2026-11-01T10:00:00-08:00',
     ...over,
   };
 }
