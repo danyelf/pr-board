@@ -1,6 +1,6 @@
 import { CLAIM_REACTION, answersCurrentStatus, isClaimReaction, isOwnerAnswer, parseAnswer } from '../shared/answer.ts';
 import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_OWNER, LABEL_PARKED, REPO_WINDOW_DAYS, WRITTEN_ELSEWHERE } from '../shared/names.ts';
-import { parseStatus, pickStatusComment } from '../shared/status.ts';
+import { parseStatus, pickStatusComment, statusWrittenAt } from '../shared/status.ts';
 import { effectiveTurn } from '../shared/turn.ts';
 import type { AnswerSeen, ItemFacts, LabelEvent } from '../shared/types.ts';
 
@@ -368,8 +368,7 @@ function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
   const commitsSincePrep = prepAt === null ? null : commits.filter((c) => Date.parse(c.committedDate) > Date.parse(prepAt!)).length;
 
   const extra = [...(pr.mergedAt ? [pr.mergedAt] : []), ...commits.map((c) => c.committedDate)];
-  // The time pr-status wrote into the status, while the text still matches it; else the description's last edit.
-  const statusWrittenAt = parseStatus(body)?.writtenAt ?? pr.lastEditedAt ?? pr.createdAt;
+  const writtenAt = statusWrittenAt(body, pr.lastEditedAt ?? pr.createdAt);
   return {
     ...baseFacts(repo, pr, 'pr', labels, events, comments, extra),
     isDraft: pr.isDraft ?? false, merged: pr.merged ?? false, mergedAt: pr.mergedAt ?? null,
@@ -384,8 +383,8 @@ function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
     reviewSha, reviewUrl, commitsSinceReview,
     prepDone: prepAt !== null, commitsSincePrep,
     statusCommentBody: null,
-    statusWrittenAt,
-    answers: answersSince(comments, statusWrittenAt),
+    statusWrittenAt: writtenAt,
+    answers: answersSince(comments, writtenAt),
     // The owner answering is not a change the status should have caught up with.
     lastChangeAt: latestOrNull([...commits.map((c) => c.committedDate), ...comments.filter((c) => !fromOwner(c)).map((c) => c.createdAt)]),
   };
@@ -397,7 +396,7 @@ function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
   const comments = listOfItem(issue.comments, 'comments', COMMENTS_PER_ITEM, where, 'the status comment or an answer may be missing', report);
   const labels = listOfItem(issue.labels, 'labels', LABELS_PER_ITEM, where, 'a turn label may be missing', report).map((l) => l.name);
   const statusComment = pickStatusComment(comments);
-  const statusWrittenAt = statusComment ? parseStatus(statusComment.body)?.writtenAt ?? statusComment.updatedAt : null;
+  const writtenAt = statusComment ? statusWrittenAt(statusComment.body, statusComment.updatedAt) : null;
   return {
     ...baseFacts(repo, issue, 'issue', labels, events, comments, []),
     isDraft: false, merged: false, mergedAt: null, mergeState: null, behindBase: false,
@@ -406,8 +405,8 @@ function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
     reviewSha: null, reviewUrl: null, commitsSinceReview: null,
     prepDone: false, commitsSincePrep: null,
     statusCommentBody: statusComment?.body ?? null,
-    statusWrittenAt,
-    answers: answersSince(comments, statusWrittenAt),
+    statusWrittenAt: writtenAt,
+    answers: answersSince(comments, writtenAt),
     lastChangeAt: latestOrNull(comments.filter((c) => c !== statusComment && !fromOwner(c)).map((c) => c.createdAt)),
   };
 }

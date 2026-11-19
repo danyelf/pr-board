@@ -6,7 +6,7 @@
 import { CLAIM_REACTION, LOOK_KEY, LOOK_QUESTION, answersCurrentStatus, isClaimReaction, parseAnswer, type Answer, type CommentSeen } from '../src/shared/answer.ts';
 import { OWNER_LOGIN } from '../src/shared/config.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
-import { parseStatus } from '../src/shared/status.ts';
+import { parseStatus, statusWrittenAt } from '../src/shared/status.ts';
 import { currentRepo, flattenPages, gh, readItem, readRef, refString } from './gh.ts';
 import type { Deps as BaseDeps, Gh, ItemRead, Ref } from './gh.ts';
 
@@ -34,14 +34,13 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const PR_EDITED_QUERY = 'query($owner: String!, $repo: String!, $n: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $n) { lastEditedAt createdAt } } }';
 
 /**
- * When the item's status was written, so answers to an earlier status aren't taken for answers to
- * this one: the time pr-status recorded in it, else (for a section edited by hand, or one written
- * before that time was recorded) when the description or the status comment was last edited.
+ * When the item's status was written, by the shared rule. A PR's last description edit costs a
+ * GraphQL call, so it is asked for only when the status recorded no time of its own.
  */
-async function statusWrittenAt(gh: Gh, ref: Ref, item: ItemRead<RestComment>): Promise<string | null> {
-  const written = parseStatus(item.statusText)?.writtenAt;
-  if (written) return written;
-  if (!item.isPr) return item.statusComment?.updated_at ?? null;
+async function writtenAt(gh: Gh, ref: Ref, item: ItemRead<RestComment>): Promise<string | null> {
+  if (!item.isPr) return statusWrittenAt(item.statusText, item.statusComment?.updated_at ?? null);
+  const recorded = statusWrittenAt(item.statusText, null);
+  if (recorded) return recorded;
   const at = await gh(['api', 'graphql', '-f', `query=${PR_EDITED_QUERY}`, '-f', `owner=${ref.owner}`, '-f', `repo=${ref.repo}`, '-F', `n=${ref.n}`,
     '-q', '.data.repository.pullRequest | .lastEditedAt // .createdAt']);
   return at.trim() || null;
@@ -57,11 +56,11 @@ async function eyesOn(gh: Gh, ref: Ref, c: RestComment): Promise<{ login: string
 
 /** The owner's answers on one open item that nobody has claimed, oldest first. */
 async function waitingOn(gh: Gh, ref: Ref, item: ItemRead<RestComment>): Promise<Found[]> {
-  const writtenAt = await statusWrittenAt(gh, ref, item);
+  const written = await writtenAt(gh, ref, item);
   const found: Found[] = [];
   for (const c of item.comments) {
     const seen: CommentSeen = { login: c.user?.login, body: c.body, createdAt: c.created_at };
-    if (!answersCurrentStatus(seen, writtenAt)) continue;
+    if (!answersCurrentStatus(seen, written)) continue;
     // Reactions are read only for the answers to the current status.
     if ((await eyesOn(gh, ref, c)).some((r) => isClaimReaction(r.login, r.content))) continue;
     found.push({ ref, id: c.id, url: c.html_url, answer: parseAnswer(c.body)!, statusText: item.statusText });

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { pickStatusComment } from '../src/shared/status.ts';
+import { pickStatusComment, statusText } from '../src/shared/status.ts';
 
 export type Gh = (args: string[], opts?: { cwd?: string }) => Promise<string>;
 
@@ -82,10 +82,7 @@ export interface ItemRead<T> {
   comments: T[];
 }
 
-/**
- * An item and its comments, with the text its status lives in: a PR's description, or an issue's
- * last status comment. The same rule as `statusText` in src/shared/status.ts, read through `gh`.
- */
+/** An item and its comments, with the text its status lives in. */
 export async function readItem<T extends { body: string }>(gh: Gh, ref: Ref): Promise<ItemRead<T>> {
   const item = JSON.parse(await gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}`])) as {
     state?: string; pull_request?: unknown; body?: string | null;
@@ -93,7 +90,8 @@ export async function readItem<T extends { body: string }>(gh: Gh, ref: Ref): Pr
   const comments = await issueComments<T>(gh, ref);
   const isPr = Boolean(item.pull_request);
   const statusComment = isPr ? null : pickStatusComment(comments);
-  return { isPr, open: item.state !== 'closed', statusText: isPr ? item.body ?? '' : statusComment?.body ?? '', statusComment, comments };
+  const text = statusText({ kind: isPr ? 'pr' : 'issue', body: item.body ?? '', statusCommentBody: statusComment?.body ?? null });
+  return { isPr, open: item.state !== 'closed', statusText: text, statusComment, comments };
 }
 
 /** The text that holds an item's status, as the board reads it. */

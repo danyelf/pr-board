@@ -56,12 +56,18 @@ export function pickStatusComment<T extends { body: string }>(comments: T[]): T 
   return null;
 }
 
-/**
- * The text an item's status lives in: a PR's description, or an issue's last status comment.
- * `readStatusText` in cli/gh.ts follows the same rule through `gh`.
- */
+/** The text an item's status lives in: a PR's description, or an issue's last status comment. */
 export function statusText(f: Pick<ItemFacts, 'kind' | 'body' | 'statusCommentBody'>): string {
   return f.kind === 'pr' ? f.body : f.statusCommentBody ?? '';
+}
+
+/**
+ * When an item's status was written, so answers to an earlier status aren't taken for answers to
+ * this one: the time pr-status recorded in it while its text still matches, else `edited`, when that
+ * text was last edited (a PR's description, or an issue's status comment).
+ */
+export function statusWrittenAt(text: string, edited: string | null): string | null {
+  return parseStatus(text)?.writtenAt ?? edited;
 }
 
 const DATA_OPEN = '<!-- status-data ';
