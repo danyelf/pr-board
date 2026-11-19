@@ -123,9 +123,11 @@ export async function postAnswer(
   try {
     posted = await deps.postComment(env.GITHUB_TOKEN, repo, Number(number), body);
   } catch (e) {
+    console.error(`POST /answer: commenting on ${ref} failed:`, e instanceof Error ? e.message : String(e));
     // A token that can read the item but not comment on it gets a 403 (or a 404 for a private repo).
     if (e instanceof GitHubRefused && (e.status === 403 || e.status === 404)) {
-      return refuse(503, 'Not sent', `GitHub wouldn't let the board comment on ${ref} (${e.status}). The Worker's GITHUB_TOKEN needs read and write access to Issues and Pull requests on this repo.`);
+      const said = e.githubMessage ? ` GitHub said: ${e.githubMessage}` : '';
+      return refuse(503, 'Not sent', `GitHub wouldn't let the board comment on ${ref} (${e.status}). The Worker's GITHUB_TOKEN needs read and write access to Issues and Pull requests on this repo.${said}`);
     }
     return refuse(502, 'Not sent', `GitHub didn't take the answers for ${ref}: ${e instanceof Error ? e.message : String(e)}`);
   }

@@ -197,7 +197,7 @@ describe('POST /answer', () => {
         return over.item === undefined ? item() : over.item;
       },
       postComment: async (token, repo, n, body) => {
-        if (over.postFails) throw new GitHubRefused(over.postFails, over.postFails === 403 ? 'Forbidden' : 'Internal Server Error');
+        if (over.postFails) throw new GitHubRefused(over.postFails, over.postFails === 403 ? 'Forbidden' : 'Internal Server Error', over.postFails === 403 ? 'Resource not accessible by personal access token' : undefined);
         posted.push({ token, repo, n, body });
         return { login: over.postedAs ?? 'sam-gh' };
       },
@@ -373,7 +373,9 @@ describe('POST /answer', () => {
   it('says the token needs write access when GitHub forbids the comment', async () => {
     const res = await post(answerHandler({ postFails: 403 }).h, good);
     expect(res.status).toBe(503);
-    expect(await res.text()).toContain('needs read and write access to Issues and Pull requests');
+    const text = await res.text();
+    expect(text).toContain('needs read and write access to Issues and Pull requests');
+    expect(text).toContain('GitHub said: Resource not accessible by personal access token');
   });
 
   it('says so when GitHub could not be read or failed to take the comment', async () => {

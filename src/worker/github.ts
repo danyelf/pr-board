@@ -412,10 +412,25 @@ function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
 /** GitHub answered a write with an error status. */
 export class GitHubRefused extends Error {
   readonly status: number;
-  constructor(status: number, statusText: string) {
-    super(`GitHub said ${status} ${statusText}`);
+  // GitHub's own explanation from the response body, when it gave one.
+  readonly githubMessage?: string;
+  constructor(status: number, statusText: string, githubMessage?: string) {
+    super(`GitHub said ${status} ${statusText}${githubMessage ? `: ${githubMessage}` : ''}`);
     this.status = status;
+    this.githubMessage = githubMessage;
   }
+}
+
+async function refusalMessage(res: Response): Promise<string | undefined> {
+  const text = (await res.text().catch(() => '')).trim();
+  if (!text) return undefined;
+  try {
+    const message = (JSON.parse(text) as { message?: unknown }).message;
+    if (typeof message === 'string' && message) return message;
+  } catch {
+    // Not JSON: fall through to the raw text.
+  }
+  return text.slice(0, 300);
 }
 
 export async function postComment(
@@ -425,7 +440,7 @@ export async function postComment(
   const res = await fetchFn(`https://api.github.com/repos/${path}/issues/${n}/comments`, {
     method: 'POST', headers: headersFor(token), body: JSON.stringify({ body }),
   });
-  if (!res.ok) throw new GitHubRefused(res.status, res.statusText);
+  if (!res.ok) throw new GitHubRefused(res.status, res.statusText, await refusalMessage(res));
   const posted = (await res.json()) as { user?: { login?: string } | null };
   return { login: posted.user?.login ?? null };
 }

@@ -622,4 +622,11 @@ describe('postComment', () => {
     const fn = (async () => new Response('no', { status: 403, statusText: 'Forbidden' })) as typeof fetch;
     await expect(postComment('t', 'acme/x', 5, 'hello', fn)).rejects.toThrow('GitHub said 403 Forbidden');
   });
+
+  it("keeps GitHub's own explanation of a refusal", async () => {
+    const fn = (async () => Response.json({ message: 'Resource not accessible by personal access token', status: '403' }, { status: 403, statusText: 'Forbidden' })) as typeof fetch;
+    const err = await postComment('t', 'acme/x', 5, 'hello', fn).catch((e) => e);
+    expect(err.githubMessage).toBe('Resource not accessible by personal access token');
+    expect(err.message).toBe('GitHub said 403 Forbidden: Resource not accessible by personal access token');
+  });
 });
