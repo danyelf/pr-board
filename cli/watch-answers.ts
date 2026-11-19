@@ -3,7 +3,7 @@
 //   node cli/watch-answers.ts owner/repo#N [owner/repo#M ...]
 // It costs nothing while it waits, and it never exits on a timer or because of errors, since every
 // exit is a paid wake-up for the session.
-import { CLAIM_REACTION, LOOK_KEY, LOOK_QUESTION, answersCurrentStatus, isClaimReaction, parseAnswer, type Answer, type CommentSeen } from '../src/shared/answer.ts';
+import { CLAIM_REACTION, answerLines, answersCurrentStatus, isClaimReaction, parseAnswer, type Answer, type CommentSeen } from '../src/shared/answer.ts';
 import { OWNER_LOGIN } from '../src/shared/config.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
 import { parseStatus, statusWrittenAt } from '../src/shared/status.ts';
@@ -110,13 +110,9 @@ function describe(f: Found): string {
   lines.push(matches
     ? `  fingerprint ${f.answer.fingerprint} matches the current status`
     : `  fingerprint ${f.answer.fingerprint} does NOT match the current status (${current}): the questions changed after these answers were sent. Don't apply them; ask again.`);
-  for (const [key, value] of Object.entries(f.answer.answers)) {
-    if (key === LOOK_KEY) continue;
-    const q = matches ? status?.questions.find((x) => String(x.n) === key) : undefined;
-    lines.push(q ? `  ${q.n}. ${q.text} → ${value}` : `  ${key} → ${value}`);
+  for (const l of answerLines(matches ? status?.questions ?? [] : [], f.answer.answers)) {
+    if (l.choice !== null) lines.push(`  ${l.label} → ${l.choice}`);
   }
-  const look = f.answer.answers[LOOK_KEY];
-  if (look) lines.push(`  ${LOOK_QUESTION} → ${look}`);
   if (f.answer.note) lines.push(`  Note: ${f.answer.note.split('\n').join('\n    ')}`);
   return lines.join('\n');
 }

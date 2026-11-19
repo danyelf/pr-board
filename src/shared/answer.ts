@@ -78,6 +78,23 @@ export function checkAnswer(s: Status | null, asksLook: boolean, form: Omit<Answ
 /** On one line, so a line break in a question or a choice can't start a line of its own in the comment. */
 const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim();
 
+/** One line of an answer for people: the question, and the choice made, or null when it wasn't answered. */
+export interface AnswerLine { label: string; choice: string | null }
+
+/**
+ * An answer laid out for people: each of `questions` in order, then any answered question they don't
+ * include (by number alone), then the look. Pass no questions when the status they came from has changed.
+ */
+export function answerLines(questions: Question[], choices: Record<string, string>): AnswerLine[] {
+  const lines: AnswerLine[] = questions.map((q) => ({ label: `${q.n}. ${oneLine(q.text)}`, choice: choices[String(q.n)] ?? null }));
+  for (const [key, choice] of Object.entries(choices)) {
+    if (key !== LOOK_KEY && !questions.some((q) => String(q.n) === key)) lines.push({ label: key, choice });
+  }
+  const look = choices[LOOK_KEY];
+  if (look) lines.push({ label: LOOK_QUESTION, choice: look });
+  return lines;
+}
+
 /**
  * The comment: one line a program reads, then the same answers for people. Throws if the comment
  * would hold a status section or a second answer marker (which a question's text could carry in),
@@ -90,12 +107,9 @@ export function renderAnswer(s: Status | null, a: Answer): string {
     '**Answers from PR Board**',
     '',
   ];
-  for (const q of s?.questions ?? []) {
-    const choice = a.answers[String(q.n)];
-    lines.push(`${q.n}. ${oneLine(q.text)} → ${choice ? `**${oneLine(choice)}**` : '(no answer)'}`);
+  for (const l of answerLines(s?.questions ?? [], a.answers)) {
+    lines.push(`${l.label} → ${l.choice ? `**${oneLine(l.choice)}**` : '(no answer)'}`);
   }
-  const look = a.answers[LOOK_KEY];
-  if (look) lines.push(`${LOOK_QUESTION} → **${look}**`);
   if (note) lines.push('', 'Note:', ...note.split('\n').map((l) => `> ${l}`));
   const body = lines.join('\n');
   if (hasStatusSection(body)) throw new Error('The answers would hold a status section');

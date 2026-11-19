@@ -1,6 +1,6 @@
 import type { Board, Card } from './board.ts';
 import type { BoxState, ItemFacts } from '../shared/types.ts';
-import { FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, LOOK_QUESTION, NOTE_MAX, choicesFor, questionField } from '../shared/answer.ts';
+import { FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, LOOK_QUESTION, NOTE_MAX, answerLines, choicesFor, questionField } from '../shared/answer.ts';
 import { DAY_MS } from '../shared/names.ts';
 import { boxNamed } from '../shared/stage.ts';
 import { formatWait } from '../shared/turn.ts';
@@ -160,13 +160,9 @@ const NOTE_SHOWN = 160;
 function yourAnswer(c: Card, now: Date): string {
   const a = c.answer;
   if (!a) return '';
-  const lines: string[] = [];
-  for (const q of c.status?.questions ?? []) {
-    const picked = a.choices[String(q.n)];
-    if (picked) lines.push(`<div>${q.n}. ${esc(q.text)} → <b>${esc(picked)}</b></div>`);
-  }
-  const look = a.choices[FORM_FIELD.look];
-  if (look) lines.push(`<div>${esc(LOOK_QUESTION)} → <b>${esc(look)}</b></div>`);
+  const lines = answerLines(c.status?.questions ?? [], a.choices)
+    .filter((l) => l.choice !== null)
+    .map((l) => `<div>${esc(l.label)} → <b>${esc(l.choice!)}</b></div>`);
   const note = a.note.trim();
   if (note) {
     const flat = note.replace(/\s+/g, ' ');
