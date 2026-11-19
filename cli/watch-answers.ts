@@ -6,7 +6,7 @@
 import { CLAIM_REACTION, answerLines, answersCurrentStatus, isClaimReaction, parseAnswer, type Answer, type CommentSeen } from '../src/shared/answer.ts';
 import { OWNER_LOGIN } from '../src/shared/config.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
-import { parseStatus, statusWrittenAt } from '../src/shared/status.ts';
+import { descriptionEditedAt, parseStatus, statusWrittenAt } from '../src/shared/status.ts';
 import { currentRepo, flattenPages, gh, readItem, readRef, refString } from './gh.ts';
 import type { Deps as BaseDeps, Gh, ItemRead, Ref } from './gh.ts';
 
@@ -41,9 +41,9 @@ async function writtenAt(gh: Gh, ref: Ref, item: ItemRead<RestComment>): Promise
   if (!item.isPr) return statusWrittenAt(item.statusText, item.statusComment?.updated_at ?? null);
   const recorded = statusWrittenAt(item.statusText, null);
   if (recorded) return recorded;
-  const at = await gh(['api', 'graphql', '-f', `query=${PR_EDITED_QUERY}`, '-f', `owner=${ref.owner}`, '-f', `repo=${ref.repo}`, '-F', `n=${ref.n}`,
-    '-q', '.data.repository.pullRequest | .lastEditedAt // .createdAt']);
-  return at.trim() || null;
+  const pr = JSON.parse(await gh(['api', 'graphql', '-f', `query=${PR_EDITED_QUERY}`, '-f', `owner=${ref.owner}`, '-f', `repo=${ref.repo}`, '-F', `n=${ref.n}`,
+    '-q', '.data.repository.pullRequest'])) as { lastEditedAt: string | null; createdAt: string } | null;
+  return pr ? descriptionEditedAt(pr) : null;
 }
 
 /** The 👀 reactions on a comment. Skips the call when GitHub's count says there are none. */
@@ -158,8 +158,8 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
         out('Every item it was watching is closed or merged; nothing left to watch.');
         return 0;
       }
-      // With nothing found, a failure is reason to wait longer; with an answer found, it waits its turn.
-      if (first.found.length === 0 && first.failed.length > 0) throw new Error(first.failed.join('; '));
+      // Only when no item could be read is GitHub itself failing, and worth waiting longer for.
+      if (first.failed.length === refs.length) throw new Error(first.failed.join('; '));
       for (const line of first.failed) err(line);
       if (first.found.length > 0) {
         await deps.sleep(COLLECT_MS);

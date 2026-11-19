@@ -70,6 +70,11 @@ export function statusWrittenAt(text: string, edited: string | null): string | n
   return parseStatus(text)?.writtenAt ?? edited;
 }
 
+/** When a PR's description was last edited, for `statusWrittenAt`: GitHub gives no edit time until there is one. */
+export function descriptionEditedAt(pr: { lastEditedAt?: string | null; createdAt: string }): string {
+  return pr.lastEditedAt ?? pr.createdAt;
+}
+
 const DATA_OPEN = '<!-- status-data ';
 const DATA_CLOSE = ' -->';
 const isDataLine = (line: string): boolean => line.startsWith(DATA_OPEN) && line.endsWith(DATA_CLOSE);

@@ -1,6 +1,6 @@
 import { CLAIM_REACTION, answersCurrentStatus, isClaimReaction, isOwnerAnswer, parseAnswer } from '../shared/answer.ts';
 import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_OWNER, LABEL_PARKED, REPO_WINDOW_DAYS, WRITTEN_ELSEWHERE } from '../shared/names.ts';
-import { parseStatus, pickStatusComment, statusWrittenAt } from '../shared/status.ts';
+import { descriptionEditedAt, parseStatus, pickStatusComment, statusWrittenAt } from '../shared/status.ts';
 import { effectiveTurn } from '../shared/turn.ts';
 import type { AnswerSeen, ItemFacts, LabelEvent } from '../shared/types.ts';
 
@@ -378,7 +378,7 @@ function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
   const commitsSincePrep = prepAt === null ? null : commits.filter((c) => Date.parse(c.committedDate) > Date.parse(prepAt!)).length;
 
   const extra = [...(pr.mergedAt ? [pr.mergedAt] : []), ...commits.map((c) => c.committedDate)];
-  const writtenAt = statusWrittenAt(body, pr.lastEditedAt ?? pr.createdAt);
+  const writtenAt = statusWrittenAt(body, descriptionEditedAt(pr));
   return {
     ...baseFacts(repo, pr, 'pr', labels, events, comments, extra),
     isDraft: pr.isDraft ?? false, merged: pr.merged ?? false, mergedAt: pr.mergedAt ?? null,

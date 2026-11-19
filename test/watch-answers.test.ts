@@ -56,7 +56,7 @@ class World {
     if (args[0] === 'api' && args[1] === 'graphql') {
       const value = (name: string) => args.find((a) => a.startsWith(`${name}=`))!.slice(name.length + 1);
       const it = this.items.get(`${value('owner')}/${value('repo')}#${value('n')}`)!;
-      return `${it.lastEditedAt ?? it.createdAt}\n`;
+      return `${JSON.stringify({ lastEditedAt: it.lastEditedAt, createdAt: it.createdAt })}\n`;
     }
     const comments = /^api repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments\?per_page=100 --paginate --slurp$/.exec(line);
     if (comments) {
@@ -254,6 +254,15 @@ describe('watch-answers', () => {
     expect(r.sleeps).toEqual([COLLECT]);
     expect(w.reactions.get(id)).toEqual(['robot']);
     expect(r.err).toContain("Couldn't read acme/gone#3: gh: HTTP 404 Not Found");
+  });
+
+  it('keeps checking once a minute while one item stays unreadable and the others read fine', async () => {
+    const w = new World();
+    w.missing.add('acme/gone#3');
+    w.item('acme/x#5');
+    const r = await watch(w, ['acme/gone#3', 'acme/x#5'], (n) => { if (n === 3) w.answer('acme/x#5', { '1': 'leave' }); });
+    expect(r.code).toBe(0);
+    expect(r.sleeps).toEqual([POLL, POLL, POLL, COLLECT]);
   });
 
   it('goes back to the ordinary wait once a check works again', async () => {
