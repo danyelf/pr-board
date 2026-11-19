@@ -48,8 +48,8 @@ const CSS = `
   label.btn input { margin:0; accent-color:var(--ink); }
   label.btn:has(input:checked) { background:#efede7; }
   .answer textarea { display:block; width:100%; min-height:3.2em; margin-top:8px; font:inherit; font-size:12.5px; padding:6px 8px; border:1px solid #cfccc3; border-radius:5px; }
-  .answer .sendrow { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; margin-top:8px; }
-  .btn.send { font-weight:600; background:var(--ink); color:#fff; border-color:var(--ink); }
+  .answer .sendrow { display:flex; justify-content:flex-end; gap:10px; align-items:baseline; flex-wrap:wrap; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+  .btn.send { font-size:13.5px; font-weight:600; padding:7px 18px; background:var(--ok); color:#fff; border-color:var(--ok); }
   .ok { margin:6px 0 0; padding:6px 10px; border:1px solid #b9dcc3; background:#e9f5ec; color:#245e36; border-radius:6px; font-size:12.5px; }
   .shots { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
   .shots img { width:96px; height:auto; border:1px solid var(--line); border-radius:4px; display:block; }
