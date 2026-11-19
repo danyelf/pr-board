@@ -12,7 +12,7 @@ import { isAbsolute, join } from 'node:path';
 import { OWNER_NAME } from '../src/shared/config.ts';
 import { CLAUDE_BOT_KEY, LABEL_ON_OWNER, PICKUP_GRACE_MS, SERVICE_GRACE_MS } from '../src/shared/names.ts';
 import { answersCurrentStatus } from '../src/shared/answer.ts';
-import { claim, describe, statusWrittenAt, unclaim, waitingAnswers, type Found, type RestComment } from './answers.ts';
+import { claim, describe, unclaim, waitingAnswers, writtenAt, type Found, type RestComment } from './answers.ts';
 import { OwnerError, flattenPages, gh as realGh, git as realGit, readItem, readRef, refString, refuseOwner } from './gh.ts';
 import type { Gh, Ref } from './gh.ts';
 import { backoff, message } from './poll.ts';
@@ -328,10 +328,10 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
    */
   async function checkEnded(t: Tracked): Promise<void> {
     const item = await readItem<RestComment>(gh, t.itemRef);
-    const writtenAt = item.open ? await statusWrittenAt(gh, t.itemRef, item) : null;
+    const written = item.open ? await writtenAt(gh, t.itemRef, item) : null;
     for (const claimed of [...t.claims]) {
       const c = item.comments.find((x) => x.id === claimed.answerId);
-      if (c && item.open && answersCurrentStatus({ login: c.user?.login, body: c.body, createdAt: c.created_at }, writtenAt)) {
+      if (c && item.open && answersCurrentStatus({ login: c.user?.login, body: c.body, createdAt: c.created_at }, written)) {
         await unclaim(gh, { ref: t.itemRef, id: claimed.answerId }, claimed.reactionId);
         refused.add(claimed.answerId);
         err(`The session for ${t.ref} ended without updating its status, so ${c.html_url} is still unanswered. Took this account's 👀 back off it, so the board shows "Answered, not picked up" again; this service won't take that answer again. The session's output is in ${t.logPath}.`);
@@ -451,9 +451,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     }
     const branch = isPr ? await prBranch(ref) : `issue-${ref.n}`;
     const cwd = await worktreeFor(repo, ref, isPr, branch);
-    const described = new Map<number, string>();
-    for (const f of answers) described.set(f.id, await describe(gh, f));
-    const promptOf = (some: Found[]) => promptFor(ref, cwd, some.map((f) => described.get(f.id)!));
+    const promptOf = (some: Found[]) => promptFor(ref, cwd, some.map(describe));
     const logPath = join(config.logDir, `${ref.owner}-${ref.repo}-${ref.n}-${new Date(deps.now()).toISOString().replace(/[:.]/g, '-')}.log`);
     const argsFor = (prompt: string) => ['-p', prompt, '--name', `${ref.repo}#${ref.n} answers`, ...config.claudeArgs];
     if (dryRun) {
@@ -523,14 +521,13 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       const name = refString(ref);
       if (tracked.has(name)) continue;
       // One item that can't be read doesn't keep the rest of the repo from being served.
-      let answers: Found[];
-      try {
-        answers = (await waitingAnswers(gh, [ref], out)).filter((f) => !refused.has(f.id));
-      } catch (e) {
+      const { found, failed: unread } = await waitingAnswers(gh, [ref], out);
+      if (unread.length > 0) {
         failed = true;
-        err(`Couldn't read ${name}: ${message(e)}`);
+        for (const line of unread) err(line);
         continue;
       }
+      const answers = found.filter((f) => !refused.has(f.id));
       if (!answers.some((f) => deps.now() - Date.parse(f.createdAt) >= config.graceMs)) continue;
       ripe++;
       if (live() + planned >= config.maxSessions) {
