@@ -32,6 +32,6 @@ All the go-live steps are done (2026-11-08). They are in the order they were don
 
 ## Answering from the board
 
-11. **Make the owner token, which posts your answers?** Done differently: there is no second token. You gave the board's existing `GITHUB_TOKEN` write access to issues and pull requests (2026-11-08), and the Worker posts with it (README step 8).
+11. **Make the owner token, which posts your answers?** Done differently: no second token. The board's `GITHUB_TOKEN` has write access to issues (2026-11-08) and pull requests (2026-11-19), and the Worker posts with it.
 
-12. **Are the calls I made for answering right?** (**yes** | let's talk) They are written down in the design under "Settled for answering", each marked as my call. The ones most worth a look: the Worker never changes whose turn it is or the status (the board works out "answered" from your comment being newer than the status); the status section carries a hidden data line, used only while the text still matches it, so a hand edit on GitHub is read from the text and tagged on the card; and an answer with no 👀 after 10 minutes puts the card back at the top.
+12. **Are the calls I made for answering right?** (**yes** | let's talk) They are in the design under "Settled for answering". The first, that the Worker never changes whose turn it is, you kept on 2026-11-19 when you chose to have the stage strip read the answer instead. Still to confirm: the hidden data line in the status section, and the card coming back to the top when an answer has no 👀 after 10 minutes.
