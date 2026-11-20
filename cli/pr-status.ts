@@ -13,7 +13,7 @@ export interface Deps extends BaseDeps {
   home: string;
 }
 
-export interface SetOptions {
+interface SetOptions {
   waiting: WaitingOn;
   ask: string;
   questions: string[];

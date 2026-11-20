@@ -1,4 +1,4 @@
-import type { Board, Card } from './board.ts';
+import { BACK_WITH_OWNER, type Board, type Card } from './board.ts';
 import type { BoxState, ItemFacts } from '../shared/types.ts';
 import { FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, LOOK_QUESTION, NOTE_MAX, answerLines, choicesFor, codeWrittenStatus, questionField } from '../shared/answer.ts';
 import { DAY_MS } from '../shared/names.ts';
@@ -197,7 +197,7 @@ function renderCard(c: Card, opts: RenderOptions, now: Date): string {
   if (c.toTest) parts.push(`<div class="detail"><b>To test:</b> ${esc(c.toTest)}</div>`);
   // Once answered, the answers are on GitHub; asking again here would only send them twice. After a
   // session gave up, the item is back with the owner to answer afresh, beside what they sent before.
-  if (c.answerState === 'not-picked-up' || c.answerState === 'stalled' || c.answerState === 'gave-up') parts.push(yourAnswer(c, now));
+  if (c.answerState && BACK_WITH_OWNER.has(c.answerState)) parts.push(yourAnswer(c, now));
   if (c.answerState === null || c.answerState === 'gave-up') parts.push(answerForm(c));
   if (f.screenshots.length > 0) {
     const shots = f.screenshots

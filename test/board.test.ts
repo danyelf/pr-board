@@ -247,6 +247,17 @@ describe('buildBoard and answers', () => {
     expect(card.waitingSince).toBe(minutesAgo(5));
   });
 
+  it('shows a new answer after the Mac service gave up as answered, not as gave up', () => {
+    const again = answer('h', 2, null);
+    const b = buildBoard([facts({
+      number: 700, labels: ['on sam'], lastActivityAt: minutesAgo(1),
+      body: renderStatus({ waitingOn: 'owner', since: minutesAgo(5), ask: GAVE_UP_ASK, questions: [], toTest: 'its log', writtenAt: minutesAgo(5) }),
+      answers: [again], lastAnswer: again,
+    })], [], NOW);
+    expect(where(b)).toBe('onClaude');
+    expect(b.onClaude[0]!.answerState).toBe('awaiting-pickup');
+  });
+
   it('times the wait for pickup from the oldest answer not yet picked up', () => {
     const b = buildBoard([waitingPr([answer('a', 30, 28), answer('b', 11, null), answer('c', 2, null)])], [], NOW);
     expect(b.waiting[0]!.answerState).toBe('not-picked-up');

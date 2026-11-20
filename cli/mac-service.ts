@@ -21,7 +21,7 @@ import { parseStatus } from '../src/shared/status.ts';
 import { claim, claudeReactions, describe, react, unreact, waitingAnswers, writeCodeStatus, writtenAt, type Found, type RestComment } from './answers.ts';
 import { OwnerError, flattenPages, gh as realGh, git as realGit, ps as realPs, readItem, readRef, refString, refuseOwner } from './gh.ts';
 import type { Gh, Ref } from './gh.ts';
-import { PARALLEL_READS, backoff, inParallel, message } from './poll.ts';
+import { PARALLEL_READS, POLL_MS, backoff, inParallel, message } from './poll.ts';
 
 const MIN = 60_000;
 const USAGE = 'Usage: mac-service [--config <file>] [--dry-run] [--once]';
@@ -128,9 +128,9 @@ export function loadConfig(text: string, home: string, path: string): Config {
   if (!Array.isArray(claudeArgs) || !claudeArgs.every((a) => typeof a === 'string')) return fail('"claudeArgs" must be a list of strings');
   return {
     repos,
-    graceMs: num('graceMinutes', SERVICE_GRACE_MS / MIN,(n) => n >= 0, 'a number of minutes, 0 or more') * MIN,
+    graceMs: num('graceMinutes', SERVICE_GRACE_MS / MIN, (n) => n >= 0, 'a number of minutes, 0 or more') * MIN,
     maxSessions: num('maxSessions', 2, (n) => Number.isInteger(n) && n >= 1, 'a whole number, 1 or more'),
-    pollMs: num('pollSeconds', 60, (n) => n >= 1, 'a number of seconds, 1 or more') * 1000,
+    pollMs: num('pollSeconds', POLL_MS / 1000, (n) => n >= 1, 'a number of seconds, 1 or more') * 1000,
     sessionMs: num('sessionMinutes', 60, (n) => n > 0, 'a number of minutes, more than 0') * MIN,
     logDir: d.logDir === undefined ? join(home, '.pr-board', 'logs') : absolute(d.logDir, 'logDir'),
     tokenFile: d.tokenFile === undefined ? join(home, '.config', 'claude-github', 'token') : absolute(d.tokenFile, 'tokenFile'),
@@ -140,7 +140,7 @@ export function loadConfig(text: string, home: string, path: string): Config {
 }
 
 /** The name a session is started with, which is how the process list tells which item it is for. */
-export const sessionName = (ref: Ref): string => `${refString(ref)} answers`;
+const sessionName = (ref: Ref): string => `${refString(ref)} answers`;
 
 /** ps's elapsed time, [[dd-]hh:]mm:ss, in ms; null when it can't be read. */
 function elapsedMs(etime: string): number | null {
@@ -190,9 +190,8 @@ function promptFor(ref: Ref, cwd: string, described: string[]): string {
     `${OWNER_NAME}'s answers from PR Board to ${refString(ref)}. Nobody picked them up, so the PR Board service on the Mac started this fresh session for them in ${cwd}, claimed them with a 👀 and set the status to "${SERVICE_WORKING_ASK}".`,
     '',
     ...described.flatMap((d) => [d, '']),
-    'Follow the pr-status skill under "Answers from the board". Don\'t start the watcher: this session ends when you finish.',
+    'Follow the pr-status skill under "Answers from the board", which says what a session started this way must do.',
     'End with pr-status set --waiting owner (or nobody), never claude: once this session ends, nobody is left to carry on.',
-    "The worktree may be new: install dependencies with the repo's package manager before running tests.",
   ].join('\n');
 }
 
@@ -281,8 +280,9 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   let previous: Set<string> | null = null;
   /** Items to check (a failed check is tried again): true for one whose session was seen to end, false for one found at startup. */
   const toCheck = new Map<string, boolean>();
-  /** Sessions it has asked to stop for running too long. */
-  const stopping = new Set<number>();
+  /** Sessions it has asked to stop for running too long, with when it asked; and those it then forced to stop. */
+  const stopping = new Map<number, number>();
+  const forced = new Set<number>();
   let planned = 0;
 
   const logHint = (ref: Ref) => `Its output is the newest ${ref.owner}-${ref.repo}-${ref.n}-*.log in ${config.logDir}; the service's own log says why it stopped (grep it for ${refString(ref)}).`;
@@ -290,10 +290,10 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   /**
    * After the service's session for an item has ended: if the item's status is still the one the
    * service wrote as it started the session, or the answer is still current, the session didn't hand
-   * the item on. Marks the answer 😕 and hands the item to the owner, saying so in its status.
-   * `ended` is false for the check at startup, when most items had no session that just ended.
+   * the item on. Marks the answer 😕 and hands the item to the owner, saying so in its status, and
+   * returns true (in a dry run, says it would). `ended` is false for the check at startup, when most
+   * items had no session that just ended.
    */
-  /** Returns true when the session left the item behind, so it was (or, in a dry run, would be) handed back. */
   async function checkEnded(ref: Ref, ended: boolean): Promise<boolean> {
     const name = refString(ref);
     const item = await readItem<RestComment>(gh, ref);
@@ -305,7 +305,13 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     if (!kinds.has(SERVICE_REACTION) || !kinds.has(CLAIM_REACTION)) return false;
     const status = parseStatus(item.statusText);
     const kind = codeWrittenStatus(status);
-    if (kind === 'gave-up') return false;
+    if (kind === 'gave-up') {
+      // Handed back already, unless writing the label failed after the status went up: then finish the hand-back.
+      if (item.labels.includes(LABEL_ON_OWNER) || dryRun) return false;
+      for (const p of await writeCodeStatus(gh, ref, 'owner', GAVE_UP_ASK, logHint(ref), new Date(deps.now()))) warn(name, p);
+      warn(name, `its status said "${GAVE_UP_ASK}" but the item lacked the "${LABEL_ON_OWNER}" label; set both again.`);
+      return false;
+    }
     const current = answersCurrentStatus({ login: latest.user?.login, body: latest.body, createdAt: latest.created_at }, await writtenAt(gh, ref, item));
     if (kind !== 'service-working' && !current) {
       if (ended) say(name, `the session handed the item on; its status now waits on ${status?.waitingOn ?? 'nobody it says'}.`);
@@ -333,7 +339,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         const labels = (row.labels ?? []).map((l) => l.name);
         // A PR's status is in its description; an issue's is in a comment, so any issue not parked might hold one.
         const could = row.pull_request
-          ? codeWrittenStatus(parseStatus(row.body ?? '')) === 'service-working' || labels.includes(LABEL_ON_OWNER)
+          ? ['service-working', 'gave-up'].includes(codeWrittenStatus(parseStatus(row.body ?? '')) ?? '') || labels.includes(LABEL_ON_OWNER)
           : !labels.includes(LABEL_PARKED);
         if (could) refs.push(ref);
       }
@@ -341,19 +347,30 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     return refs;
   }
 
-  /** Stops the sessions that have run too long; the check that follows any ended session then runs. */
+  /**
+   * Stops the sessions that have run too long: asks politely (SIGTERM), and forces it (SIGKILL) if the
+   * session is still there a minute later. The check that follows any ended session then runs.
+   */
   function stopLongRunning(live: Map<string, Running>): void {
     for (const [name, s] of live) {
-      if (s.elapsedMs < config.sessionMs || stopping.has(s.pid)) continue;
-      stopping.add(s.pid);
+      if (s.elapsedMs < config.sessionMs || forced.has(s.pid)) continue;
+      const asked = stopping.get(s.pid);
       if (dryRun) {
-        say(name, `its session (process ${s.pid}) has run for ${Math.floor(s.elapsedMs / MIN)} min; would stop it.`);
+        if (asked === undefined) say(name, `its session (process ${s.pid}) has run for ${Math.floor(s.elapsedMs / MIN)} min; would stop it.`);
+        stopping.set(s.pid, deps.now());
         continue;
       }
-      warn(name, `its session (process ${s.pid}) has run for ${Math.floor(s.elapsedMs / MIN)} min, past the ${config.sessionMs / MIN} min limit; stopping it.`);
+      if (asked !== undefined && deps.now() - asked < MIN) continue;
+      const signal = asked === undefined ? 'SIGTERM' : 'SIGKILL';
+      warn(name, asked === undefined
+        ? `its session (process ${s.pid}) has run for ${Math.floor(s.elapsedMs / MIN)} min, past the ${config.sessionMs / MIN} min limit; stopping it.`
+        : `its session (process ${s.pid}) is still running a minute after being asked to stop; forcing it to stop.`);
       try {
-        deps.kill(-s.pid, 'SIGTERM');
+        deps.kill(-s.pid, signal);
+        if (asked === undefined) stopping.set(s.pid, deps.now());
+        else forced.add(s.pid);
       } catch (e) {
+        // Tried again at the next look.
         warn(name, `couldn't stop process group ${s.pid}: ${message(e)}`);
       }
     }
@@ -439,8 +456,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     const argsFor = (prompt: string) => ['--name', sessionName(ref), '-p', prompt, ...config.claudeArgs];
     if (dryRun) {
       planned++;
-      const args = argsFor(promptOf(answers));
-      say(name, `would claim and start: ${config.claude} --name "${args[1]}" -p <the prompt below> ${args.slice(4).join(' ')}\n  in ${cwd}\n  with GH_TOKEN from ${config.tokenFile}\n  output to ${logPath}\n  prompt:\n${indent(args[3]!)}`);
+      say(name, `would claim and start: ${config.claude} --name "${sessionName(ref)}" -p <the prompt below> ${config.claudeArgs.join(' ')}\n  in ${cwd}\n  with GH_TOKEN from ${config.tokenFile}\n  output to ${logPath}\n  prompt:\n${indent(promptOf(answers))}`);
       return;
     }
     deps.files.mkdir(config.logDir);
@@ -448,6 +464,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     // The last check before the claim: the token must not be the owner's, whose 👀 the board ignores.
     await refuseOwner(gh, ownerAdvice);
     const claimed: Claimed[] = [];
+    let claimFailed = false;
     for (const f of answers) {
       try {
         // 🚀 before 👀: a 👀 without a 🚀 is an open session's, so this order never leaves one of ours looking like that.
@@ -460,10 +477,15 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         say(name, `${f.url} was claimed by another session first; leaving it to that one.`);
         if (rocket) await unreact(gh, f, rocket.reactionId);
       } catch (e) {
+        claimFailed = true;
         warn(name, `couldn't claim ${f.url}: ${message(e)}`);
       }
     }
-    if (claimed.length === 0) return;
+    if (claimed.length === 0) {
+      // GitHub may have taken the 🚀 and 👀 even though its reply was lost; with no session to act on them, check as for one that ended.
+      if (claimFailed) toCheck.set(name, true);
+      return;
+    }
 
     const args = argsFor(promptOf(claimed.map((c) => c.found)));
     let session: Session;
@@ -500,10 +522,9 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       out(`${repo.owner}/${repo.repo}: ${rows.length} open ${rows.length === 1 ? 'item carries' : 'items carry'} "${LABEL_ON_OWNER}"; ${readable.length} with comments read for answers.`);
     }
     // Read every item first, several at once; then act on them one at a time, so the session count stays right.
-    const toRead = readable.filter((row) => !live.has(refString({ owner: repo.owner, repo: repo.repo, n: row.number })));
-    const reads = await inParallel(toRead, PARALLEL_READS, (row) => waitingAnswers(gh, [{ owner: repo.owner, repo: repo.repo, n: row.number }], out));
-    for (const [i, row] of toRead.entries()) {
-      const ref: Ref = { owner: repo.owner, repo: repo.repo, n: row.number };
+    const toRead = readable.map((row) => ({ row, ref: { owner: repo.owner, repo: repo.repo, n: row.number } satisfies Ref })).filter(({ ref }) => !live.has(refString(ref)));
+    const reads = await inParallel(toRead, PARALLEL_READS, ({ ref }) => waitingAnswers(gh, [ref], out));
+    for (const [i, { row, ref }] of toRead.entries()) {
       const name = refString(ref);
       // One item that can't be read doesn't keep the rest of the repo from being served.
       const { found: answers, failed: unread } = reads[i]!;
@@ -553,6 +574,8 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   for (;;) {
     planned = 0;
     let failed = false;
+    // One item that fails is logged and tried again at the next look; only a failure to read the lists slows the service down.
+    let itemFailed = false;
     let ripe = 0;
     let live: Map<string, Running> | null = null;
     try {
@@ -577,7 +600,8 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         failed = true;
         err(`Couldn't look for items its sessions left at startup (${message(e)}); will try again.`);
       }
-      const checked = await inParallel([...toCheck], PARALLEL_READS, async ([name, ended]) => {
+      // A session still running is checked once it has gone.
+      const checked = await inParallel([...toCheck].filter(([name]) => !live.has(name)), PARALLEL_READS, async ([name, ended]) => {
         const ref = readRef(name);
         if (!('owner' in ref)) return { name, ended, left: false, ok: true };
         try {
@@ -589,7 +613,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
           return { name, ended, left: false, ok: false };
         }
       });
-      failed ||= checked.some((c) => !c.ok);
+      itemFailed ||= checked.some((c) => !c.ok);
       if (previous !== null && atStartup > 0) {
         const fromStartup = checked.filter((c) => !c.ended);
         const left = fromStartup.filter((c) => c.left).map((c) => c.name);
@@ -601,7 +625,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         try {
           const served = await serveRepo(repo, live);
           ripe += served.ripe;
-          failed ||= served.failed;
+          itemFailed ||= served.failed;
         } catch (e) {
           failed = true;
           err(`${repo.owner}/${repo.repo}: ${message(e)}`);
@@ -609,8 +633,8 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       }
     }
     if (once) {
-      if (ripe === 0 && !failed) out(`No answers waiting past the ${config.graceMs / MIN} min grace period; nothing to do.`);
-      return failed ? 1 : 0;
+      if (ripe === 0 && !failed && !itemFailed) out(`No answers waiting past the ${config.graceMs / MIN} min grace period; nothing to do.`);
+      return failed || itemFailed ? 1 : 0;
     }
     failures = failed ? failures + 1 : 0;
     const wait = backoff(config.pollMs, failures);

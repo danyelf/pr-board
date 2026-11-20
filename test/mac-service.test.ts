@@ -39,6 +39,12 @@ class World {
   nextReaction = 900;
   failWorktreeAdd = false;
   failStatusWrites = false;
+  /** Label additions that fail before one goes through. */
+  failLabelAdds = 0;
+  /** Answers whose 👀 GitHub records but whose reply never arrives. */
+  lostReply = new Set<number>();
+  /** Sessions that ignore the polite stop signal. */
+  ignoreTerm = false;
   /** Items whose comments can't be read. */
   poisoned = new Set<string>();
   /** When set, the next session fails to start, the way a missing program does. */
@@ -91,7 +97,7 @@ class World {
     return id;
   }
 
-  /** Puts a reaction on a comment, as if made earlier. */
+  /** Puts a reaction on a comment, as if made earlier. The tests spell reactions as GitHub does (eyes, rocket, confused), not through the constants, so a changed constant fails them. */
   react(id: number, content: string, login = this.me): void {
     this.reactions.set(id, [...(this.reactions.get(id) ?? []), { id: this.nextReaction++, login, content }]);
   }
@@ -159,7 +165,7 @@ class World {
     const item = /^api repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(line);
     if (item) {
       const it = this.items.get(`${item[1]}#${item[2]}`)!;
-      return JSON.stringify({ state: it.open ? 'open' : 'closed', body: it.body, user: { login: 'robot' }, ...(it.kind === 'pr' ? { pull_request: {} } : {}) });
+      return JSON.stringify({ state: it.open ? 'open' : 'closed', body: it.body, user: { login: 'robot' }, labels: it.labelled ? [{ name: 'on sam' }] : [], ...(it.kind === 'pr' ? { pull_request: {} } : {}) });
     }
     const head = /^api repos\/([^/]+\/[^/]+)\/pulls\/(\d+) -q .*head\.ref.*$/.exec(line);
     if (head) {
@@ -174,6 +180,7 @@ class World {
       const id = Number(react[1]);
       const content = react[2]!;
       const had = (this.reactions.get(id) ?? []).find((r) => r.login === this.me && r.content === content);
+      if (content === 'eyes' && this.lostReply.has(id)) { this.react(id, content); throw new Error('gh: connection reset'); }
       if (had || (content === 'eyes' && this.lostRace.has(id))) {
         if (!had) this.react(id, content);
         return 'HTTP/2.0 200 OK\n\n{}';
@@ -214,6 +221,7 @@ class World {
     }
     const label = /^api (-X (POST|DELETE) )?repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/labels(?:\/(.+)| -f labels\[\]=(.+))$/.exec(line);
     if (label) {
+      if (label[2] === 'POST' && this.failLabelAdds > 0) { this.failLabelAdds--; throw new Error('gh: HTTP 502 Bad Gateway'); }
       const it = this.items.get(`${label[3]}#${label[4]}`)!;
       const name = decodeURIComponent(label[5] ?? label[6]!);
       if (name === 'on sam') it.labelled = label[2] === 'POST';
@@ -279,6 +287,7 @@ async function run(world: World, argv: string[], onSleep: (count: number, ms: nu
     },
     kill: (pid, signal) => {
       world.signals.push(`${signal} ${pid}`);
+      if (signal === 'SIGTERM' && world.ignoreTerm) return;
       world.started.find((s) => s.pid === -pid)?.finish(143);
     },
     homedir: HOME,
@@ -403,9 +412,8 @@ describe('mac-service', () => {
     expect(prompt).toContain(`fingerprint ${statusFingerprint(asking)} matches the current status`);
     expect(prompt).toContain('1. Colour? → change');
     expect(prompt).toContain('Follow the pr-status skill under "Answers from the board"');
-    expect(prompt).toContain("Don't start the watcher");
+    expect(prompt).toContain('which says what a session started this way must do');
     expect(prompt).toContain('never claude');
-    expect(prompt).toContain('install dependencies');
     expect(w.statusOf('acme/x#5')).toMatchObject({ waitingOn: 'claude', ask: SERVICE_WORKING_ASK });
     expect(w.items.get('acme/x#5')!.labelled).toBe(false);
     expect(r.out).toContain('acme/x#5: started a session (process 4001)');
@@ -851,6 +859,39 @@ describe('mac-service', () => {
       expect(w.statusOf('acme/x#5')).toMatchObject({ ask: GAVE_UP_ASK });
     });
 
+    it('forces a session to stop when it is still there a minute after being asked', async () => {
+      const w = setup({ sessionMinutes: 5 });
+      w.ignoreTerm = true;
+      const id = w.answer('acme/x#5', 6);
+      const r = await run(w, [], (n, _, stop) => { if (n === 9) stop(); });
+      expect(w.signals).toEqual(['SIGTERM -4001', 'SIGKILL -4001']);
+      expect(r.err).toContain('acme/x#5: its session (process 4001) is still running a minute after being asked to stop; forcing it to stop.');
+      expect(w.mine(id)).toEqual(['confused', 'eyes', 'rocket']);
+    });
+
+    it('finishes a hand-back whose label failed to go on after the status did', async () => {
+      const w = setup();
+      w.answer('acme/x#5', 6);
+      w.failLabelAdds = 1;
+      const r = await run(w, [], (n, _, stop) => {
+        if (n === 1) w.started[0]!.finish(1);
+        if (n === 4) stop();
+      });
+      expect(w.statusOf('acme/x#5')).toMatchObject({ waitingOn: 'owner', ask: GAVE_UP_ASK });
+      expect(w.items.get('acme/x#5')!.labelled).toBe(true);
+      expect(r.err).toContain('lacked the "on sam" label; set both again.');
+    });
+
+    it('hands the item back when GitHub took the 👀 but its reply was lost, so no session started', async () => {
+      const w = setup();
+      const id = w.answer('acme/x#5', 6);
+      w.lostReply.add(id);
+      await run(w, [], (n, _, stop) => { if (n === 2) stop(); });
+      expect(w.started).toHaveLength(0);
+      expect(w.mine(id)).toEqual(['confused', 'eyes', 'rocket']);
+      expect(w.statusOf('acme/x#5')).toMatchObject({ waitingOn: 'owner', ask: GAVE_UP_ASK });
+    });
+
     it('after a restart counts the sessions still running, and checks the items whose sessions ended while it was down', async () => {
       const w = new World();
       w.config({ maxSessions: 1 });
@@ -904,7 +945,7 @@ describe('mac-service', () => {
     });
   });
 
-  it('one item that can’t be read does not stop the items after it, and counts toward the back-off', async () => {
+  it('one item that can’t be read does not stop the items after it, nor slow the service down', async () => {
     const w = new World();
     w.config({ maxSessions: 3 });
     for (const n of [5, 6, 8]) w.item(`acme/x#${n}`);
@@ -913,7 +954,7 @@ describe('mac-service', () => {
     const r = await run(w, [], (n, _, stop) => { if (n === 1) stop(); });
     expect(w.started).toHaveLength(2);
     expect(r.err).toContain("Couldn't read acme/x#6");
-    expect(r.sleeps[0]).toBe(120_000);
+    expect(r.sleeps[0]).toBe(POLL);
   });
 
   it('reads the config from --config, else from PR_BOARD_SERVICE_CONFIG', async () => {

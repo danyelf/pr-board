@@ -43,7 +43,7 @@ export interface Card {
 type AnswerState = 'awaiting-pickup' | 'not-picked-up' | 'picked-up' | 'stalled' | 'gave-up';
 
 /** The states that put the card back in front of the owner. */
-const BACK_WITH_OWNER: ReadonlySet<AnswerState> = new Set(['not-picked-up', 'stalled', 'gave-up']);
+export const BACK_WITH_OWNER: ReadonlySet<AnswerState> = new Set(['not-picked-up', 'stalled', 'gave-up']);
 
 const WHY: Partial<Record<AnswerState, string>> = {
   'not-picked-up': 'Answered, not picked up',
@@ -95,8 +95,8 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
   const lastClaim = claimTimes.length > 0 ? claimTimes.reduce((a, b) => (time(b) > time(a) ? b : a)) : null;
   const longAgo = (iso: string) => now.getTime() - time(iso) >= PICKUP_GRACE_MS;
   const answerState: AnswerState | null =
-    codeWrittenStatus(status) === 'gave-up' ? 'gave-up'
-    : f.answers.length === 0 ? null
+    // A new answer after the session gave up goes through the usual states.
+    f.answers.length === 0 ? (codeWrittenStatus(status) === 'gave-up' ? 'gave-up' : null)
     : unclaimed.length === 0 ? (longAgo(lastClaim!) ? 'stalled' : 'picked-up')
     : longAgo(unclaimed[0]!.at) ? 'not-picked-up'
     : 'awaiting-pickup';

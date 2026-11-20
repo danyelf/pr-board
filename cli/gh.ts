@@ -97,18 +97,20 @@ export interface ItemRead<T> {
   /** For an issue, the comment that text comes from; null for a PR, or an issue with no status comment. */
   statusComment: T | null;
   comments: T[];
+  labels: string[];
 }
 
 /** An item and its comments, with the text its status lives in. */
 export async function readItem<T extends { body: string }>(gh: Gh, ref: Ref): Promise<ItemRead<T>> {
   const item = JSON.parse(await gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}`])) as {
-    state?: string; pull_request?: unknown; body?: string | null;
+    state?: string; pull_request?: unknown; body?: string | null; labels?: { name?: string }[];
   };
   const comments = await issueComments<T>(gh, ref);
   const isPr = Boolean(item.pull_request);
   const statusComment = isPr ? null : pickStatusComment(comments);
   const text = statusText({ kind: isPr ? 'pr' : 'issue', body: item.body ?? '', statusCommentBody: statusComment?.body ?? null });
-  return { isPr, open: item.state !== 'closed', statusText: text, statusComment, comments };
+  const labels = (item.labels ?? []).map((l) => l.name).filter((n): n is string => typeof n === 'string');
+  return { isPr, open: item.state !== 'closed', statusText: text, statusComment, comments, labels };
 }
 
 /** The text that holds an item's status, as the board reads it. */
