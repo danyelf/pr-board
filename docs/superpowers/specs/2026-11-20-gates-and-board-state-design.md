@@ -25,6 +25,8 @@ Two things went wrong with the first design.
 - The timeline, the activity upload, "File an issue" and "Pick up". They stay on the later list.
 - A way for Danyel to send a PR back a gate from the board. He writes a note; Claude decides whether the note means going back.
 - Showing the status on the PR page on GitHub.
+- Reading the comments Danyel leaves on GitHub. In the six weeks checked he did this about six times ("added a comment on 481"). The board doesn't see them; he tells Claude, or puts the note on the card.
+- Work that isn't about one PR: questions to Claude, triage, investigations. About a third of his messages. It stays in chat.
 
 ## Anti-goals
 
@@ -71,7 +73,9 @@ What "complete" asks of Danyel depends on the gate:
 
 - **Approve** records the approval, with its time, against the gate. The gate shows ✓ approved from that moment. Only an answer from Danyel on the board can record an approval.
 - **Needs changes** must come with a note. The gate stays where it is and the note goes to Claude.
-- Any card waiting on Danyel also has a free-text note box, and Claude reads the note whatever the choices say.
+- **An approval can carry a note,** meaning "yes, and also do this" ("430: fix the check. Then prep the pr."). The gate is approved; Claude does what the note says as part of the next gate's work.
+- **Every card has a note box all the time,** also while Claude is working. A note sent with no choices is delivered to Claude exactly as an answer is. It doesn't change the gate or the state by itself. Danyel gives feedback mid-work on nearly every large PR, so this is an everyday move, not an exception.
+- Claude reads the note whatever the choices say.
 - Claude's own questions keep the rules Danyel set: numbered, each with choices, one default in bold, and a "file an issue" choice that means "take the default and file the question for later". The approval question has no "file an issue" choice (Claude's call: an approval can't be deferred).
 - A complete gate may carry questions too. Danyel answers them and the approval together.
 
@@ -91,20 +95,30 @@ Prep needs a PR: the command refuses `--gate prep` on an issue.
 ### Going forward, going back, and rounds
 
 - **Forward** needs the earlier gate approved. The status command refuses to move a record to Implementation while Design is unapproved, or to Prep while Implementation is unapproved.
-- **A small piece of work may start at Implementation.** Its Design gate shows a dash. Nothing may start at Prep.
+- **Design is optional, and chosen at the start.** When Claude writes the first status for a piece of work it says whether there is a design step. With none, the card has two gates, Implementation and Prep for merge, and no third box. Danyel often judges a design from the built thing, so for much work a separate design step does nothing. A piece of work that turns out to need one can gain it later: that is a move back, with a reason, like any other. Nothing may start at Prep.
 - **Back** is Claude's move, and deliberate: moving a record to an earlier gate needs a reason, which the card shows. The approvals of that gate and every later one are cleared. Later gates that had been started show dimmed as "on hold".
 - **Rounds.** Each time a gate is handed to Danyel as complete counts as a round, whether it came back after "needs changes" or after being reopened from a later gate. From the second on, the gate says "round 2", and so on.
 - **Answers are kept.** Going back clears the approvals on the record, but the answer rows that gave them stay, as history.
 
 ### The record
 
-One record per piece of work, keyed by repo and number. It holds the gate, the state, the ask, the questions, how to test, when the turn last changed, each gate's approval (or that it was skipped), the round count per gate, the reason for the last move back, the head commit prep finished on, and a version number.
+One record per piece of work. A piece of work is not the same thing as a PR: it may begin as an issue, gain a PR, and have that PR thrown away and replaced. The record names the issue, if there is one, and the PR that currently carries the work, if there is one. It holds whether there is a design step, the gate, the state, the ask, the questions, how to test, when the turn last changed, each gate's approval (or that it was skipped), the round count per gate, the reason for the last move back, the head commit prep finished on, and a version number.
 
 **The version goes up on `pr-status set` and on nothing else.** A claim changes the state and the ask (see "How answers travel") but leaves the version alone. That one rule carries three others: an answer is to one version, and a version takes one answer; "picked up, but nothing since" means the version hasn't moved since the claim; and the end-of-turn hook is satisfied only by a version that went up, so claiming an answer and then doing nothing doesn't pass it.
 
-Work can start on an issue. When its PR opens, the first status written for the PR moves the same record to the PR: it keeps its approvals, its log and its answers, and only the number it is filed under changes. The link is the PR's `Closes #N` or `Refs #N`, as today. After that, asking the board about the issue's number gives the PR's record, so a watcher started on the issue still gets its answers.
+Work can start on an issue. When its PR opens, the first status written for the PR attaches the PR to the same record: it keeps its approvals, its log and its answers. The link is the PR's `Closes #N` or `Refs #N`, as today. Asking the board about either number gives the same record, so a watcher started on the issue still gets its answers.
 
-A record ends when GitHub says the PR merged or closed, or the issue closed. The board keeps it, and its log, for the history.
+**Replacing a PR.** Claude can attach a new PR to a record in place of the old one (`--replaces <old PR>`). The record keeps its approvals unless Claude also moves it back a gate. This covers a PR that is scrapped and rebuilt, and one that is split, where the remainder gets a record of its own.
+
+**A trial PR.** Live code is often easier to try than a preview or a mockup, so Claude may open a PR whose code is only there to be tried and will be thrown away. The status command marks it (`--trial`). A trial:
+
+- is shown on its card as "trial, not for merging";
+- can never show "ready for merge", and the command refuses `--gate prep` on it;
+- gets the label `trial` on GitHub, and Claude opens it as a draft, so the PR list and GitHub's own merge button say the same thing.
+
+When the trial has done its job, Claude closes it, and either the work ends or a real PR replaces it. Danyel merged too early five times in the six weeks checked; a trial must not be the sixth. (Claude's call, for Danyel to confirm.)
+
+**When a record ends.** When its PR merges, from any gate. Danyel sometimes merges before prep, and the board doesn't complain; the log says which gate it was in. When its PR closes unmerged and nothing replaces it, or its issue closes with no PR, the record ends too. The board keeps ended records, and their logs, for the history.
 
 Every change to a record adds a line to a log table: when, who (Claude's status command, Danyel's answer, a claim, the Mac service, the one-off pass at the switch), and what changed. It is for working out what happened to one item, and later for the timeline. The board never reads it to decide what to show.
 
@@ -119,11 +133,14 @@ pr-status set <owner/repo#N | #N> \
   --ask "one line" \
   --question "Colour of the button? (**red** | green)" \
   --to-test "what to open, what to try, what should happen" \
-  --reason "why this goes back to an earlier gate"
+  --reason "why this goes back to an earlier gate" \
+  --no-design            (first status only: this work has no design step) \
+  --trial                (this PR's code is only for trying, and won't be merged) \
+  --replaces <old PR>    (this PR takes over the old one's record)
 ```
 
 - `--gate` and `--state` are required. They replace `--waiting`: whose turn it is follows from the state, so the two can't disagree.
-- It refuses: paused with no question; a question with no bold default; complete at Implementation with no `--to-test`; parked with no `--ask` saying what it waits on; forward past an unapproved gate; back without `--reason`; anything with a line break in it.
+- It refuses: paused with no question; a question with no bold default; complete at Implementation with no `--to-test`; parked with no `--ask` saying what it waits on; forward past an unapproved gate; back without `--reason`; `--gate prep` on a trial; anything with a line break in it.
 - Handing a PR to Danyel (paused or complete) still asks for his review on GitHub the first time, and again when it comes back to him after more work, so GitHub notifies him.
 - `pr-status ok <ref>` still says "I touched this, and the status is still right". It now records that on the board (a time on the record and a line in the log), not in a file on the Mac. On an item with no record it fails and says to run `set`. `show` prints the record.
 
@@ -289,6 +306,8 @@ A fourth idea, having the board work the gate out from clues on GitHub so that C
 ## Decided by Danyel
 
 - Three gates: Design, Implementation, Prep for merge. Each is Claude working or complete; Design and Implementation are then approved by him; Prep ends at ready for merge.
+- Design is optional, chosen per piece of work.
+- A PR may be spun up to try something live and then thrown away.
 - The lights show where in the flow a PR is. Progress is forward by default; going back is allowed and deliberate.
 - Only he merges, on GitHub. The board has no merge button and Claude has no permission to merge.
 - Claude writes the gate down; the board doesn't guess it.
@@ -311,11 +330,18 @@ A fourth idea, having the board work the gate out from clues on GitHub so that C
 - The approval question has no "file an issue" choice; "needs changes" needs a note.
 - "Ready for merge" is drawn from GitHub's facts plus the commit prep finished on.
 - A blocked prep sits in "Waiting on you" in red.
-- The status command refuses to go forward past an unapproved gate; work may start at Implementation but not at Prep.
+- The status command refuses to go forward past an unapproved gate; nothing starts at Prep.
 - A log table of every change.
 - Claude signs in with a Cloudflare Access service token.
 - The Worker writes the labels and corrects them whenever it reads.
 - An open PR with no record shows as "No status written" in "Waiting on you".
+- An approval can carry a note; every card has a note box all the time.
+- A PR can be replaced and keep its record; a merge or close from any gate ends the record without complaint.
+- Trial PRs: marked, never shown as ready, opened as drafts with a `trial` label.
+
+## Checked against the past
+
+On 2026-11-20 an agent read about 2,000 of Danyel's typed messages from 9 October to 20 November and followed about 20 torahmap and pr-board PRs. The skeleton held: "prep N for merge" (about 25 times) is the Implementation approval, choosing among options is the Design approval, and Claude's numbered questions are the paused state. Three cases showed the gates catching real mistakes: a PR built past a design he "never okayed" (429), five early merges, and an approval the old board forgot (626). The misfits it found are why this document has an approval that carries a note, a note box on every card, optional design, replaceable and trial PRs, and a record that ends quietly on any merge or close. The sample was excerpts from 11 sessions, nearly all one repo, and the counts are rough.
 
 ## Left to the builder
 
