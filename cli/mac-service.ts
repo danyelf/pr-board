@@ -21,7 +21,7 @@ import { parseStatus } from '../src/shared/status.ts';
 import { claim, claudeReactions, describe, react, unreact, waitingAnswers, writeCodeStatus, writtenAt, type Found, type RestComment } from './answers.ts';
 import { OwnerError, flattenPages, gh as realGh, git as realGit, ps as realPs, readItem, readRef, refString, refuseOwner } from './gh.ts';
 import type { Gh, Ref } from './gh.ts';
-import { backoff, message } from './poll.ts';
+import { PARALLEL_READS, backoff, inParallel, message } from './poll.ts';
 
 const MIN = 60_000;
 const USAGE = 'Usage: mac-service [--config <file>] [--dry-run] [--once]';
@@ -293,30 +293,32 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
    * the item on. Marks the answer 😕 and hands the item to the owner, saying so in its status.
    * `ended` is false for the check at startup, when most items had no session that just ended.
    */
-  async function checkEnded(ref: Ref, ended: boolean): Promise<void> {
+  /** Returns true when the session left the item behind, so it was (or, in a dry run, would be) handed back. */
+  async function checkEnded(ref: Ref, ended: boolean): Promise<boolean> {
     const name = refString(ref);
     const item = await readItem<RestComment>(gh, ref);
-    if (!item.open) return;
+    if (!item.open) return false;
     const latest = item.comments.filter((c) => isOwnerAnswer(c.user?.login, c.body)).at(-1);
-    if (!latest) return;
+    if (!latest) return false;
     const kinds = await claudeReactions(gh, ref, latest);
     // Without the 🚀 the claim is an open session's, which this service must leave alone.
-    if (!kinds.has(SERVICE_REACTION) || !kinds.has(CLAIM_REACTION)) return;
+    if (!kinds.has(SERVICE_REACTION) || !kinds.has(CLAIM_REACTION)) return false;
     const status = parseStatus(item.statusText);
     const kind = codeWrittenStatus(status);
-    if (kind === 'gave-up') return;
+    if (kind === 'gave-up') return false;
     const current = answersCurrentStatus({ login: latest.user?.login, body: latest.body, createdAt: latest.created_at }, await writtenAt(gh, ref, item));
     if (kind !== 'service-working' && !current) {
       if (ended) say(name, `the session handed the item on; its status now waits on ${status?.waitingOn ?? 'nobody it says'}.`);
-      return;
+      return false;
     }
     if (dryRun) {
       say(name, `the session ended without handing the item on; would mark ${latest.html_url} 😕 and hand it back to ${OWNER_NAME}.`);
-      return;
+      return true;
     }
     await react(gh, { ref, id: latest.id }, GAVE_UP_REACTION);
     for (const p of await writeCodeStatus(gh, ref, 'owner', GAVE_UP_ASK, logHint(ref), new Date(deps.now()))) warn(name, p);
     warn(name, `the session ended without handing the item on. Marked ${latest.html_url} 😕 and set the status to "${GAVE_UP_ASK}", waiting on ${OWNER_NAME}. This service won't take that answer again. ${logHint(ref)}`);
+    return true;
   }
 
   /** Every open item in the repos that a session of this service could have left: run once at startup, when the process list is all there is. */
@@ -497,12 +499,14 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     if (once) {
       out(`${repo.owner}/${repo.repo}: ${rows.length} open ${rows.length === 1 ? 'item carries' : 'items carry'} "${LABEL_ON_OWNER}"; ${readable.length} with comments read for answers.`);
     }
-    for (const row of readable) {
+    // Read every item first, several at once; then act on them one at a time, so the session count stays right.
+    const toRead = readable.filter((row) => !live.has(refString({ owner: repo.owner, repo: repo.repo, n: row.number })));
+    const reads = await inParallel(toRead, PARALLEL_READS, (row) => waitingAnswers(gh, [{ owner: repo.owner, repo: repo.repo, n: row.number }], out));
+    for (const [i, row] of toRead.entries()) {
       const ref: Ref = { owner: repo.owner, repo: repo.repo, n: row.number };
       const name = refString(ref);
-      if (live.has(name)) continue;
       // One item that can't be read doesn't keep the rest of the repo from being served.
-      const { found: answers, failed: unread } = await waitingAnswers(gh, [ref], out);
+      const { found: answers, failed: unread } = reads[i]!;
       if (unread.length > 0) {
         failed = true;
         for (const line of unread) err(line);
@@ -558,10 +562,13 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       err(`Couldn't list the running processes (${message(e)}), so it can't tell which sessions are running; starting none this time.`);
     }
     if (live) {
+      let atStartup = 0;
       try {
         if (previous === null) {
           if (live.size > 0) out(`Found ${live.size} ${live.size === 1 ? 'session' : 'sessions'} of its own still running: ${[...live.keys()].join(', ')}.`);
-          for (const ref of await itemsToCheckAtStartup(repos, live)) if (!toCheck.has(refString(ref))) toCheck.set(refString(ref), false);
+          const refs = await itemsToCheckAtStartup(repos, live);
+          atStartup = refs.length;
+          for (const ref of refs) if (!toCheck.has(refString(ref))) toCheck.set(refString(ref), false);
         } else {
           for (const name of previous) if (!live.has(name)) toCheck.set(name, true);
         }
@@ -570,16 +577,24 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         failed = true;
         err(`Couldn't look for items its sessions left at startup (${message(e)}); will try again.`);
       }
-      for (const [name, ended] of [...toCheck]) {
+      const checked = await inParallel([...toCheck], PARALLEL_READS, async ([name, ended]) => {
         const ref = readRef(name);
-        if (!('owner' in ref)) continue;
+        if (!('owner' in ref)) return { name, ended, left: false, ok: true };
         try {
-          await checkEnded(ref, ended);
+          const left = await checkEnded(ref, ended);
           toCheck.delete(name);
+          return { name, ended, left, ok: true };
         } catch (e) {
-          failed = true;
           warn(name, `couldn't check whether its session handed the item on (${message(e)}); will try again.`);
+          return { name, ended, left: false, ok: false };
         }
+      });
+      failed ||= checked.some((c) => !c.ok);
+      if (previous !== null && atStartup > 0) {
+        const fromStartup = checked.filter((c) => !c.ended);
+        const left = fromStartup.filter((c) => c.left).map((c) => c.name);
+        const unread = fromStartup.filter((c) => !c.ok).length;
+        out(`Checked ${atStartup} open ${atStartup === 1 ? 'item' : 'items'} for sessions that ended while it was stopped; ${left.length === 0 ? 'none left an item behind' : `${left.length} left an item behind: ${left.join(', ')}`}${unread > 0 ? `; ${unread} couldn't be read and will be checked again` : ''}.`);
       }
       stopLongRunning(live);
       for (const repo of repos) {

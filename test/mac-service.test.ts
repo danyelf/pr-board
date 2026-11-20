@@ -670,6 +670,15 @@ describe('mac-service', () => {
     expect(r.out).toContain('1. Colour? → change');
   });
 
+  it('says at startup how many items it checked for sessions that ended while it was stopped', async () => {
+    const w = new World();
+    w.config();
+    w.item('acme/x#5', 'issue');
+    w.answer('acme/x#5', 1);
+    const r = await run(w, ['--once']);
+    expect(r.out).toContain('Checked 1 open item for sessions that ended while it was stopped; none left an item behind.');
+  });
+
   it('says when there is nothing to do', async () => {
     const w = new World();
     w.config();
@@ -879,6 +888,8 @@ describe('mac-service', () => {
         if (n === 3) stop();
       });
       expect(r.out).toContain('Found 1 session of its own still running: acme/x#5.');
+      // The issues acme/y#7 and acme/x#10, and the labelled PRs acme/x#9 and acme/x#6; acme/x#5 is still running.
+      expect(r.out).toContain('Checked 4 open items for sessions that ended while it was stopped; 1 left an item behind: acme/y#7.');
       expect(w.mine(dead)).toEqual(['confused', 'eyes', 'rocket']);
       expect(w.statusOf('acme/y#7')).toMatchObject({ waitingOn: 'owner', ask: GAVE_UP_ASK });
       expect(w.mine(handled)).toEqual(['eyes', 'rocket']);
