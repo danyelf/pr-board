@@ -38,11 +38,11 @@ export interface MergeBlocker {
 
 /**
  * GitHub calls a PR BLOCKED when a rule it hasn't met stands in the way. When the only open rule is
- * the required approving review, the owner's Merge button supplies it, so that isn't a blocker.
- * Any other BLOCKED is read as failing checks.
+ * the required approving review (a review is required and the checks, if any, all passed), the
+ * owner's Merge button supplies it, so that isn't a blocker. Any other BLOCKED is read as failing checks.
  */
 function onlyAwaitsApproval(f: ItemFacts): boolean {
-  return f.mergeState === 'BLOCKED' && f.reviewDecision === 'REVIEW_REQUIRED';
+  return f.mergeState === 'BLOCKED' && f.reviewDecision === 'REVIEW_REQUIRED' && (f.checksState === null || f.checksState === 'SUCCESS');
 }
 
 /**

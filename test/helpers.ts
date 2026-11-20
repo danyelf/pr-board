@@ -4,7 +4,7 @@ export function facts(over: Partial<ItemFacts> = {}): ItemFacts {
   return {
     repo: 'danyelf/torahmap', number: 1, kind: 'pr', title: 't', url: 'https://github.com/danyelf/torahmap/pull/1',
     labels: [], body: '', createdAt: '2026-11-01T10:00:00-08:00', closedAt: null,
-    isDraft: false, merged: false, mergedAt: null, mergeState: null, reviewDecision: null, headOid: null, behindBase: false,
+    isDraft: false, merged: false, mergedAt: null, mergeState: null, reviewDecision: null, headOid: null, checksState: null, behindBase: false,
     linkedIssue: null, stackedOn: null, stackedOnOpen: false,
     previewUrl: null, addedDocs: [], screenshots: [],
     reviewSha: null, reviewUrl: null, commitsSinceReview: null,

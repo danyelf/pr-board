@@ -45,7 +45,7 @@ const PR_FIELDS = `${COMMON_FIELDS}
   isDraft isCrossRepository merged mergedAt lastEditedAt mergeStateStatus reviewDecision headRefOid headRefName baseRefName
   closingIssuesReferences(first:${CLOSING_ISSUES_PER_PR}){nodes{number repository{nameWithOwner}}}
   files(first:${FILES_PER_PR}){pageInfo{hasNextPage} nodes{path changeType}}
-  commits(last:${COMMITS_PER_PR}){pageInfo{hasPreviousPage} nodes{commit{oid committedDate}}}`;
+  commits(last:${COMMITS_PER_PR}){pageInfo{hasPreviousPage} nodes{commit{oid committedDate statusCheckRollup{state}}}}`;
 
 interface RepoNode { nameWithOwner: string; pushedAt: string; defaultBranchRef: { name: string } | null }
 interface Comment { id?: string; author: { login: string } | null; body: string; url: string; createdAt: string; updatedAt: string }
@@ -63,7 +63,7 @@ interface RawItem {
   headRefName?: string; baseRefName?: string;
   closingIssuesReferences?: Connection<{ number: number; repository: { nameWithOwner: string } | null }> | null;
   files?: Connection<{ path: string; changeType: string }> | null;
-  commits?: Connection<{ commit: { oid: string; committedDate: string } }> | null;
+  commits?: Connection<{ commit: { oid: string; committedDate: string; statusCheckRollup?: { state: string } | null } }> | null;
 }
 interface RepoData {
   openPrs: Connection<RawItem> | null;
@@ -388,7 +388,8 @@ function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
   return {
     ...baseFacts(repo, pr, 'pr', labels, events, comments, extra),
     isDraft: pr.isDraft ?? false, merged: pr.merged ?? false, mergedAt: pr.mergedAt ?? null,
-    mergeState: pr.mergeStateStatus ?? null, reviewDecision: pr.reviewDecision ?? null, headOid: pr.headRefOid ?? null, behindBase: false,
+    mergeState: pr.mergeStateStatus ?? null, reviewDecision: pr.reviewDecision ?? null, headOid: pr.headRefOid ?? null,
+    checksState: commits.at(-1)?.statusCheckRollup?.state ?? null, behindBase: false,
     linkedIssue: closing ?? (refs ? Number(refs[1]) : null),
     stackedOn: stacked ? Number(stacked[1]) : null, stackedOnOpen: false,
     previewUrl,
@@ -415,7 +416,7 @@ function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
   const writtenAt = statusComment ? statusWrittenAt(statusComment.body, statusComment.updatedAt) : null;
   return {
     ...baseFacts(repo, issue, 'issue', labels, events, comments, []),
-    isDraft: false, merged: false, mergedAt: null, mergeState: null, reviewDecision: null, headOid: null, behindBase: false,
+    isDraft: false, merged: false, mergedAt: null, mergeState: null, reviewDecision: null, headOid: null, checksState: null, behindBase: false,
     linkedIssue: null, stackedOn: null, stackedOnOpen: false,
     previewUrl: null, addedDocs: [], screenshots: screenshotsIn(issue.body ?? ''),
     reviewSha: null, reviewUrl: null, commitsSinceReview: null,

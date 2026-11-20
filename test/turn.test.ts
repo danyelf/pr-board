@@ -96,8 +96,13 @@ describe('isReadyToMerge', () => {
   ])('is false when %s', (_n, over) => {
     expect(isReadyToMerge({ ...ready(), ...over }, null)).toBe(false);
   });
-  it('is true when GitHub blocks only for want of a required approving review', () => {
-    expect(isReadyToMerge({ ...ready(), mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' }, status())).toBe(true);
+  it.each([null, 'SUCCESS'])('is true when GitHub blocks only for want of a required approving review (checks: %s)', (checksState) => {
+    expect(isReadyToMerge({ ...ready(), mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED', checksState }, status())).toBe(true);
+  });
+  it.each(['FAILURE', 'ERROR', 'PENDING'])('reads a review-required BLOCKED PR whose checks are %s as failing checks', (checksState) => {
+    const f = { ...ready(), mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED', checksState };
+    expect(isReadyToMerge(f, status())).toBe(false);
+    expect(mergeBlockers(f, status()).map((b) => b.note(f))).toContain('checks failing');
   });
   it.each([null, 'APPROVED', 'CHANGES_REQUESTED'])('reads BLOCKED with review decision %s as failing checks', (reviewDecision) => {
     const f = { ...ready(), mergeState: 'BLOCKED', reviewDecision };
