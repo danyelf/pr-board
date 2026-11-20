@@ -214,6 +214,30 @@ The short tag in a card's header:
 | parked | Parked |
 | answer states | as in the table above |
 
+### Two views
+
+A switch at the top of the page chooses between two views of the same cards. The choice is kept in the address, so a bookmark or a reload keeps it.
+
+- **By whose turn** (the sections above). Cards move between sections as their state changes. Good for "what is waiting on me".
+- **Everything, in a steady order.** One list of every open item that has a record, plus open PRs with none. The order is when the work started, newest first, and never depends on the state, so nothing jumps when Danyel sends an answer: the card stays where it is and its gates change colour. Each row's gates are the light that says whose turn it is. The Backlog stays a separate list below. (Claude's calls: what the list holds and its order. This takes in issue #19.)
+
+### A live page
+
+The first board was plain HTML with no script, under a policy that forbade nearly everything. Every answer reloaded the whole page, and nothing updated by itself. That was safe and annoying. The new page is a small program running in the browser:
+
+- **Sending answers doesn't reload the page.** The card shows it is sending, then shows its new state in place. A refusal (the status changed since the page was drawn, for example) appears on the card, with the fresh questions.
+- **The page keeps itself current.** About every 30 seconds it asks the board for the current state and updates cards and rows in place. It never touches a card Danyel is in the middle of answering (a choice changed or a note typed and not yet sent); that card gets a small "this changed, reload it" line. It stops asking while the tab is hidden. (This takes in issue #20.)
+- **Ctrl+Enter or Cmd+Enter in a card sends its answers.** (Issue #17.)
+
+The security that replaces "no script at all":
+
+- **Only the board's own script runs.** The script is a file served by the Worker. The page's policy allows scripts and requests from the board's own address and nowhere else, with no inline script and nothing from other sites. Images still load over https, for screenshots.
+- **Text from outside is always shown as text.** PR titles, asks, questions, notes and anything else that came from GitHub or from Claude are put on the page as text, never as HTML, so nothing in a title or a note can run.
+- **Every request that changes something** must come from the board's own address, be signed in through Access, and carry a JSON body, which a form on another site can't send. The Worker checks all three.
+- **Danyel's sign-in and Claude's service token stay separate**, as above: the page's script can answer and approve, and can't write a status.
+
+The page still works without the Mac, and a failed refresh shows a small "couldn't refresh" line with the time of the last good one, not a stale page that looks current.
+
 **An open PR with no record** still appears, in "Waiting on you", tagged "No status written". The board keeps listing the open PRs of every repo it covers, so a PR that Claude opened and forgot can't hide. Open issues with no record are the Backlog, as now.
 
 ## Labels on GitHub
@@ -233,7 +257,7 @@ The board reads its own database fresh on every page load, so an answer Danyel j
 
 ## The Worker's GitHub token
 
-The Worker no longer posts anything as Danyel. It reads, and it sets labels. So it can run on Claude's account's token (danyel-claude) instead of Danyel's own (Claude's call, for Danyel to confirm). Danyel's token then isn't stored in the Worker at all. The cost: danyel-claude sees only the repos it is a collaborator on, so the board covers those, which are the repos Claude works in. Checked on 2026-11-20: it has write access, which setting labels needs, to `danyelf/torahmap`, `danyelf/pr-board`, `danyelf/danyelfisher.info` and `danyelf/ieeevis-scrape`.
+The Worker no longer posts anything as Danyel. It reads, and it sets labels. So it runs on Claude's account's token (danyel-claude) instead of Danyel's own (Danyel agreed, 2026-11-20). Danyel's token then isn't stored in the Worker at all. The cost: danyel-claude sees only the repos it is a collaborator on, so the board covers those, which are the repos Claude works in. Checked on 2026-11-20: it has write access, which setting labels needs, to `danyelf/torahmap`, `danyelf/pr-board`, `danyelf/danyelfisher.info` and `danyelf/ieeevis-scrape`.
 
 The board lists a repo when the token can see it and it was pushed to in the last 60 days, as now, or when it has an open record, so work in a quiet repo doesn't drop off the page.
 
@@ -244,7 +268,7 @@ The board lists a repo when the token can see it and it was pushed to in the las
 - Answer comments, the 👀 🚀 😕 reactions, and the fingerprint.
 - The `🤖 Claude: prep for merge` comment as a signal, and the "reviewed" note read from review comments. The prep skill may keep posting its review on the PR for Danyel to read; the board doesn't read it.
 - The Issue box. The linked issue stays as a link on the card.
-- PR #22 is closed unmerged; issue #21 is closed by this work.
+- PR #22 is closed unmerged; issues #17, #19, #20 and #21 are closed by this work.
 
 ## Moving over
 
@@ -272,8 +296,15 @@ A fourth idea, having the board work the gate out from clues on GitHub so that C
 - Labels on GitHub show the gate, `on danyel` and `ready to merge`.
 - His way to push back is a note. No "back a gate" button for now.
 - Nothing has to stay compatible with what exists.
+- The board covers only the repos danyel-claude can reach, and runs on its token.
+- A switch to a view of everything, so that cards don't jump when he answers.
+- A live page with real security, not a script-free one.
 
 ## Claude's calls, for Danyel to confirm
+
+- What the "everything" view holds and its order (when the work started, newest first).
+- How the live page behaves: answers sent in place, a refresh every 30 seconds that leaves a card he is answering alone, Ctrl+Enter to send.
+- The page's security rules: only the board's own script, outside text shown as text, and the three checks on every change.
 
 - The four states, and "paused" as a blue gate with an amber badge.
 - `--state` replaces `--waiting`.
@@ -284,7 +315,6 @@ A fourth idea, having the board work the gate out from clues on GitHub so that C
 - A log table of every change.
 - Claude signs in with a Cloudflare Access service token.
 - The Worker writes the labels and corrects them whenever it reads.
-- The Worker runs on danyel-claude's token.
 - An open PR with no record shows as "No status written" in "Waiting on you".
 
 ## Left to the builder
