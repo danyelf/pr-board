@@ -9,6 +9,7 @@
   "pollSeconds": 60,
   "logDir": "~/.pr-board/logs",
   "tokenFile": "~/.config/claude-github/token",
+  "claudeTokenFile": null,
   "claude": "~/.local/bin/claude",
   "claudeArgs": []
 }

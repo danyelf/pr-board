@@ -332,7 +332,7 @@ describe('loadConfig', () => {
     expect(c).toEqual({
       repos: [{ owner: 'acme', repo: 'x', clone: `${HOME}/code/x` }],
       graceMs: 5 * MIN, maxSessions: 2, sessionMs: 60 * MIN, pollMs: POLL,
-      logDir: `${HOME}/.pr-board/logs`, tokenFile: TOKEN_PATH, claude: CLAUDE, claudeArgs: [],
+      logDir: `${HOME}/.pr-board/logs`, tokenFile: TOKEN_PATH, claudeTokenFile: null, claude: CLAUDE, claudeArgs: [],
     });
   });
 
@@ -347,9 +347,9 @@ describe('loadConfig', () => {
   it('takes every setting from the file', () => {
     const c = loadConfig(JSON.stringify({
       repos: [{ repo: 'acme/x', clone: '/src/x' }], graceMinutes: 3, maxSessions: 1, sessionMinutes: 20, pollSeconds: 30,
-      logDir: '/var/log/b', tokenFile: '/etc/t', claude: '/opt/claude', claudeArgs: ['--permission-mode', 'acceptEdits'],
+      logDir: '/var/log/b', tokenFile: '/etc/t', claudeTokenFile: '~/c', claude: '/opt/claude', claudeArgs: ['--permission-mode', 'acceptEdits'],
     }), HOME, CONFIG_PATH);
-    expect(c).toMatchObject({ graceMs: 3 * MIN, maxSessions: 1, sessionMs: 20 * MIN, pollMs: 30_000, logDir: '/var/log/b', tokenFile: '/etc/t', claude: '/opt/claude', claudeArgs: ['--permission-mode', 'acceptEdits'] });
+    expect(c).toMatchObject({ graceMs: 3 * MIN, maxSessions: 1, sessionMs: 20 * MIN, pollMs: 30_000, logDir: '/var/log/b', tokenFile: '/etc/t', claudeTokenFile: `${HOME}/c`, claude: '/opt/claude', claudeArgs: ['--permission-mode', 'acceptEdits'] });
   });
 
   it.each([
@@ -570,6 +570,35 @@ describe('mac-service', () => {
     expect(w.started).toHaveLength(0);
     expect(w.claims()).toHaveLength(0);
     expect(r.err).toContain(`${TOKEN_PATH} is missing or empty`);
+  });
+
+  it('gives the session the Claude sign-in token from claudeTokenFile, and none without the setting', async () => {
+    const w = new World();
+    w.config({ claudeTokenFile: '~/.config/claude-code/oauth-token' });
+    w.files.set(`${HOME}/.config/claude-code/oauth-token`, 'oat-456\n');
+    w.item('acme/x#5');
+    w.answer('acme/x#5', 6);
+    await run(w, ['--once']);
+    expect(w.started[0]!.opts.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('oat-456');
+
+    const plain = new World();
+    plain.config();
+    plain.item('acme/x#5');
+    plain.answer('acme/x#5', 6);
+    await run(plain, ['--once']);
+    expect(plain.started[0]!.opts.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
+  it.each([['missing', undefined], ['empty', '  \n']])('does not start a session when claudeTokenFile is set but %s, and leaves the answer unclaimed', async (_, text) => {
+    const w = new World();
+    w.config({ claudeTokenFile: '/c/oauth-token' });
+    if (text !== undefined) w.files.set('/c/oauth-token', text);
+    w.item('acme/x#5');
+    w.answer('acme/x#5', 6);
+    const r = await run(w, ['--once']);
+    expect(w.started).toHaveLength(0);
+    expect(w.claims()).toHaveLength(0);
+    expect(r.err).toContain('/c/oauth-token is missing or empty, so the session couldn\'t sign in to Claude');
   });
 
   describe('a claimed answer is never silently lost', () => {
