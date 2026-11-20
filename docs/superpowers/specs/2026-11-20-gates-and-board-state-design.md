@@ -1,0 +1,297 @@
+# PR Board: three gates, and the board holds the workflow
+
+Date: 2026-11-20. Status: draft for Danyel's review.
+
+This replaces the parts of `2026-11-05-pr-board-design.md` that cover the stage strip, the status section, the turn labels, how answers travel and how they are claimed. Where the two disagree, this one wins. The older document's goals, its page sections (Waiting on you, On Claude, Quiet, Backlog) and its "Left for later" list still stand.
+
+## Why
+
+Two things went wrong with the first design.
+
+**The lights didn't say where a PR was.** The strip had six boxes (Issue, Design, Build, Your look, Prep, Ready for merge) that mixed three kinds of thing: steps of the work, whose turn it was, and facts about GitHub. "Your look" was one box for every approval Danyel ever gave. torahmap#626 was prepped and mergeable, and its card still said "Needs your look" and asked the look question again. Danyel wants to glance down the page and see at once what is ready to merge, and where everything else is.
+
+**GitHub was being used as a message queue.** GitHub is the right home for what it owns: the PR, its commits, its checks, whether it can merge. The first design also stored the workflow there. The ask was text inside the PR description that the board parsed. Whose turn it was lived in a label and again in that text, so the board needed a "label out of sync" state. Danyel's answers were specially formatted comments posted from his account. Sessions claimed them with a 👀 reaction, the Mac service with 🚀, and a failure was 😕. Each answer carried a fingerprint so it couldn't land on changed questions. Most of the bugs and odd states came from this. Danyel doesn't read any of it on GitHub; he reads the board, and on GitHub he scans the PR list and its labels.
+
+## Goals
+
+- One glance at a card says which gate the PR is in and whether it is Claude's or Danyel's. One glance down the page says what is ready to merge.
+- The workflow has one record, in one place, so nothing can disagree with anything else.
+- Only Danyel approves a gate, and only Danyel merges, on GitHub.
+- The PR list on GitHub stays useful to scan: labels say the gate, whether it is waiting on Danyel, and whether it is ready to merge.
+
+## Non-goals
+
+- Keeping the old strip, the old status section, or the old answer comments readable. Nothing has to stay compatible.
+- The timeline, the activity upload, "File an issue" and "Pick up". They stay on the later list.
+- A way for Danyel to send a PR back a gate from the board. He writes a note; Claude decides whether the note means going back.
+- Showing the status on the PR page on GitHub.
+
+## Anti-goals
+
+- The board shows something as fine when it is waiting on Danyel. (Unchanged, and still the first rule.)
+- A card shows "ready for merge" when GitHub would refuse the merge, or when the code changed after prep.
+- Claude ends a turn having touched a PR without the board's record being right.
+- The board is unreachable and Claude carries on silently. A status that couldn't be written must stop the turn and be said out loud.
+- The tool spends tokens while nothing is happening.
+
+## What lives where
+
+| What | Where |
+|---|---|
+| The PR, commits, checks, conflicts, whether it can merge, whether it merged | GitHub, read fresh by the board |
+| The gate, the state inside it, approvals, the ask, questions, how to test | The board's database (Cloudflare D1) |
+| Danyel's answers and who picked each one up | The board's database |
+| A log of every change to a record | The board's database |
+| Labels on GitHub | A copy the board writes. Nothing reads them back. |
+| Running Mac sessions | The process list, as now |
+
+## The model
+
+### Three gates
+
+**Design → Implementation → Prep for merge**, in that order. A piece of work is in exactly one gate.
+
+Inside a gate, Claude writes one of four states:
+
+| State | Meaning | Whose turn | Colour |
+|---|---|---|---|
+| working | Claude is on it | Claude | blue |
+| paused | Claude stopped to ask questions and can't go on without the answers | Danyel | blue, with an amber "N questions" badge |
+| complete, at Design or Implementation | Claude has finished the gate's work | Danyel | amber |
+| complete, at Prep | prep has run | Danyel | green when it can merge, red when it can't (see Prep below) |
+| parked | waiting on something outside both of them | nobody | grey |
+
+What "complete" asks of Danyel depends on the gate:
+
+| Gate complete | Danyel's choices |
+|---|---|
+| Design | **approve, build it** · needs changes |
+| Implementation | **looks good, prep for merge** · needs changes |
+| Prep for merge | no approval. A link to merge on GitHub, and "needs changes" for a last-minute problem |
+
+- **Approve** records the approval, with its time, against the gate. The gate shows ✓ approved from that moment. Only an answer from Danyel on the board can record an approval.
+- **Needs changes** must come with a note. The gate stays where it is and the note goes to Claude.
+- Any card waiting on Danyel also has a free-text note box, and Claude reads the note whatever the choices say.
+- Claude's own questions keep the rules Danyel set: numbered, each with choices, one default in bold, and a "file an issue" choice that means "take the default and file the question for later". The approval question has no "file an issue" choice (Claude's call: an approval can't be deferred).
+- A complete gate may carry questions too. Danyel answers them and the approval together.
+
+### Prep for merge, and what "ready" means
+
+When Claude marks Prep complete, the status command records the PR's head commit. The board then draws the gate from GitHub's facts, not from Claude's word:
+
+- **Ready for merge** (green): the head commit is still the one prep finished on, and GitHub says the PR can merge. GitHub's "blocked" counts as mergeable when the only thing missing is a required approving review and the checks have passed, because Danyel supplies that review when he merges.
+- **Can't merge yet: reason** (red): anything else. The reasons are the ones the board already knows: commits since prep, conflicts, checks failing or still running, behind main, draft, stacked on an open PR, GitHub still checking.
+
+Both sit in "Waiting on you". A red card has the note box, so Danyel can send it back with one line.
+
+To judge this the Worker reads, for each PR, GitHub's merge status, its review decision, and the combined result of the head commit's checks. "Blocked" with "review required" and checks that passed (or no checks at all) is mergeable. Every other "blocked" is red, as "GitHub is blocking the merge". GitHub doesn't say which rule is blocking, so one case can't be told apart: a repo that requires a review and also has a second rule that is unmet would show green. None of Danyel's repos has such a rule today. If one gains one, this needs revisiting.
+
+Prep needs a PR: the command refuses `--gate prep` on an issue.
+
+### Going forward, going back, and rounds
+
+- **Forward** needs the earlier gate approved. The status command refuses to move a record to Implementation while Design is unapproved, or to Prep while Implementation is unapproved.
+- **A small piece of work may start at Implementation.** Its Design gate shows a dash. Nothing may start at Prep.
+- **Back** is Claude's move, and deliberate: moving a record to an earlier gate needs a reason, which the card shows. The approvals of that gate and every later one are cleared. Later gates that had been started show dimmed as "on hold".
+- **Rounds.** Each time a gate is handed to Danyel as complete counts as a round, whether it came back after "needs changes" or after being reopened from a later gate. From the second on, the gate says "round 2", and so on.
+- **Answers are kept.** Going back clears the approvals on the record, but the answer rows that gave them stay, as history.
+
+### The record
+
+One record per piece of work, keyed by repo and number. It holds the gate, the state, the ask, the questions, how to test, when the turn last changed, each gate's approval (or that it was skipped), the round count per gate, the reason for the last move back, the head commit prep finished on, and a version number.
+
+**The version goes up on `pr-status set` and on nothing else.** A claim changes the state and the ask (see "How answers travel") but leaves the version alone. That one rule carries three others: an answer is to one version, and a version takes one answer; "picked up, but nothing since" means the version hasn't moved since the claim; and the end-of-turn hook is satisfied only by a version that went up, so claiming an answer and then doing nothing doesn't pass it.
+
+Work can start on an issue. When its PR opens, the first status written for the PR moves the same record to the PR: it keeps its approvals, its log and its answers, and only the number it is filed under changes. The link is the PR's `Closes #N` or `Refs #N`, as today. After that, asking the board about the issue's number gives the PR's record, so a watcher started on the issue still gets its answers.
+
+A record ends when GitHub says the PR merged or closed, or the issue closed. The board keeps it, and its log, for the history.
+
+Every change to a record adds a line to a log table: when, who (Claude's status command, Danyel's answer, a claim, the Mac service, the one-off pass at the switch), and what changed. It is for working out what happened to one item, and later for the timeline. The board never reads it to decide what to show.
+
+## How Claude talks to the board
+
+The status command stays one command, with the same name, and now writes to the board:
+
+```
+pr-status set <owner/repo#N | #N> \
+  --gate design|implementation|prep \
+  --state working|paused|complete|parked \
+  --ask "one line" \
+  --question "Colour of the button? (**red** | green)" \
+  --to-test "what to open, what to try, what should happen" \
+  --reason "why this goes back to an earlier gate"
+```
+
+- `--gate` and `--state` are required. They replace `--waiting`: whose turn it is follows from the state, so the two can't disagree.
+- It refuses: paused with no question; a question with no bold default; complete at Implementation with no `--to-test`; parked with no `--ask` saying what it waits on; forward past an unapproved gate; back without `--reason`; anything with a line break in it.
+- Handing a PR to Danyel (paused or complete) still asks for his review on GitHub the first time, and again when it comes back to him after more work, so GitHub notifies him.
+- `pr-status ok <ref>` still says "I touched this, and the status is still right". It now records that on the board (a time on the record and a line in the log), not in a file on the Mac. On an item with no record it fails and says to run `set`. `show` prints the record.
+
+The board gets a small HTTP interface for this, under its own path, on the same Worker and behind the same Access application as the page. Claude's side signs in with a Cloudflare Access service token (a client id and secret that Access checks), kept in a file on the Mac that only Danyel's user can read. The application gets a second policy, of the "Service Auth" kind, that admits that token. Service tokens expire (a year by default, or never if set so when created); when one has expired the command fails with its ⚠️ message, and the README says how to make a new one. The Worker tells the two callers apart from what Access vouches for: Danyel's Google sign-in may answer and approve; the service token may write statuses, read and claim answers. Neither may do the other's part.
+
+If the board can't be reached, or refuses, the command fails with a message beginning ⚠️ and Claude tells Danyel. It never falls back to writing somewhere else.
+
+### The end-of-turn hook
+
+Unchanged in purpose: when a turn pushed to a PR's branch, commented on a PR or issue, or opened one, the hook checks that the item's record was written (its version went up) or confirmed with `ok` during the turn, and blocks the stop if not. It now asks the board instead of GitHub. If it can't reach the board it blocks once with a ⚠️ message saying so, and doesn't pass silently.
+
+## How answers travel
+
+1. Danyel picks choices on a card and presses **Send answers**. The Worker writes one answer row: the item, the version of the status it answers, the choice for each question, the approval choice if the gate was complete, the note, and the time. It refuses if the record's version is no longer the one the page was drawn from, if the item is closed, or if that version already has an answer. An approval is recorded in the same step.
+2. The card moves to "On Claude" as "answered, waiting for Claude to pick it up". If the answer approved a gate, that gate shows ✓ and the next one shows the same waiting line.
+3. **The session that handed the item over picks it up.** Its background watcher asks the board about once a minute for answers to the items it handed over. When it finds one it claims it, prints it and exits, which wakes the session. The claim is one database update that succeeds only if nobody has claimed the answer, and in the same step sets the record to working with the ask "Working on your answers". The watcher still never exits on a timer or an error, and still costs no tokens while it waits. Anything holding the service token is allowed to claim; what keeps sessions out of each other's way is that a watcher asks only about the items its own session handed over, and that a claim can succeed once. The claim records who made it (the session, or the Mac service).
+4. **If no session claims it within 5 minutes of the answer being sent**, the Mac service claims it the same way, marked as its own, starts a fresh `claude -p` session in the item's worktree with the answers in the prompt, and sets the ask to "A Mac session is working on your answers".
+5. **If that session ends without writing a new status**, the service marks the answer "gave up" and sets the record back to Danyel in the same gate, with where the session's output is. The card says "A session tried and gave up" and offers the form again. There is no automatic retry.
+
+The states Danyel sees are the ones already agreed, now read from the answer row instead of from reactions:
+
+| Answer row | Board |
+|---|---|
+| unclaimed, under 10 min | On Claude: answered, waiting for Claude to pick it up |
+| unclaimed, 10 min on | top: Answered, not picked up |
+| claimed by a session | On Claude: Claude is working on your answers |
+| claimed, and no new status 10 min on, or still "Working on your answers" an hour on | top: Picked up, but nothing since |
+| claimed by the Mac service | On Claude: Mac session working on it (the service stops a session at its time limit, an hour by default, and that becomes "gave up") |
+| gave up | top: A session tried and gave up |
+
+What Claude does with an answer:
+
+- **approve, build it**: start Implementation (`--gate implementation --state working`).
+- **looks good, prep for merge**: run the prep-for-merge skill, which starts with `--gate prep --state working` and ends with `--state complete`, or `--state paused` with questions when a decision is Danyel's.
+- **needs changes**: read the note. Stay in the gate, or go back with `--reason` when the note shows an earlier gate was wrong.
+- A question's own choice, and "file an issue": as today.
+
+## The Mac service
+
+Same job, simpler inside. It asks the board for unclaimed answers older than its grace period, instead of reading every labelled item on GitHub. Everything it used to record with reactions is a column on the answer row. It still finds its own sessions in the process list by the name it starts them with, still has no state file, still does everything that can fail before it claims, still acts as Claude's account in the sessions it starts, and still logs every line about an item with that item first. Its worktree rules, time limit, limit of two sessions, dry run and stopping rules are unchanged.
+
+## The page
+
+The sections stay: Waiting on you (oldest wait first), On Claude, Quiet, Backlog. A card keeps its links, its questions with the default standing out, how to test, the note box, Send answers, and its files. The six-box strip is replaced by the three gates.
+
+```
+#626 Tools state                                   Ready to merge · 3 h
+┌─────────────┬──────────────────┬──────────────────────────┐
+│ DESIGN      │ IMPLEMENTATION   │ PREP FOR MERGE           │
+│ ✓ approved  │ ✓ approved       │ ● ready for merge        │   green
+└─────────────┴──────────────────┴──────────────────────────┘
+  Merge on GitHub →                       needs changes: [ note ]
+
+#573 Pinned verses                              1 question for you · 2 h
+┌─────────────┬──────────────────────────┬──────────────────┐
+│ DESIGN      │ IMPLEMENTATION           │ PREP FOR MERGE   │
+│ ✓ approved  │ Claude paused            │ ·                │   blue, amber badge
+│             │ (1 question)             │                  │
+└─────────────┴──────────────────────────┴──────────────────┘
+
+#580 Search box                         Design ready for your approval · 1 d
+┌──────────────────────────┬──────────────────┬──────────────────┐
+│ DESIGN                   │ IMPLEMENTATION   │ PREP FOR MERGE   │
+│ complete: your approval  │ ·                │ ·                │   amber
+│ round 2                  │                  │                  │
+└──────────────────────────┴──────────────────┴──────────────────┘
+  [ approve, build it ]  [ needs changes ]   note: ________
+
+#564 Layout                                         Claude designing
+┌──────────────────────────┬──────────────────┬──────────────────┐
+│ DESIGN                   │ IMPLEMENTATION   │ PREP FOR MERGE   │
+│ Claude working, round 2  │ on hold          │ ·                │   blue; dimmed
+│ reopened: "the grid      │                  │                  │
+│ can't hold long titles"  │                  │                  │
+└──────────────────────────┴──────────────────┴──────────────────┘
+```
+
+The short tag in a card's header:
+
+| Situation | Tag |
+|---|---|
+| paused | N question(s) for you |
+| Design complete | Design ready for your approval |
+| Implementation complete | Ready for your look |
+| Prep complete and mergeable | Ready to merge |
+| Prep complete, not mergeable | Can't merge yet: reason |
+| working | Claude designing / building / prepping |
+| parked | Parked |
+| answer states | as in the table above |
+
+**An open PR with no record** still appears, in "Waiting on you", tagged "No status written". The board keeps listing the open PRs of every repo it covers, so a PR that Claude opened and forgot can't hide. Open issues with no record are the Backlog, as now.
+
+## Labels on GitHub
+
+The board keeps these labels on each item with a record, as a copy:
+
+- one of `gate: design`, `gate: implementation`, `gate: prep`
+- `on <owner>` while it is Danyel's turn
+- `ready to merge` while the card is green
+- `parked` while parked
+
+`in-progress` stays as it is, set by whoever picks the item up; the board doesn't manage it.
+
+The Worker sets the labels when a record changes. `ready to merge` also depends on GitHub (checks finishing), which no record change announces, so every time the board fetches an item from GitHub it compares the labels with what they should be and corrects them. A wrong label therefore fixes itself within a page load or two, and is never shown as a problem.
+
+The board reads its own database fresh on every page load, so an answer Danyel just sent shows at once. What it fetched from GitHub may be up to a minute old, as now, and labels are corrected only on a fresh fetch, so a page load never writes to GitHub more than once a minute per item.
+
+## The Worker's GitHub token
+
+The Worker no longer posts anything as Danyel. It reads, and it sets labels. So it can run on Claude's account's token (danyel-claude) instead of Danyel's own (Claude's call, for Danyel to confirm). Danyel's token then isn't stored in the Worker at all. The cost: danyel-claude sees only the repos it is a collaborator on, so the board covers those, which are the repos Claude works in. Checked on 2026-11-20: it has write access, which setting labels needs, to `danyelf/torahmap`, `danyelf/pr-board`, `danyelf/danyelfisher.info` and `danyelf/ieeevis-scrape`.
+
+The board lists a repo when the token can see it and it was pushed to in the last 60 days, as now, or when it has an open record, so work in a quiet repo doesn't drop off the page.
+
+## What goes away
+
+- The status section in PR descriptions and the status comment on issues, with its hidden data line and the "status edited by hand" tag.
+- Turn labels as the record of whose turn it is, and "label out of sync".
+- Answer comments, the 👀 🚀 😕 reactions, and the fingerprint.
+- The `🤖 Claude: prep for merge` comment as a signal, and the "reviewed" note read from review comments. The prep skill may keep posting its review on the PR for Danyel to read; the board doesn't read it.
+- The Issue box. The linked issue stays as a link on the card.
+- PR #22 is closed unmerged; issue #21 is closed by this work.
+
+## Moving over
+
+- Built on a branch and switched over once. There is no period where some of the state is in the database and some on GitHub.
+- A one-off pass at the switch: Claude reads each open PR and labelled issue and proposes its gate, state, approvals and ask. Danyel approves the list before anything is written. This pass is the only thing allowed to record approvals without a board answer.
+- The same pass removes the old status sections from open PR descriptions and deletes the old status comments on open issues.
+- The `pr-status` and `prep-for-merge` skills are rewritten for the new command. The skills Claude uses to brainstorm and design say to write `--gate design`.
+- Danyel's part: create the Access service token and its policy in the Cloudflare dashboard, create the D1 database (or approve Claude doing it with wrangler), and change the Worker's GitHub token if he agrees to the change above.
+
+## Approaches considered
+
+1. **Move the whole workflow into the board's database at once (chosen by Danyel).** Biggest rewrite, since the status command, the watcher, the hook, the Mac service and the page all change. Each part gets simpler and nothing is left half in the old scheme.
+2. **Move the status first and leave answers on GitHub.** Gates on the board sooner, but the answer comments and reactions, which caused the most trouble, would stay, and the state would be split between two places for a while.
+3. **Keep GitHub as the store and add the gate to the status section.** Smallest change. It adds weight to the part being replaced. Ruled out.
+
+A fourth idea, having the board work the gate out from clues on GitHub so that Claude writes nothing new, was dropped earlier: Danyel's workflow opens the PR during design, so nothing on GitHub tells Design from Implementation.
+
+## Decided by Danyel
+
+- Three gates: Design, Implementation, Prep for merge. Each is Claude working or complete; Design and Implementation are then approved by him; Prep ends at ready for merge.
+- The lights show where in the flow a PR is. Progress is forward by default; going back is allowed and deliberate.
+- Only he merges, on GitHub. The board has no merge button and Claude has no permission to merge.
+- Claude writes the gate down; the board doesn't guess it.
+- The workflow moves off GitHub into the board's database, all at once.
+- Labels on GitHub show the gate, `on danyel` and `ready to merge`.
+- His way to push back is a note. No "back a gate" button for now.
+- Nothing has to stay compatible with what exists.
+
+## Claude's calls, for Danyel to confirm
+
+- The four states, and "paused" as a blue gate with an amber badge.
+- `--state` replaces `--waiting`.
+- The approval question has no "file an issue" choice; "needs changes" needs a note.
+- "Ready for merge" is drawn from GitHub's facts plus the commit prep finished on.
+- A blocked prep sits in "Waiting on you" in red.
+- The status command refuses to go forward past an unapproved gate; work may start at Implementation but not at Prep.
+- A log table of every change.
+- Claude signs in with a Cloudflare Access service token.
+- The Worker writes the labels and corrects them whenever it reads.
+- The Worker runs on danyel-claude's token.
+- An open PR with no record shows as "No status written" in "Waiting on you".
+
+## Left to the builder
+
+- The database tables and the shape of the HTTP interface.
+- How the Worker tells Danyel's sign-in from the service token in what Access sends.
+- How the claim is made a single safe step in D1.
+- How the watcher and the Mac service pace their requests and back off.
+- The exact look of the gates, the badge, "on hold" and the phone layout, within the colours above.
+- The order the parts are built in on the branch.
