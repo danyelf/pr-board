@@ -77,6 +77,8 @@ describe('stage strip', () => {
     it('is ready when GitHub blocks only for a required review', () => {
       const awaiting = f({ mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' });
       expect(states(awaiting, status())).toEqual(['done', 'todo', 'done', 'done', 'done', 'ready']);
+      expect(box(awaiting, status(), 'Your look').note).toBe('✓');
+      expect(box(awaiting, status(), 'Prep').note).toBe('✓');
       expect(why(awaiting, status())).toBe('Ready to merge');
     });
     it('is blocked by being a draft', () => {

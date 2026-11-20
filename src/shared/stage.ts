@@ -66,7 +66,7 @@ export function stageStrip(f: ItemFacts, s: Status | null, now: Date = new Date(
   const answered = f.answers.at(-1);
   let look: StageBox;
   if (f.merged || f.prepDone) {
-    look = box('Your look', 'done');
+    look = box('Your look', 'done', '✓');
   } else if (answered) {
     look = box('Your look', 'done', `✓ ${answered.choices[LOOK_KEY] ?? 'answered'}`);
   } else if (turn === 'owner') {
