@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { PAGE_SCRIPTS } from '../src/worker/render.ts';
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from 'jose';
 import { makeHandler, type Env, type Handler } from '../src/worker/index.ts';
 import { GitHubRefused } from '../src/worker/github.ts';
@@ -74,9 +76,13 @@ describe('worker', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
     expect(res.headers.get('Cache-Control')).toBe('no-store');
-    expect(res.headers.get('Content-Security-Policy')).toBe("default-src 'none'; img-src https:; style-src 'unsafe-inline'; form-action 'self'");
+    const hashes = PAGE_SCRIPTS.map((s) => `'sha256-${createHash('sha256').update(s).digest('base64')}'`).join(' ');
+    expect(res.headers.get('Content-Security-Policy')).toBe(`default-src 'none'; img-src https:; style-src 'unsafe-inline'; script-src ${hashes}; form-action 'self'`);
     expect(res.headers.get('Referrer-Policy')).toBe('same-origin');
-    expect(await res.text()).toContain('#1');
+    const page = await res.text();
+    expect(page).toContain('#1');
+    // The policy lets a script run only if its text is exactly one that was hashed: the page's scripts must be those texts.
+    expect([...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])).toEqual(PAGE_SCRIPTS);
   });
 
   it('refuses a valid signature for the wrong email', async () => {
