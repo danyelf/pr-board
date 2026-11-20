@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { fetchItem, fetchItems, postComment } from '../src/worker/github.ts';
+import { approvePullRequest, fetchItem, fetchItems, mergePullRequest, postComment } from '../src/worker/github.ts';
+import { buildBoard } from '../src/worker/board.ts';
+import { boxNamed } from '../src/shared/stage.ts';
 import { renderStatus } from '../src/shared/status.ts';
 import { answerRepo, recordedRepo } from './github-fake.ts';
 
@@ -92,6 +94,9 @@ describe('fetchItems', () => {
 
     expect(get(564).merged).toBe(false);
     expect(get(564).mergeState).toBe('BLOCKED');
+    expect(get(564).reviewDecision).toBe('REVIEW_REQUIRED');
+    expect(get(573).reviewDecision).toBeNull();
+    expect(get(564).headOid).toBe('5df78594136ffc33a4e9b625808a2fd3480f055e');
     expect(get(564).addedDocs).toEqual([
       { path: 'docs/plans/2026-11-02-code-map-design.md', url: 'https://github.com/danyelf/torahmap/pull/564/files' },
     ]);
@@ -569,8 +574,9 @@ describe('fetchItems reads answers', () => {
 });
 
 describe('fetchItem', () => {
-  function fakeOne() {
+  function fakeOne(edit?: (world: any) => void) {
     const world = recordedRepo();
+    edit?.(world);
     const calls: any[] = [];
     const fn = (async (_input: any, init?: any) => {
       const sent = JSON.parse(init.body);
@@ -596,6 +602,25 @@ describe('fetchItem', () => {
     expect(calls[0].variables).toEqual({ o: 'danyelf', r: 'torahmap', n: 573 });
   });
 
+  it('walks a prepped PR whose only block is a required review to Ready for merge', async () => {
+    const { fn } = fakeOne((world) => {
+      const pr = world.pullRequests.nodes.find((p: any) => p.number === 578);
+      // Prep was the last thing to happen: no commit since the prep comment.
+      for (const c of pr.commits.nodes) c.commit.committedDate = '2020-01-01T00:00:00Z';
+      pr.labels.nodes = [{ name: 'on sam' }];
+      pr.mergeStateStatus = 'BLOCKED';
+      pr.reviewDecision = 'REVIEW_REQUIRED';
+    });
+    const f = (await fetchItem('tok', 'danyelf/torahmap', 578, fn))!;
+    expect(f).toMatchObject({ prepDone: true, commitsSincePrep: 0, mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' });
+    const card = buildBoard([f], [], NOW).waiting[0]!;
+    expect(card.strip.map((b) => [b.name, b.state])).toEqual([
+      ['Issue', 'done'], ['Design', 'done'], ['Build', 'done'], ['Your look', 'done'], ['Prep', 'done'], ['Ready for merge', 'ready'],
+    ]);
+    expect(boxNamed(card.strip, 'Ready for merge').state).toBe('ready');
+    expect(card.asksLook).toBe(false);
+  });
+
   it("gives null for an item that doesn't exist, or a repo the token can't see", async () => {
     const { fn } = fakeOne();
     expect(await fetchItem('tok', 'danyelf/torahmap', 99999, fn)).toBeNull();
@@ -610,6 +635,37 @@ describe('fetchItem', () => {
   it('throws when GitHub answers with an error status', async () => {
     const fn = (async () => new Response('nope', { status: 502, statusText: 'Bad Gateway' })) as typeof fetch;
     await expect(fetchItem('tok', 'danyelf/torahmap', 573, fn)).rejects.toThrow(/502/);
+  });
+});
+
+describe('approvePullRequest and mergePullRequest', () => {
+  function recording(res: () => Response = () => Response.json({}, { status: 200 })) {
+    const seen: any[] = [];
+    const fn = (async (input: any, init?: any) => {
+      seen.push({ url: String(input), method: init.method, auth: init.headers.Authorization, body: JSON.parse(init.body) });
+      return res();
+    }) as typeof fetch;
+    return { seen, fn };
+  }
+
+  it('approves with a review event on the PR', async () => {
+    const { seen, fn } = recording();
+    await approvePullRequest('tok', 'acme/x', 5, fn);
+    expect(seen).toEqual([{ url: 'https://api.github.com/repos/acme/x/pulls/5/reviews', method: 'POST', auth: 'bearer tok', body: { event: 'APPROVE' } }]);
+  });
+
+  it('merges with a merge commit, only at the given head commit', async () => {
+    const { seen, fn } = recording();
+    await mergePullRequest('tok', 'acme/x', 5, 'abc123', fn);
+    expect(seen).toEqual([{ url: 'https://api.github.com/repos/acme/x/pulls/5/merge', method: 'PUT', auth: 'bearer tok', body: { merge_method: 'merge', sha: 'abc123' } }]);
+  });
+
+  it("throws with GitHub's own explanation when it refuses", async () => {
+    const { fn } = recording(() => Response.json({ message: 'Head branch was modified' }, { status: 409, statusText: 'Conflict' }));
+    const err = await mergePullRequest('tok', 'acme/x', 5, 'abc', fn).catch((e) => e);
+    expect(err).toMatchObject({ status: 409, githubMessage: 'Head branch was modified' });
+    const err2 = await approvePullRequest('tok', 'acme/x', 5, fn).catch((e) => e);
+    expect(err2.status).toBe(409);
   });
 });
 

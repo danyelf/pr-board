@@ -2,8 +2,9 @@ import type { JWTVerifyGetKey } from 'jose';
 import type { ItemFacts } from '../shared/types.ts';
 import { checkAccess, type Env } from './access.ts';
 import { buildBoard } from './board.ts';
-import { fetchItem, fetchItems, postComment } from './github.ts';
+import { approvePullRequest, fetchItem, fetchItems, mergePullRequest, postComment } from './github.ts';
 import { ITEM_REF, postAnswer } from './post-answer.ts';
+import { postMerge } from './post-merge.ts';
 import { renderBoard, renderMessage } from './render.ts';
 
 export type { Env } from './access.ts';
@@ -12,6 +13,8 @@ interface Deps {
   fetchItems: typeof fetchItems;
   fetchItem?: typeof fetchItem;
   postComment?: typeof postComment;
+  approvePullRequest?: typeof approvePullRequest;
+  mergePullRequest?: typeof mergePullRequest;
   cache?: Cache;
   getKey?: JWTVerifyGetKey;
   now?: () => Date;
@@ -80,6 +83,19 @@ export function makeHandler(deps: Deps): Handler {
     return new Response(renderMessage(result.title, result.text, result.link), { status: result.status, headers: PAGE_HEADERS });
   }
 
+  async function merge(req: Request, env: Env): Promise<Response> {
+    const result = await postMerge(req, env, {
+      fetchItem: deps.fetchItem ?? fetchItem,
+      approvePullRequest: deps.approvePullRequest ?? approvePullRequest,
+      mergePullRequest: deps.mergePullRequest ?? mergePullRequest,
+    });
+    if ('merged' in result) {
+      await deps.cache?.delete(cacheKey(now()));
+      return new Response(null, { status: 303, headers: { Location: `/?merged=${encodeURIComponent(result.merged)}` } });
+    }
+    return new Response(renderMessage(result.title, result.text, result.link), { status: result.status, headers: PAGE_HEADERS });
+  }
+
   return {
     async fetch(req, env) {
       const url = new URL(req.url);
@@ -88,16 +104,25 @@ export function makeHandler(deps: Deps): Handler {
         if (!(await checkAccess(req, env, deps.getKey))) return new Response('Not allowed', { status: 403 });
         return answer(req, env);
       }
+      if (url.pathname === '/merge') {
+        if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+        if (!(await checkAccess(req, env, deps.getKey))) return new Response('Not allowed', { status: 403 });
+        return merge(req, env);
+      }
       if (url.pathname !== '/') return new Response('Not found', { status: 404 });
       if (req.method !== 'GET') return new Response('Method not allowed', { status: 405 });
       if (!(await checkAccess(req, env, deps.getKey))) return new Response('Not allowed', { status: 403 });
 
       const at = now();
-      // Straight after sending answers, read GitHub afresh, so the item shows as answered.
-      const sentParam = url.searchParams.get('sent');
-      const sent = sentParam !== null && ITEM_REF.test(sentParam) ? sentParam : null;
-      const { items, errors } = await load(env, at, sent !== null);
-      return new Response(renderBoard(buildBoard(items, errors, at), { sent }), { headers: PAGE_HEADERS });
+      // Straight after sending answers or merging, read GitHub afresh, so the item shows as it now is.
+      const refParam = (name: string) => {
+        const v = url.searchParams.get(name);
+        return v !== null && ITEM_REF.test(v) ? v : null;
+      };
+      const sent = refParam('sent');
+      const merged = refParam('merged');
+      const { items, errors } = await load(env, at, sent !== null || merged !== null);
+      return new Response(renderBoard(buildBoard(items, errors, at), { sent, merged }), { headers: PAGE_HEADERS });
     },
   };
 }

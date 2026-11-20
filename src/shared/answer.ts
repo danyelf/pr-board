@@ -12,13 +12,15 @@ export const FILE_AN_ISSUE = 'file an issue';
 export const LOOK_QUESTION = 'How does it look?';
 export const LOOK_CHOICES = ['looks good, prep for merge', 'needs changes', FILE_AN_ISSUE] as const;
 export const LOOK_DEFAULT = LOOK_CHOICES[0];
+/** The one look answer a PR that is ready to merge takes: Needs changes, at the last minute. */
+export const LOOK_NEEDS_CHANGES = LOOK_CHOICES[1];
 /** The key the look answer has among the answers; the questions are keyed by their numbers. */
 export const LOOK_KEY = 'look';
 
 export const NOTE_MAX = 2000;
 
 /** The names of the answer form's fields, besides one per question (see questionField). */
-export const FORM_FIELD = { repo: 'repo', number: 'number', fingerprint: 'fingerprint', note: 'note', look: LOOK_KEY } as const;
+export const FORM_FIELD = { repo: 'repo', number: 'number', fingerprint: 'fingerprint', note: 'note', look: LOOK_KEY, head: 'head' } as const;
 
 /** The form field the page uses for question n. */
 export function questionField(n: number): string {
@@ -56,11 +58,15 @@ function cleanNote(note: string): string {
   return note.replace(/\r\n?/g, '\n').trim();
 }
 
-/** Why these answers can't be sent to this status, or null if they can. */
-export function checkAnswer(s: Status | null, asksLook: boolean, form: Omit<Answer, 'fingerprint'>): string | null {
+/**
+ * Why these answers can't be sent to this status, or null if they can. A PR that is ready to merge
+ * doesn't ask the look question any more, but still takes the look answer "needs changes".
+ */
+export function checkAnswer(s: Status | null, asksLook: boolean, form: Omit<Answer, 'fingerprint'>, readyToMerge = false): string | null {
   for (const [key, value] of Object.entries(form.answers)) {
     if (key === LOOK_KEY) {
-      if (!asksLook) return "This item isn't waiting for your look";
+      if (!asksLook && !readyToMerge) return "This item isn't waiting for your look";
+      if (!asksLook && value !== LOOK_NEEDS_CHANGES) return `A PR that is ready to merge takes only "${LOOK_NEEDS_CHANGES}" as its look answer`;
       if (!(LOOK_CHOICES as readonly string[]).includes(value)) return `"${value}" isn't one of the choices for the look`;
       continue;
     }

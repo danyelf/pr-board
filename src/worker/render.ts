@@ -1,6 +1,6 @@
 import { BACK_WITH_OWNER, type Board, type Card } from './board.ts';
 import type { BoxState, ItemFacts } from '../shared/types.ts';
-import { FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, LOOK_QUESTION, NOTE_MAX, answerLines, choicesFor, codeWrittenStatus, questionField } from '../shared/answer.ts';
+import { FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, LOOK_NEEDS_CHANGES, LOOK_QUESTION, NOTE_MAX, answerLines, choicesFor, codeWrittenStatus, questionField } from '../shared/answer.ts';
 import { DAY_MS } from '../shared/names.ts';
 import { boxNamed } from '../shared/stage.ts';
 import { formatWait } from '../shared/turn.ts';
@@ -49,6 +49,12 @@ const CSS = `
   label.btn:has(input:checked) { background:#efede7; }
   .answer textarea { display:block; width:100%; min-height:3.2em; margin-top:8px; font:inherit; font-size:12.5px; padding:6px 8px; border:1px solid #cfccc3; border-radius:5px; }
   .answer .sendrow { display:flex; justify-content:flex-end; gap:10px; align-items:baseline; flex-wrap:wrap; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+  .mergebar { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+  .mergebar form { margin:0; }
+  .changes summary { display:inline-block; list-style:none; }
+  .changes summary::-webkit-details-marker { display:none; }
+  .changes[open] { flex:1; min-width:240px; }
+  .changes[open] summary { margin-bottom:2px; }
   .yours { margin-top:10px; padding:8px 12px; border-left:3px solid var(--wait); background:var(--waitbg); border-radius:0 6px 6px 0; font-size:12.5px; overflow-wrap:anywhere; }
   .yours .h { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#8a5a10; margin-bottom:4px; }
   .yours .note { margin-top:4px; color:#3b3a37; white-space:pre-wrap; }
@@ -117,6 +123,8 @@ function byProject(cards: Card[], draw: (c: Card) => string): string {
 interface RenderOptions {
   /** The item whose answers were just sent, to say so at the top. */
   sent?: string | null;
+  /** The PR that was just merged, to say so at the top. */
+  merged?: string | null;
 }
 
 /** One choice of a question: a radio button that looks like a button, the default checked and in bold. */
@@ -151,6 +159,30 @@ function answerForm(c: Card): string {
   parts.push('<div class="sendrow"><button type="submit" class="btn send">Send answers</button></div>');
   parts.push('</form>');
   return parts.join('\n    ');
+}
+
+/** What a card ready to merge offers instead of the answer form: Merge, and Needs changes with a note box. */
+function mergeControls(c: Card): string {
+  const hidden = (name: string, value: string | number) => `<input type="hidden" name="${name}" value="${esc(String(value))}">`;
+  return [
+    `<div class="mergebar">`,
+    `<form method="post" action="/merge">`,
+    hidden(FORM_FIELD.repo, c.facts.repo),
+    hidden(FORM_FIELD.number, c.facts.number),
+    hidden(FORM_FIELD.head, c.facts.headOid ?? ''),
+    `<button type="submit" class="btn send">Merge</button>`,
+    `</form>`,
+    `<details class="changes"><summary class="btn">Needs changes</summary>`,
+    `<form class="answer" method="post" action="/answer">`,
+    hidden(FORM_FIELD.repo, c.facts.repo),
+    hidden(FORM_FIELD.number, c.facts.number),
+    hidden(FORM_FIELD.fingerprint, c.fingerprint),
+    hidden(FORM_FIELD.look, LOOK_NEEDS_CHANGES),
+    `<textarea name="${FORM_FIELD.note}" maxlength="${NOTE_MAX}" placeholder="What needs to change?" aria-label="What needs to change"></textarea>`,
+    `<div class="sendrow"><button type="submit" class="btn">Send to Claude</button></div>`,
+    `</form></details>`,
+    `</div>`,
+  ].join('\n    ');
 }
 
 /** A note longer than this, or on more than two lines, shows only its start until it is opened. */
@@ -188,7 +220,6 @@ function renderCard(c: Card, opts: RenderOptions, now: Date): string {
   const issue = issueUrl(f);
   if (issue) links.push(link(issue, 'Issue'));
   for (const d of f.addedDocs) links.push(link(d.url, `Design doc ${d.path.split('/').pop() ?? ''}`.trim()));
-  if (merge.state === 'ready') links.push(link(f.url, 'Merge on GitHub'));
   if (c.answer) links.push(link(c.answer.url, 'Your answers'));
 
   const parts: string[] = [];
@@ -198,7 +229,7 @@ function renderCard(c: Card, opts: RenderOptions, now: Date): string {
   // Once answered, the answers are on GitHub; asking again here would only send them twice. After a
   // session gave up, the item is back with the owner to answer afresh, beside what they sent before.
   if (c.answerState && BACK_WITH_OWNER.has(c.answerState)) parts.push(yourAnswer(c, now));
-  if (c.answerState === null || c.answerState === 'gave-up') parts.push(answerForm(c));
+  if (c.answerState === null || c.answerState === 'gave-up') parts.push(merge.state === 'ready' ? mergeControls(c) : answerForm(c));
   if (f.screenshots.length > 0) {
     const shots = f.screenshots
       .slice(0, 4)
@@ -262,7 +293,8 @@ export function renderMessage(title: string, text: string, extra?: { href: strin
 export function renderBoard(b: Board, opts: RenderOptions = {}): string {
   const now = new Date(b.generatedAt);
   const sent = opts.sent ? `<div class="ok">${esc(`Sent your answers on ${opts.sent}.`)}</div>` : '';
-  const errors = sent + b.errors.map((e) => `<div class="err">${esc(e)}</div>`).join('');
+  const merged = opts.merged ? `<div class="ok">${esc(`Merged ${opts.merged}.`)}</div>` : '';
+  const errors = sent + merged + b.errors.map((e) => `<div class="err">${esc(e)}</div>`).join('');
   // With anything unread, an empty list proves nothing, so never offer the reassuring line.
   const nothingWaiting = b.errors.length
     ? esc("Couldn't read everything from GitHub, so this list may be incomplete.")

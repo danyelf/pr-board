@@ -391,3 +391,213 @@ describe('POST /answer', () => {
     expect(await res.text()).toContain('someone-else');
   });
 });
+
+describe('a PR that is ready to merge', () => {
+  const ORIGIN = 'http://localhost:8787';
+  const localEnv: Env = { ...env, ALLOW_LOCAL: '1' };
+  const HEAD = 'a'.repeat(40);
+  const ready = (over: Partial<ItemFacts> = {}) => facts({
+    repo: 'acme/x', number: 5, labels: ['on sam'], prepDone: true, commitsSincePrep: 0,
+    mergeState: 'CLEAN', reviewDecision: null, headOid: HEAD, ...over,
+  });
+
+  interface Calls { reads: number; approved: { repo: string; n: number }[]; merged: { repo: string; n: number; sha: string }[]; comments: string[] }
+
+  function setup(over: { item?: ItemFacts | null; approveFails?: GitHubRefused; mergeFails?: GitHubRefused | Error } = {}) {
+    const calls: Calls = { reads: 0, approved: [], merged: [], comments: [] };
+    const store = new Map<string, Response>();
+    const cache = {
+      match: async (req: Request) => store.get(req.url)?.clone(),
+      put: async (req: Request, res: Response) => { store.set(req.url, res); },
+      delete: async (req: Request) => store.delete(req.url),
+    } as unknown as Cache;
+    const h = makeHandler({
+      fetchItems: async () => ({ items: [], errors: [] }),
+      fetchItem: async () => { calls.reads++; return over.item === undefined ? ready() : over.item; },
+      postComment: async (_t, _r, _n, body) => { calls.comments.push(body); return { login: 'sam-gh' }; },
+      approvePullRequest: async (_t, repo, n) => {
+        if (over.approveFails) throw over.approveFails;
+        calls.approved.push({ repo, n });
+      },
+      mergePullRequest: async (_t, repo, n, sha) => {
+        if (over.mergeFails) throw over.mergeFails;
+        calls.merged.push({ repo, n, sha });
+      },
+      cache, getKey, now: () => NOW,
+    });
+    return { h, calls, store };
+  }
+
+  const good = { repo: 'acme/x', number: '5', head: HEAD };
+  const send = (h: Handler, path: string, fields: Record<string, string> | string, headers: Record<string, string> = {}) =>
+    h.fetch(new Request(`${ORIGIN}${path}`, {
+      method: 'POST', body: typeof fields === 'string' ? fields : new URLSearchParams(fields).toString(),
+      headers: { Origin: ORIGIN, 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
+    }), localEnv);
+
+  describe('POST /merge', () => {
+    it('merges a clean PR at the posted commit with no approval, and sends the browser back saying so', async () => {
+      const { h, calls } = setup();
+      const res = await send(h, '/merge', good);
+      expect(res.status).toBe(303);
+      expect(res.headers.get('Location')).toBe('/?merged=acme%2Fx%235');
+      expect(calls.approved).toEqual([]);
+      expect(calls.merged).toEqual([{ repo: 'acme/x', n: 5, sha: HEAD }]);
+    });
+
+    it('approves first, as the owner, when GitHub is waiting only for a required review', async () => {
+      const { h, calls } = setup({ item: ready({ mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' }) });
+      expect((await send(h, '/merge', good)).status).toBe(303);
+      expect(calls.approved).toEqual([{ repo: 'acme/x', n: 5 }]);
+      expect(calls.merged).toEqual([{ repo: 'acme/x', n: 5, sha: HEAD }]);
+    });
+
+    it('drops the cached board, and the page after the merge reads afresh and says what was merged', async () => {
+      const { h, store } = setup();
+      await h.fetch(new Request(`${ORIGIN}/`), localEnv);
+      expect(store.size).toBe(1);
+      await send(h, '/merge', good);
+      expect(store.size).toBe(0);
+      const after = await h.fetch(new Request(`${ORIGIN}/?merged=${encodeURIComponent('acme/x#5')}`), localEnv);
+      expect(await after.text()).toContain('Merged acme/x#5.');
+      const bogus = await h.fetch(new Request(`${ORIGIN}/?merged=${encodeURIComponent('<b>hi</b>')}`), localEnv);
+      expect(await bogus.text()).not.toContain('Merged ');
+    });
+
+    it('refuses, and changes nothing, when the PR has new commits since the page was drawn', async () => {
+      const { h, calls } = setup({ item: ready({ headOid: 'b'.repeat(40) }) });
+      const res = await send(h, '/merge', good);
+      expect(res.status).toBe(409);
+      expect(await res.text()).toContain('new commits since this page was drawn');
+      expect(calls.approved).toEqual([]);
+      expect(calls.merged).toEqual([]);
+    });
+
+    it.each([
+      ['checks are failing', { mergeState: 'BLOCKED', reviewDecision: 'APPROVED' }, 'checks failing'],
+      ['it has conflicts', { mergeState: 'DIRTY' }, 'conflicts'],
+      ['it is a draft', { isDraft: true }, 'draft'],
+      ['there are commits since prep', { commitsSincePrep: 1 }, 'commits since prep'],
+      ['it has no prep', { prepDone: false, commitsSincePrep: null }, undefined],
+      ["it isn't the owner's turn", { labels: ['in-progress'] }, undefined],
+    ] as [string, Partial<ItemFacts>, string | undefined][])('refuses, and changes nothing, when %s', async (_n, over, note) => {
+      const { h, calls } = setup({ item: ready(over) });
+      const res = await send(h, '/merge', good);
+      expect(res.status).toBe(409);
+      const page = await res.text();
+      expect(page).toContain('isn&#39;t ready to merge any more');
+      if (note) expect(page).toContain(note);
+      expect(calls.approved).toEqual([]);
+      expect(calls.merged).toEqual([]);
+    });
+
+    it('refuses a PR with open questions, one already merged or closed, and one the token cannot see', async () => {
+      const asking = status({ waitingOn: 'owner', questions: [{ n: 1, text: 'Colour?', choices: ['a'], defaultChoice: 'a' }] });
+      for (const [item, code] of [
+        [ready({ body: renderStatus(asking) }), 409],
+        [ready({ merged: true }), 409],
+        [ready({ closedAt: '2026-11-05T00:00:00Z' }), 409],
+        [null, 404],
+      ] as [ItemFacts | null, number][]) {
+        const { h, calls } = setup({ item });
+        expect((await send(h, '/merge', good)).status).toBe(code);
+        expect(calls.merged).toEqual([]);
+      }
+    });
+
+    it('refuses a post from another origin, or with none, before reading anything', async () => {
+      const { h, calls } = setup();
+      expect((await send(h, '/merge', good, { Origin: 'https://evil.example.com' })).status).toBe(403);
+      const noOrigin = new Request(`${ORIGIN}/merge`, { method: 'POST', body: new URLSearchParams(good).toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+      expect((await h.fetch(noOrigin, localEnv)).status).toBe(403);
+      expect(calls.reads).toBe(0);
+      expect(calls.merged).toEqual([]);
+    });
+
+    it('takes only POST, only forms, and is behind the Access check', async () => {
+      const { h, calls } = setup();
+      expect((await h.fetch(new Request(`${ORIGIN}/merge`), localEnv)).status).toBe(405);
+      expect((await send(h, '/merge', JSON.stringify(good), { 'Content-Type': 'application/json' })).status).toBe(415);
+      const res = await h.fetch(new Request('https://board.example.com/merge', {
+        method: 'POST', body: new URLSearchParams(good).toString(),
+        headers: { Origin: 'https://board.example.com', 'Content-Type': 'application/x-www-form-urlencoded' },
+      }), env);
+      expect(res.status).toBe(403);
+      expect(calls.reads).toBe(0);
+    });
+
+    it('refuses a bad repo, number or commit, an unknown field, or a field given twice', async () => {
+      const { h, calls } = setup();
+      for (const fields of [
+        { ...good, repo: 'acme/x/../y' }, { ...good, repo: '' }, { ...good, number: '5a' }, { ...good, head: 'abc' },
+        { ...good, head: '' }, { ...good, extra: '1' },
+      ]) {
+        expect((await send(h, '/merge', fields)).status).toBe(400);
+      }
+      expect((await send(h, '/merge', `${new URLSearchParams(good)}&number=6`)).status).toBe(400);
+      expect(calls.reads).toBe(0);
+    });
+
+    it('says so when GitHub could not be read, and merges nothing', async () => {
+      const calls = { merged: 0 };
+      const h = makeHandler({
+        fetchItems: async () => ({ items: [], errors: [] }),
+        fetchItem: async () => { throw new Error('GitHub said 502 Bad Gateway'); },
+        mergePullRequest: async () => { calls.merged++; },
+        getKey, now: () => NOW,
+      });
+      expect((await send(h, '/merge', good)).status).toBe(502);
+      expect(calls.merged).toBe(0);
+    });
+
+    it("explains GitHub's refusals in words, and doesn't merge when the approval is refused", async () => {
+      const refused = (status: number, message?: string) => new GitHubRefused(status, 'x', message);
+      const cases: [Parameters<typeof setup>[0], number, string][] = [
+        [{ mergeFails: refused(405, 'Pull Request is not mergeable') }, 409, "can't be merged right now"],
+        [{ mergeFails: refused(409, 'Head branch was modified') }, 409, 'changed while the merge was being made'],
+        [{ mergeFails: refused(403, 'Resource not accessible by personal access token') }, 503, 'needs read and write access to Contents and Pull requests'],
+        [{ mergeFails: refused(500) }, 502, "didn't merge acme/x#5 (500)"],
+        [{ mergeFails: new Error('network down') }, 502, 'network down'],
+      ];
+      for (const [over, code, text] of cases) {
+        const res = await send(setup(over).h, '/merge', good);
+        expect(res.status).toBe(code);
+        expect(await res.text()).toContain(text.replace(/'/g, '&#39;'));
+      }
+      const review = setup({ item: ready({ mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' }), approveFails: refused(422, 'Can not approve your own pull request') });
+      const res = await send(review.h, '/merge', good);
+      expect(res.status).toBe(502);
+      const page = await res.text();
+      expect(page).toContain('nothing was merged');
+      expect(page).toContain('Can not approve your own pull request');
+      expect(review.calls.merged).toEqual([]);
+    });
+  });
+
+  describe('Needs changes, sent to /answer', () => {
+    const fingerprint = statusFingerprint(null);
+    const form = { repo: 'acme/x', number: '5', fingerprint, look: 'needs changes', note: 'the button is off' };
+
+    it('is accepted, as an ordinary answer comment from the owner', async () => {
+      const { h, calls } = setup();
+      const res = await send(h, '/answer', form);
+      expect(res.status).toBe(303);
+      expect(calls.comments).toHaveLength(1);
+      expect(parseAnswer(calls.comments[0]!)).toEqual({ fingerprint, answers: { look: 'needs changes' }, note: 'the button is off' });
+    });
+
+    it('is refused for any other look answer', async () => {
+      for (const look of [LOOK_DEFAULT, 'file an issue', 'meh']) {
+        const { h, calls } = setup();
+        expect((await send(h, '/answer', { ...form, look })).status).toBe(400);
+        expect(calls.comments).toEqual([]);
+      }
+    });
+
+    it('is refused when the PR is not ready to merge and not asking for a look', async () => {
+      const { h, calls } = setup({ item: ready({ commitsSincePrep: 2 }) });
+      expect((await send(h, '/answer', form)).status).toBe(400);
+      expect(calls.comments).toEqual([]);
+    });
+  });
+});

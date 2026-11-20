@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  FILE_AN_ISSUE, FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, NOTE_MAX, answersCurrentStatus, asksForLook, checkAnswer, choicesFor,
+  FILE_AN_ISSUE, FORM_FIELD, LOOK_CHOICES, LOOK_DEFAULT, LOOK_NEEDS_CHANGES, NOTE_MAX, answersCurrentStatus, asksForLook, checkAnswer, choicesFor,
   isClaimReaction, isOwnerAnswer, parseAnswer, questionField, questionOfField, renderAnswer, type CommentSeen,
 } from '../src/shared/answer.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
@@ -41,6 +41,19 @@ describe('choicesFor', () => {
     expect(choicesFor(asked.questions[0]!)).toEqual(['leave', 'change', FILE_AN_ISSUE]);
     expect(choicesFor(asked.questions[1]!)).toEqual([FILE_AN_ISSUE]);
     expect(choicesFor({ n: 3, text: 'x', choices: ['a', FILE_AN_ISSUE], defaultChoice: 'a' })).toEqual(['a', FILE_AN_ISSUE]);
+  });
+});
+
+describe('checkAnswer on a PR that is ready to merge', () => {
+  it('takes the look answer needs changes, with a note, and no other look answer', () => {
+    expect(checkAnswer(null, false, { answers: { look: LOOK_NEEDS_CHANGES }, note: 'the button is off' }, true)).toBeNull();
+    for (const other of [LOOK_DEFAULT, FILE_AN_ISSUE, 'meh']) {
+      expect(checkAnswer(null, false, { answers: { look: other }, note: '' }, true)).toMatch(/needs changes/);
+    }
+  });
+  it('still refuses any look answer on a PR that is not ready and not asking', () => {
+    expect(checkAnswer(null, false, { answers: { look: LOOK_NEEDS_CHANGES }, note: '' })).toMatch(/look/);
+    expect(checkAnswer(null, false, { answers: { look: LOOK_NEEDS_CHANGES }, note: '' }, false)).toMatch(/look/);
   });
 });
 
@@ -132,7 +145,7 @@ describe('the answer form', () => {
     expect(questionField(3)).toBe('q3');
     expect(questionOfField(questionField(3))).toBe('3');
     for (const field of ['q0', 'q', 'q12345', 'look', 'note', 'xq1']) expect(questionOfField(field)).toBeNull();
-    expect(Object.values(FORM_FIELD)).toEqual(['repo', 'number', 'fingerprint', 'note', 'look']);
+    expect(Object.values(FORM_FIELD)).toEqual(['repo', 'number', 'fingerprint', 'note', 'look', 'head']);
   });
 });
 

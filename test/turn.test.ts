@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { effectiveTurn, formatWait, isReadyToMerge, turnOf, waitingSince } from '../src/shared/turn.ts';
+import { effectiveTurn, formatWait, isReadyToMerge, mergeBlockers, turnOf, waitingSince } from '../src/shared/turn.ts';
 import { facts, status } from './helpers.ts';
 
 describe('turnOf', () => {
@@ -95,6 +95,19 @@ describe('isReadyToMerge', () => {
     ['not Danyel\'s turn', { labels: ['in-progress'] }],
   ])('is false when %s', (_n, over) => {
     expect(isReadyToMerge({ ...ready(), ...over }, null)).toBe(false);
+  });
+  it('is true when GitHub blocks only for want of a required approving review', () => {
+    expect(isReadyToMerge({ ...ready(), mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' }, status())).toBe(true);
+  });
+  it.each([null, 'APPROVED', 'CHANGES_REQUESTED'])('reads BLOCKED with review decision %s as failing checks', (reviewDecision) => {
+    const f = { ...ready(), mergeState: 'BLOCKED', reviewDecision };
+    expect(isReadyToMerge(f, status())).toBe(false);
+    expect(mergeBlockers(f, status()).map((b) => b.note(f))).toContain('checks failing');
+  });
+  it('still stops a review-required PR for the other blockers', () => {
+    const f = { ...ready(), mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED', commitsSincePrep: 1 };
+    expect(isReadyToMerge(f, status())).toBe(false);
+    expect(isReadyToMerge({ ...f, commitsSincePrep: 0, isDraft: true }, status())).toBe(false);
   });
   it('is false with open questions', () => {
     expect(isReadyToMerge(ready(), status({}, 1))).toBe(false);

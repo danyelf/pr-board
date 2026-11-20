@@ -52,7 +52,7 @@ It costs nothing while it waits. Don't stop it, and don't start a second one for
 
 - If it says the fingerprint does **not** match the current status, the questions changed after he answered. Don't apply anything; ask the current questions again with `set --waiting owner`.
 - **looks good, prep for merge**: run prep for merge (the `prep-for-merge` skill).
-- **needs changes**: make the changes the note asks for; the PR stays before prep.
+- **needs changes**: make the changes the note asks for; the PR stays before prep. A PR that was already prepped (its card showed Merge) comes back this way too: make the changes, then run prep for merge again once they are in.
 - A question's own choice: do that.
 - **file an issue** (on a question, or on the look): take the default, then file a new issue holding the question, its choices, any screenshots and a link back to the PR. Mark the question on the PR "default taken; moved to #NNN". Don't start work on the new issue.
 - The note: read it whatever the choices say; it can change what they mean.

@@ -74,6 +74,11 @@ describe('stage strip', () => {
       expect(box(f({ mergeState: 'UNSTABLE' }), status(), 'Ready for merge')).toMatchObject({ state: 'blocked', note: 'checks failing' });
       expect(why(f({ mergeState: 'UNSTABLE' }), status())).toBe("Can't merge yet: checks failing");
     });
+    it('is ready when GitHub blocks only for a required review', () => {
+      const awaiting = f({ mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' });
+      expect(states(awaiting, status())).toEqual(['done', 'todo', 'done', 'done', 'done', 'ready']);
+      expect(why(awaiting, status())).toBe('Ready to merge');
+    });
     it('is blocked by being a draft', () => {
       expect(box(f({ isDraft: true }), status(), 'Ready for merge')).toMatchObject({ state: 'blocked', note: 'draft' });
     });
@@ -81,6 +86,7 @@ describe('stage strip', () => {
       expect(box(f({ stackedOn: 1, stackedOnOpen: true }), status(), 'Ready for merge').note).toBe('after #1');
       expect(box(f({ mergeState: 'DIRTY' }), status(), 'Ready for merge').note).toBe('conflicts');
       expect(box(f({ mergeState: 'BLOCKED' }), status(), 'Ready for merge').note).toBe('checks failing');
+      expect(box(f({ mergeState: 'BLOCKED', reviewDecision: 'CHANGES_REQUESTED' }), status(), 'Ready for merge').note).toBe('checks failing');
       expect(box(f({ mergeState: 'BEHIND' }), status(), 'Ready for merge').note).toBe('rebase first');
       expect(box(f({ behindBase: true }), status(), 'Ready for merge').note).toBe('rebase first');
       expect(box(f({ commitsSincePrep: 2 }), status(), 'Ready for merge').note).toBe('commits since prep');

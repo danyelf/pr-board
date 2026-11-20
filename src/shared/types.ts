@@ -25,6 +25,8 @@ export interface ItemFacts {
   labels: string[]; body: string; createdAt: string; closedAt: string | null;
   isDraft: boolean; merged: boolean; mergedAt: string | null;
   mergeState: string | null;          // GitHub mergeStateStatus, PRs only
+  reviewDecision: string | null;     // GitHub reviewDecision (APPROVED, REVIEW_REQUIRED, CHANGES_REQUESTED, or null when no rule asks for a review), PRs only
+  headOid: string | null;             // the commit the PR head is at, PRs only
   behindBase: boolean;                // PR head is missing commits from its base branch
   linkedIssue: number | null; stackedOn: number | null; stackedOnOpen: boolean;
   previewUrl: string | null; addedDocs: { path: string; url: string }[]; screenshots: string[];

@@ -42,7 +42,7 @@ const COMMON_FIELDS = `number title url body createdAt closedAt
   timelineItems(last:${LABEL_CHANGES_PER_ITEM}, itemTypes:[LABELED_EVENT, UNLABELED_EVENT]){pageInfo{hasPreviousPage} nodes{__typename ... on LabeledEvent{label{name} createdAt} ... on UnlabeledEvent{label{name} createdAt}}}`;
 
 const PR_FIELDS = `${COMMON_FIELDS}
-  isDraft isCrossRepository merged mergedAt lastEditedAt mergeStateStatus headRefName baseRefName
+  isDraft isCrossRepository merged mergedAt lastEditedAt mergeStateStatus reviewDecision headRefOid headRefName baseRefName
   closingIssuesReferences(first:${CLOSING_ISSUES_PER_PR}){nodes{number repository{nameWithOwner}}}
   files(first:${FILES_PER_PR}){pageInfo{hasNextPage} nodes{path changeType}}
   commits(last:${COMMITS_PER_PR}){pageInfo{hasPreviousPage} nodes{commit{oid committedDate}}}`;
@@ -59,6 +59,7 @@ interface RawItem {
   timelineItems: Connection<TimelineNode> | null;
   isDraft?: boolean; isCrossRepository?: boolean; merged?: boolean; mergedAt?: string | null; lastEditedAt?: string | null;
   mergeStateStatus?: string | null;
+  reviewDecision?: string | null; headRefOid?: string | null;
   headRefName?: string; baseRefName?: string;
   closingIssuesReferences?: Connection<{ number: number; repository: { nameWithOwner: string } | null }> | null;
   files?: Connection<{ path: string; changeType: string }> | null;
@@ -387,7 +388,7 @@ function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
   return {
     ...baseFacts(repo, pr, 'pr', labels, events, comments, extra),
     isDraft: pr.isDraft ?? false, merged: pr.merged ?? false, mergedAt: pr.mergedAt ?? null,
-    mergeState: pr.mergeStateStatus ?? null, behindBase: false,
+    mergeState: pr.mergeStateStatus ?? null, reviewDecision: pr.reviewDecision ?? null, headOid: pr.headRefOid ?? null, behindBase: false,
     linkedIssue: closing ?? (refs ? Number(refs[1]) : null),
     stackedOn: stacked ? Number(stacked[1]) : null, stackedOnOpen: false,
     previewUrl,
@@ -414,7 +415,7 @@ function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
   const writtenAt = statusComment ? statusWrittenAt(statusComment.body, statusComment.updatedAt) : null;
   return {
     ...baseFacts(repo, issue, 'issue', labels, events, comments, []),
-    isDraft: false, merged: false, mergedAt: null, mergeState: null, behindBase: false,
+    isDraft: false, merged: false, mergedAt: null, mergeState: null, reviewDecision: null, headOid: null, behindBase: false,
     linkedIssue: null, stackedOn: null, stackedOnOpen: false,
     previewUrl: null, addedDocs: [], screenshots: screenshotsIn(issue.body ?? ''),
     reviewSha: null, reviewUrl: null, commitsSinceReview: null,
@@ -452,7 +453,31 @@ export async function postComment(
   return { login: posted.user?.login ?? null };
 }
 
-const ITEM_QUERY = `query($o: String!, $r: String!, $n: Int!) {
+function pullPath(repo: string, n: number): string {
+  return `https://api.github.com/repos/${repo.split('/').map(encodeURIComponent).join('/')}/pulls/${n}`;
+}
+
+/** Approves a PR from the token's account. Throws if GitHub refuses. */
+export async function approvePullRequest(
+  token: string, repo: string, n: number, fetchFn: typeof fetch = defaultFetch,
+): Promise<void> {
+  const res = await fetchFn(`${pullPath(repo, n)}/reviews`, {
+    method: 'POST', headers: headersFor(token), body: JSON.stringify({ event: 'APPROVE' }),
+  });
+  if (!res.ok) throw new GitHubRefused(res.status, res.statusText, await refusalMessage(res));
+}
+
+/** Merges a PR with a merge commit, but only if its head is still at `sha`. Throws if GitHub refuses. */
+export async function mergePullRequest(
+  token: string, repo: string, n: number, sha: string, fetchFn: typeof fetch = defaultFetch,
+): Promise<void> {
+  const res = await fetchFn(`${pullPath(repo, n)}/merge`, {
+    method: 'PUT', headers: headersFor(token), body: JSON.stringify({ merge_method: 'merge', sha }),
+  });
+  if (!res.ok) throw new GitHubRefused(res.status, res.statusText, await refusalMessage(res));
+}
+
+const ITEM_QUERY =`query($o: String!, $r: String!, $n: Int!) {
   repository(owner: $o, name: $r) {
     issueOrPullRequest(number: $n) { __typename ... on PullRequest { ${PR_FIELDS} } ... on Issue { ${COMMON_FIELDS} } }
   }

@@ -118,14 +118,31 @@ describe('renderBoard', () => {
     expect(html).toContain('no activity for 4 days');
   });
 
-  it('links Merge on GitHub to the PR when the merge box is ready', async () => {
+  it('keeps the PR link, drops Merge on GitHub, and shows Merge and Needs changes when the merge box is ready', async () => {
+    const oid = 'a'.repeat(40);
     const ready = facts({
-      number: 905, url: 'https://github.com/danyelf/torahmap/pull/905', labels: ['on sam'],
-      prepDone: true, commitsSincePrep: 0, mergeState: 'CLEAN', lastActivityAt: '2026-11-05T23:00:00Z',
+      number: 905, url: 'https://github.com/danyelf/torahmap/pull/905', labels: ['on sam'], headOid: oid,
+      prepDone: true, commitsSincePrep: 0, mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED', lastActivityAt: '2026-11-05T23:00:00Z',
     });
     const html = await page([ready]);
-    expect(html).toContain('Merge on GitHub');
-    expect(html).toContain('href="https://github.com/danyelf/torahmap/pull/905"');
+    const card = html.slice(html.indexOf('PR #905'));
+    expect(card).toContain('Ready to merge');
+    expect(card).not.toContain('Merge on GitHub');
+    expect(card).toContain('href="https://github.com/danyelf/torahmap/pull/905"');
+    expect(card).toContain('<form method="post" action="/merge">');
+    expect(card).toContain(`<input type="hidden" name="head" value="${oid}">`);
+    expect(card).toContain('>Merge</button>');
+    expect(card).toContain('<details class="changes"><summary class="btn">Needs changes</summary>');
+    expect(card).toContain('<input type="hidden" name="look" value="needs changes">');
+    expect(card).not.toContain('Send answers');
+    expect(card).not.toContain('type="radio"');
+    expect(card).not.toContain('<script');
+  });
+
+  it('says so at the top after a merge, and ignores a merged value that is not an item', () => {
+    const b = buildBoard([], [], NOW);
+    expect(renderBoard(b, { merged: 'acme/x#5' })).toContain('Merged acme/x#5.');
+    expect(renderBoard(b)).not.toContain('Merged ');
   });
 
   it('links every number to GitHub and says whether it is a PR or an issue', () => {
@@ -196,14 +213,15 @@ describe('renderBoard answering', () => {
     expect(cardOf(html, 962)).toContain('name="look"');
   });
 
-  it("doesn't ask how it looks of an issue, or of a PR that has had prep, and gives a card with nothing to ask no form", () => {
+  it("doesn't ask how it looks of an issue, or of a PR that has had prep, and gives a card with nothing to ask no answer form", () => {
     const html = board([
       facts({ number: 963, kind: 'issue', labels: ['on sam'], body: '', statusCommentBody: renderStatus(asking), lastActivityAt: at }),
       facts({ number: 964, labels: ['on sam'], prepDone: true, commitsSincePrep: 0, mergeState: 'CLEAN', lastActivityAt: at }),
     ]);
     expect(cardOf(html, 963)).toContain('name="q1"');
     expect(cardOf(html, 963)).not.toContain('name="look"');
-    expect(cardOf(html, 964)).not.toContain('<form');
+    expect(cardOf(html, 964)).not.toContain('Send answers');
+    expect(cardOf(html, 964)).not.toContain('name="look" value="looks good');
   });
 
   it('gives the form a working Send button', () => {

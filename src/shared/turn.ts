@@ -37,6 +37,15 @@ export interface MergeBlocker {
 }
 
 /**
+ * GitHub calls a PR BLOCKED when a rule it hasn't met stands in the way. When the only open rule is
+ * the required approving review, the owner's Merge button supplies it, so that isn't a blocker.
+ * Any other BLOCKED is read as failing checks.
+ */
+function onlyAwaitsApproval(f: ItemFacts): boolean {
+  return f.mergeState === 'BLOCKED' && f.reviewDecision === 'REVIEW_REQUIRED';
+}
+
+/**
  * Everything that blocks a merge, in priority order: when several apply, the earliest one with a
  * note is the one the box shows. A PR is ready to merge when none of them applies.
  */
@@ -48,12 +57,12 @@ export const MERGE_BLOCKERS: MergeBlocker[] = [
   { applies: (f) => f.isDraft, note: () => 'draft' },
   { applies: (f) => f.stackedOnOpen, note: (f) => (f.stackedOn !== null ? `after #${f.stackedOn}` : null), showEarly: true },
   { applies: (f) => f.mergeState === 'DIRTY', note: () => 'conflicts' },
-  { applies: (f) => f.mergeState === 'UNSTABLE' || f.mergeState === 'BLOCKED', note: () => 'checks failing' },
+  { applies: (f) => f.mergeState === 'UNSTABLE' || (f.mergeState === 'BLOCKED' && !onlyAwaitsApproval(f)), note: () => 'checks failing' },
   { applies: (f) => f.behindBase || f.mergeState === 'BEHIND', note: () => 'rebase first', showEarly: true },
   { applies: (f) => f.commitsSincePrep !== 0, note: (f) => ((f.commitsSincePrep ?? 0) > 0 ? 'commits since prep' : null) },
   { applies: (f) => f.mergeState === 'UNKNOWN', note: () => 'GitHub still checking' },
   { applies: (_f, s) => (s?.questions.length ?? 0) > 0, note: () => null },
-  { applies: (f) => f.mergeState !== 'CLEAN' && f.mergeState !== 'HAS_HOOKS', note: () => null },
+  { applies: (f) => f.mergeState !== 'CLEAN' && f.mergeState !== 'HAS_HOOKS' && !onlyAwaitsApproval(f), note: () => null },
 ];
 
 /** The blockers that apply to this item, in priority order. `turn` is passed in when the caller already has it. */
