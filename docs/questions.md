@@ -35,3 +35,9 @@ All the go-live steps are done (2026-11-08). They are in the order they were don
 11. **Make the owner token, which posts your answers?** Done differently: no second token. The board's `GITHUB_TOKEN` has write access to issues (2026-11-08) and pull requests (2026-11-19), and the Worker posts with it.
 
 12. **Are the calls I made for answering right?** (**yes** | let's talk) They are in the design under "Settled for answering". The first, that the Worker never changes whose turn it is, you kept on 2026-11-19 when you chose to have the stage strip read the answer instead. Still to confirm: the hidden data line in the status section, and the card coming back to the top when an answer has no 👀 after 10 minutes.
+
+## The Mac service
+
+13. **Install the Mac service?** (**yes, after trying `--dry-run --once`** | wait) README step 9, once #10 is merged and the main checkout pulled, since launchd runs it from there. Once running, it would take your waiting answer on torahmap#564 straight away. How it works is in the design under "Settled for the Mac service"; of my calls there, the one most worth a look is that it uses Claude's token for its own GitHub calls too, because under launchd `gh` would otherwise act as you.
+
+14. **Which permission mode should its sessions run in?** Answered on 2026-11-19: auto, the mode you work in. Set with `"claudeArgs": ["--permission-mode", "auto"]` in `service.json`. A `claude -p` session can't stop to ask, so with no mode it can do only what your settings already allow, and will likely stall on its first push or edit. The default in the code is no extra flags, so nothing is chosen for you.

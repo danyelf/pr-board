@@ -137,6 +137,21 @@ async function syncLabels(gh: Gh, ref: Ref, waiting: SetOptions['waiting']): Pro
   return missing;
 }
 
+/**
+ * Writes the item's status and its turn labels, and asks the owner to review a PR just handed to
+ * them. Returns what went wrong that didn't stop the status being written (a missing label, a
+ * failed review request); throws when the status itself couldn't be written.
+ */
+export async function setStatus(gh: Gh, ref: Ref, opts: SetOptions, now: Date): Promise<string[]> {
+  const questions = buildQuestions(opts.questions);
+  const handedOver = await writeStatus(gh, ref, opts, questions, now);
+  const problems = (await syncLabels(gh, ref, opts.waiting))
+    .map((name) => `Label "${name}" doesn't exist in ${ref.owner}/${ref.repo}; run cli/setup-labels.ts`);
+  const reviewProblem = handedOver ? await requestReview(gh, ref, handedOver.author) : null;
+  if (reviewProblem) problems.push(reviewProblem);
+  return problems;
+}
+
 export async function main(argv: string[], deps: Deps): Promise<number> {
   const out = deps.out ?? ((l) => console.log(l));
   const err = deps.err ?? ((l) => console.error(l));
@@ -160,16 +175,9 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
       return 0;
     }
 
-    const opts = parseSetArgs(rest);
-    const questions = buildQuestions(opts.questions);
-    const handedOver = await writeStatus(deps.gh, ref, opts, questions, deps.now());
-    const missing = await syncLabels(deps.gh, ref, opts.waiting);
-    for (const name of missing) {
-      err(`Label "${name}" doesn't exist in ${ref.owner}/${ref.repo}; run cli/setup-labels.ts`);
-    }
-    const reviewProblem = handedOver ? await requestReview(deps.gh, ref, handedOver.author) : null;
-    if (reviewProblem) err(reviewProblem);
-    return missing.length > 0 || reviewProblem ? 1 : 0;
+    const problems = await setStatus(deps.gh, ref, parseSetArgs(rest), deps.now());
+    for (const p of problems) err(p);
+    return problems.length > 0 ? 1 : 0;
   } catch (e) {
     err(e instanceof Error ? e.message : String(e));
     return 1;

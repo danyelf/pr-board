@@ -141,12 +141,38 @@ export function isOwnerAnswer(login: string | null | undefined, body: string): b
   return login === OWNER_LOGIN && parseAnswer(body) !== null;
 }
 
-/** The reaction a Claude session claims an answer with: 👀, as GitHub's REST API spells it (GraphQL uses upper case). */
+// Reactions from Claude's side on an answer, as GitHub's REST API spells them (GraphQL uses upper case).
+/** 👀: a Claude session has claimed the answer. */
 export const CLAIM_REACTION = 'eyes';
+/** 🚀: the Mac service started the session that claimed it. Added before the 👀, so a claim without it is an open session's. */
+export const SERVICE_REACTION = 'rocket';
+/** 😕: the service's session ended without finishing, and the item went back to the owner. */
+export const GAVE_UP_REACTION = 'confused';
+
+/** From Claude's side: anyone but the owner, so a Claude session or the service. */
+export function fromClaudeSide(login: string | null | undefined): login is string {
+  return typeof login === 'string' && login !== OWNER_LOGIN;
+}
 
 /** A reaction that claims an answer for a Claude session: 👀 from anyone but the owner. */
 export function isClaimReaction(login: string | null | undefined, content: string): boolean {
-  return typeof login === 'string' && login !== OWNER_LOGIN && content.toLowerCase() === CLAIM_REACTION;
+  return fromClaudeSide(login) && content.toLowerCase() === CLAIM_REACTION;
+}
+
+// The statuses written by code rather than by a session, so the board and the service can tell them apart.
+/** Written by the watcher as it claims an answer, before it wakes its session. */
+export const WORKING_ASK = 'Working on your answers';
+/** Written by the Mac service once the session it started for an answer is running. */
+export const SERVICE_WORKING_ASK = 'A Mac session is working on your answers';
+/** Written by the Mac service when that session ended without handing the item on; it hands it to the owner. */
+export const GAVE_UP_ASK = 'A Mac session gave up on your answers';
+
+/** Which of those statuses this is, or null for one a session wrote. */
+export function codeWrittenStatus(s: Pick<Status, 'waitingOn' | 'ask'> | null): 'working' | 'service-working' | 'gave-up' | null {
+  if (s?.waitingOn === 'claude' && s.ask === WORKING_ASK) return 'working';
+  if (s?.waitingOn === 'claude' && s.ask === SERVICE_WORKING_ASK) return 'service-working';
+  if (s?.waitingOn === 'owner' && s.ask === GAVE_UP_ASK) return 'gave-up';
+  return null;
 }
 
 /** A comment as both GitHub's APIs give it, reduced to what the answer rules need. */

@@ -35,6 +35,7 @@ export interface ItemFacts {
   lastChangeAt: string | null;        // latest commit or comment, not counting the issue's status comment
   labelEvents: LabelEvent[];
   answers: AnswerSeen[];              // the owner's answers written since the status was, oldest first
+  lastAnswer: AnswerSeen | null;      // the owner's newest answer, whether or not it answers the current status (the same object as the last of answers when it does)
   lastActivityAt: string;             // latest of commits, comments, label changes, created/merged/closed
 }
 export type BoxState = 'done' | 'now' | 'ready' | 'blocked' | 'todo';

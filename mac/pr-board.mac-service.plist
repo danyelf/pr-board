@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent for the PR Board service on the Mac (cli/mac-service.ts).
+  Copy it to ~/Library/LaunchAgents/ and replace __NODE__, __REPO__, __LOG_DIR__ and __PATH__
+  as README step 9 says (__PATH__ must start with the directory of __NODE__).
+  The config file is ~/.pr-board/service.json (see service.example.json next to this file).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.pr-board.mac-service</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__REPO__/cli/mac-service.ts</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+  </dict>
+  <!-- Start at login, and start again if it ever stops. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <!-- With a bad config it stops at once; this keeps launchd from restarting it more than once a minute. -->
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <!-- Stopping the service leaves the Claude sessions it started running. -->
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/mac-service.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/mac-service.log</string>
+</dict>
+</plist>

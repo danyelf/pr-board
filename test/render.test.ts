@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GAVE_UP_ASK, SERVICE_WORKING_ASK, WORKING_ASK } from '../src/shared/answer.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
 import { renderStatus } from '../src/shared/status.ts';
 import { buildBoard } from '../src/worker/board.ts';
@@ -222,13 +223,13 @@ describe('renderBoard answering', () => {
       answers: [{ id: `c${n}`, url: `https://github.com/acme/x/pull/${n}#issuecomment-1`, at: minutesAgo(m), claimedAt: claimed === null ? null : minutesAgo(claimed), choices: {}, note: '' }],
       ...over,
     });
-    const html = board([answered(970, 2, null), answered(971, 200, 180), answered(972, 20, null, {
+    const html = board([answered(970, 2, null), answered(971, 200, 5), answered(972, 20, null, {
       body: renderStatus(asking),
       answers: [{ id: 'c972', url: 'https://github.com/acme/x/pull/972#issuecomment-1', at: minutesAgo(20), claimedAt: null, choices: { '1': 'c', look: 'needs changes' }, note: 'tidy <the> layout' }],
     })]);
     const claude = html.slice(html.indexOf('On Claude'), html.indexOf('Quiet:'));
     expect(claude).toMatch(/PR #970<\/a>.*answered, waiting for Claude to pick it up<\/span>/);
-    expect(claude).toMatch(/PR #971<\/a>.*Claude picked up your answers 3 h ago<\/span>/);
+    expect(claude).toMatch(/PR #971<\/a>.*Claude picked up your answers 5 min ago<\/span>/);
     const card = cardOf(html, 972);
     expect(html.indexOf('PR #972')).toBeLessThan(html.indexOf('On Claude'));
     expect(card).toContain('<span class="why">Answered, not picked up</span>');
@@ -240,6 +241,34 @@ describe('renderBoard answering', () => {
     expect(card).toContain('How does it look? → <b>needs changes</b>');
     expect(card).toContain('<div class="note">tidy &lt;the&gt; layout</div>');
     expect(card).not.toContain('<details');
+  });
+
+  it('says on the row when code has set the status to working on the answers, and who', () => {
+    const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
+    const working = (n: number, ask: string) => facts({
+      number: n, lastActivityAt: at, body: renderStatus({ waitingOn: 'claude', since: minutesAgo(4), ask, questions: [], toTest: null, writtenAt: minutesAgo(4) }),
+    });
+    const html = board([working(980, SERVICE_WORKING_ASK), working(981, WORKING_ASK)]);
+    const claude = html.slice(html.indexOf('On Claude'), html.indexOf('Quiet:'));
+    expect(claude).toMatch(/PR #980<\/a>.*Mac session working on it, since 4 min ago/);
+    expect(claude).toMatch(/PR #981<\/a>.*Claude is working on your answers, since 4 min ago/);
+  });
+
+  it('shows a card a session gave up on with the answer it was given, and the form to answer again', () => {
+    const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
+    const html = board([facts({
+      number: 982, labels: ['on sam'], lastActivityAt: at,
+      body: renderStatus({ waitingOn: 'owner', since: minutesAgo(3), ask: GAVE_UP_ASK, questions: [], toTest: 'Its output is in the logs', writtenAt: minutesAgo(3) }),
+      lastAnswer: { id: 'g', url: 'https://github.com/acme/x/pull/982#issuecomment-9', at: minutesAgo(90), claimedAt: null, choices: { look: 'needs changes' }, note: 'redo it' },
+    })]);
+    const card = cardOf(html, 982);
+    expect(html.indexOf('PR #982')).toBeLessThan(html.indexOf('On Claude'));
+    expect(card).toContain('<span class="why">A session tried and gave up</span>');
+    expect(card).toContain(GAVE_UP_ASK);
+    expect(card).toContain('Its output is in the logs');
+    expect(card).toContain('Your answer · sent 1 h ago');
+    expect(card).toContain('<div class="note">redo it</div>');
+    expect(card).toContain('<form');
   });
 
   it('cuts a long note to its start, with the whole of it a click away on the card', () => {

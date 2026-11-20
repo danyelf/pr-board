@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
 import { pickStatusComment, statusText } from '../src/shared/status.ts';
+import { OWNER_LOGIN } from '../src/shared/config.ts';
 
-export type Gh = (args: string[], opts?: { cwd?: string }) => Promise<string>;
+/** Runs a command. `env`, when given, replaces the environment it runs in. */
+export type Gh = (args: string[], opts?: { cwd?: string; env?: NodeJS.ProcessEnv }) => Promise<string>;
 
 export interface Deps {
   gh: Gh;
@@ -29,7 +31,7 @@ export async function currentRepo(gh: Gh, cwd?: string): Promise<{ owner: string
 function run(command: string): Gh {
   return (args, opts) =>
     new Promise((resolve, reject) => {
-      execFile(command, args, { cwd: opts?.cwd, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+      execFile(command, args, { cwd: opts?.cwd, env: opts?.env, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
         if (error) reject(new Error(`${command} ${args.join(' ')} failed: ${stderr.trim() || error.message}`));
         else resolve(stdout);
       });
@@ -38,6 +40,21 @@ function run(command: string): Gh {
 
 export const gh: Gh = run('gh');
 export const git: Gh = run('git');
+export const ps: Gh = run('ps');
+
+/** Thrown when `gh` would act as the board's owner, whose 👀 the board doesn't count as a claim. */
+export class OwnerError extends Error {}
+
+/**
+ * Returns the login `gh` acts as. Throws an OwnerError when that is the board's owner, since an
+ * answer claimed by the owner would look to the board as if nobody had picked it up. Other
+ * failures (GitHub unreachable) are thrown as they are, for the caller to decide on.
+ */
+export async function refuseOwner(gh: Gh, advice: string): Promise<string> {
+  const login = (await gh(['api', 'user', '-q', '.login'])).trim();
+  if (login === OWNER_LOGIN) throw new OwnerError(`gh is signed in as ${login}, the board's owner. The board doesn't count the owner's own 👀 as a claim. ${advice}`);
+  return login;
+}
 
 /** `gh api --paginate --slurp` returns an array of pages; flatten to one list. */
 export function flattenPages(json: string): unknown[] {
@@ -45,9 +62,11 @@ export function flattenPages(json: string): unknown[] {
   return Array.isArray(parsed) ? parsed.flat() : [];
 }
 
+/** Whether GitHub said 404. Reads only what the command printed, not the command, whose path may hold a 404 (item #404). */
 export function isNotFound(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /\b404\b|Not Found/i.test(message);
+  const at = message.lastIndexOf(' failed: ');
+  return /\b404\b|Not Found/i.test(at === -1 ? message : message.slice(at + ' failed: '.length));
 }
 
 /** Reads "owner/repo#N", or "#N" (just the number, in the current directory's repo). Throws on anything else. */
@@ -80,18 +99,20 @@ export interface ItemRead<T> {
   /** For an issue, the comment that text comes from; null for a PR, or an issue with no status comment. */
   statusComment: T | null;
   comments: T[];
+  labels: string[];
 }
 
 /** An item and its comments, with the text its status lives in. */
 export async function readItem<T extends { body: string }>(gh: Gh, ref: Ref): Promise<ItemRead<T>> {
   const item = JSON.parse(await gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}`])) as {
-    state?: string; pull_request?: unknown; body?: string | null;
+    state?: string; pull_request?: unknown; body?: string | null; labels?: { name?: string }[];
   };
   const comments = await issueComments<T>(gh, ref);
   const isPr = Boolean(item.pull_request);
   const statusComment = isPr ? null : pickStatusComment(comments);
   const text = statusText({ kind: isPr ? 'pr' : 'issue', body: item.body ?? '', statusCommentBody: statusComment?.body ?? null });
-  return { isPr, open: item.state !== 'closed', statusText: text, statusComment, comments };
+  const labels = (item.labels ?? []).map((l) => l.name).filter((n): n is string => typeof n === 'string');
+  return { isPr, open: item.state !== 'closed', statusText: text, statusComment, comments, labels };
 }
 
 /** The text that holds an item's status, as the board reads it. */

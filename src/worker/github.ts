@@ -327,16 +327,21 @@ function baseFacts(repo: string, item: RawItem, kind: 'pr' | 'issue', labels: st
 
 const fromOwner = (c: Comment): boolean => isOwnerAnswer(c.author?.login, c.body);
 
-/** The owner's answers to the current status, oldest first. Whether each was claimed is read afterwards. */
-function answersSince(comments: Comment[], writtenAt: string | null): AnswerSeen[] {
-  return comments
-    .filter((c): c is Comment & { id: string } =>
-      c.id !== undefined && answersCurrentStatus({ login: c.author?.login, body: c.body, createdAt: c.createdAt }, writtenAt))
-    .map((c) => {
-      // Already known to parse: answersCurrentStatus only passes answer comments.
-      const answer = parseAnswer(c.body)!;
-      return { id: c.id, url: c.url, at: c.createdAt, claimedAt: null, choices: answer.answers, note: answer.note };
-    });
+/**
+ * The owner's answers to the current status, oldest first, and the owner's newest answer whether or
+ * not it is one of them. Whether each current one was claimed is read afterwards.
+ */
+function readAnswers(comments: Comment[], writtenAt: string | null): Pick<ItemFacts, 'answers' | 'lastAnswer'> {
+  const answers: AnswerSeen[] = [];
+  let lastAnswer: AnswerSeen | null = null;
+  for (const c of comments) {
+    if (c.id === undefined || !fromOwner(c)) continue;
+    // Already known to parse: fromOwner only passes answer comments.
+    const answer = parseAnswer(c.body)!;
+    lastAnswer = { id: c.id, url: c.url, at: c.createdAt, claimedAt: null, choices: answer.answers, note: answer.note };
+    if (answersCurrentStatus({ login: c.author?.login, body: c.body, createdAt: c.createdAt }, writtenAt)) answers.push(lastAnswer);
+  }
+  return { answers, lastAnswer };
 }
 
 function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
@@ -394,7 +399,7 @@ function prFacts(repo: string, pr: RawItem, report: Report): ItemFacts {
     prepDone: prepAt !== null, commitsSincePrep,
     statusCommentBody: null,
     statusWrittenAt: writtenAt,
-    answers: answersSince(comments, writtenAt),
+    ...readAnswers(comments, writtenAt),
     // The owner answering is not a change the status should have caught up with.
     lastChangeAt: latestOrNull([...commits.map((c) => c.committedDate), ...comments.filter((c) => !fromOwner(c)).map((c) => c.createdAt)]),
   };
@@ -416,7 +421,7 @@ function issueFacts(repo: string, issue: RawItem, report: Report): ItemFacts {
     prepDone: false, commitsSincePrep: null,
     statusCommentBody: statusComment?.body ?? null,
     statusWrittenAt: writtenAt,
-    answers: answersSince(comments, writtenAt),
+    ...readAnswers(comments, writtenAt),
     lastChangeAt: latestOrNull(comments.filter((c) => c !== statusComment && !fromOwner(c)).map((c) => c.createdAt)),
   };
 }
