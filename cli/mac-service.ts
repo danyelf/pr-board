@@ -41,6 +41,8 @@ export interface Config {
   logDir: string;
   /** The file holding the GitHub token of Claude's own account. */
   tokenFile: string;
+  /** The file holding a token from `claude setup-token`, given to each session as CLAUDE_CODE_OAUTH_TOKEN; null to use claude's own sign-in. */
+  claudeTokenFile: string | null;
   /** The claude program itself (not a shell function wrapping it). */
   claude: string;
   /** Flags added after the name and the prompt, such as --permission-mode. */
@@ -87,7 +89,7 @@ export interface ServiceDeps {
   err?: (line: string) => void;
 }
 
-const SETTINGS = ['repos', 'graceMinutes', 'maxSessions', 'sessionMinutes', 'pollSeconds', 'logDir', 'tokenFile', 'claude', 'claudeArgs'];
+const SETTINGS = ['repos', 'graceMinutes', 'maxSessions', 'sessionMinutes', 'pollSeconds', 'logDir', 'tokenFile', 'claudeTokenFile', 'claude', 'claudeArgs'];
 
 /** Reads the service's config file, filling in the defaults. Throws, naming the file, on anything it can't use. */
 export function loadConfig(text: string, home: string, path: string): Config {
@@ -134,6 +136,7 @@ export function loadConfig(text: string, home: string, path: string): Config {
     sessionMs: num('sessionMinutes', 60, (n) => n > 0, 'a number of minutes, more than 0') * MIN,
     logDir: d.logDir === undefined ? join(home, '.pr-board', 'logs') : absolute(d.logDir, 'logDir'),
     tokenFile: d.tokenFile === undefined ? join(home, '.config', 'claude-github', 'token') : absolute(d.tokenFile, 'tokenFile'),
+    claudeTokenFile: d.claudeTokenFile == null ? null : absolute(d.claudeTokenFile, 'claudeTokenFile'),
     claude: d.claude === undefined ? join(home, '.local', 'bin', 'claude') : absolute(d.claude, 'claude'),
     claudeArgs: claudeArgs as string[],
   };
@@ -237,14 +240,16 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     err(`The grace period (${config.graceMs / MIN} min) is not shorter than the board's ${PICKUP_GRACE_MS / MIN} min, so the board will show answers as not picked up before this service takes them.`);
   }
 
-  /** Claude's own token, read fresh each time so a replaced file is noticed; null when missing or empty. */
-  const readToken = (): string | null => {
+  /** A token file's contents, read fresh each time so a replaced file is noticed; null when missing or empty. */
+  const readSecret = (path: string): string | null => {
     try {
-      return deps.files.read(config.tokenFile).trim() || null;
+      return deps.files.read(path).trim() || null;
     } catch {
       return null;
     }
   };
+  /** Claude's own GitHub token. */
+  const readToken = (): string | null => readSecret(config.tokenFile);
   // The service's own GitHub calls, the claim among them, run as Claude's account. With no token they
   // refuse: under launchd gh would otherwise use whichever account it is logged in as, often the owner's.
   const gh: Gh = async (args, opts) => {
@@ -472,6 +477,12 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       warn(name, `not starting a session: ${config.tokenFile} is missing or empty, so the session couldn't act as Claude's own GitHub account.`);
       return;
     }
+    const claudeToken = config.claudeTokenFile === null ? null : readSecret(config.claudeTokenFile);
+    if (config.claudeTokenFile !== null && !claudeToken) {
+      warn(name, `not starting a session: ${config.claudeTokenFile} is missing or empty, so the session couldn't sign in to Claude.`);
+      return;
+    }
+    const env = { ...deps.env, GH_TOKEN: token, ...(claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken } : {}) };
     const branch = isPr ? await prBranch(ref) : `issue-${ref.n}`;
     const cwd = await worktreeFor(repo, ref, isPr, branch);
     const promptOf = (some: Found[]) => promptFor(ref, cwd, some.map(describe));
@@ -480,7 +491,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     const argsFor = (prompt: string) => ['--name', sessionName(ref), '-p', prompt, ...config.claudeArgs];
     if (dryRun) {
       planned++;
-      say(name, `would claim and start: ${config.claude} --name "${sessionName(ref)}" -p <the prompt below> ${config.claudeArgs.join(' ')}\n  in ${cwd}\n  with GH_TOKEN from ${config.tokenFile}\n  output to ${logPath}\n  prompt:\n${indent(promptOf(answers))}`);
+      say(name, `would claim and start: ${config.claude} --name "${sessionName(ref)}" -p <the prompt below> ${config.claudeArgs.join(' ')}\n  in ${cwd}\n  with GH_TOKEN from ${config.tokenFile}${config.claudeTokenFile ? ` and CLAUDE_CODE_OAUTH_TOKEN from ${config.claudeTokenFile}` : ''}\n  output to ${logPath}\n  prompt:\n${indent(promptOf(answers))}`);
       return;
     }
     deps.files.mkdir(config.logDir);
@@ -523,7 +534,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     const args = argsFor(promptOf(claimed.map((c) => c.found)));
     let session: Session;
     try {
-      session = deps.spawn(config.claude, args, { cwd, env: { ...deps.env, GH_TOKEN: token }, logPath });
+      session = deps.spawn(config.claude, args, { cwd, env, logPath });
       await session.spawned;
     } catch (e) {
       for (const c of claimed) await takeBack(name, c.found, [c.eyesId, c.rocketId], `Couldn't start a session (${message(e)}).`);
