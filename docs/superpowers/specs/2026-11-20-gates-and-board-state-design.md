@@ -110,13 +110,7 @@ Work can start on an issue. When its PR opens, the first status written for the 
 
 **Replacing a PR.** Claude can attach a new PR to a record in place of the old one (`--replaces <old PR>`). The record keeps its approvals unless Claude also moves it back a gate. This covers a PR that is scrapped and rebuilt, and one that is split, where the remainder gets a record of its own.
 
-**A trial PR.** Live code is often easier to try than a preview or a mockup, so Claude may open a PR whose code is only there to be tried and will be thrown away. The status command marks it (`--trial`). A trial:
-
-- is shown on its card as "trial, not for merging";
-- can never show "ready for merge", and the command refuses `--gate prep` on it;
-- gets the label `trial` on GitHub, and Claude opens it as a draft, so the PR list and GitHub's own merge button say the same thing.
-
-When the trial has done its job, Claude closes it, and either the work ends or a real PR replaces it. Danyel merged too early five times in the six weeks checked; a trial must not be the sixth. (Claude's call, for Danyel to confirm.)
+**Trying something in a live PR.** Live code is often easier to try than a preview or a mockup, so Claude may open a PR just to try an idea in, and then throw it away and start again. The board has no special marking for this (Danyel's call: nothing mechanical until it proves needed). Claude says in the ask that the PR is for trying, and when it is thrown away the next PR replaces it on the same record, as above.
 
 **When a record ends.** When its PR merges, from any gate. Danyel sometimes merges before prep, and the board doesn't complain; the log says which gate it was in. When its PR closes unmerged and nothing replaces it, or its issue closes with no PR, the record ends too. The board keeps ended records, and their logs, for the history.
 
@@ -135,12 +129,11 @@ pr-status set <owner/repo#N | #N> \
   --to-test "what to open, what to try, what should happen" \
   --reason "why this goes back to an earlier gate" \
   --no-design            (first status only: this work has no design step) \
-  --trial                (this PR's code is only for trying, and won't be merged) \
   --replaces <old PR>    (this PR takes over the old one's record)
 ```
 
 - `--gate` and `--state` are required. They replace `--waiting`: whose turn it is follows from the state, so the two can't disagree.
-- It refuses: paused with no question; a question with no bold default; complete at Implementation with no `--to-test`; parked with no `--ask` saying what it waits on; forward past an unapproved gate; back without `--reason`; `--gate prep` on a trial; anything with a line break in it.
+- It refuses: paused with no question; a question with no bold default; complete at Implementation with no `--to-test`; parked with no `--ask` saying what it waits on; forward past an unapproved gate; back without `--reason`; anything with a line break in it.
 - Handing a PR to Danyel (paused or complete) still asks for his review on GitHub the first time, and again when it comes back to him after more work, so GitHub notifies him.
 - `pr-status ok <ref>` still says "I touched this, and the status is still right". It now records that on the board (a time on the record and a line in the log), not in a file on the Mac. On an item with no record it fails and says to run `set`. `show` prints the record.
 
@@ -307,7 +300,7 @@ A fourth idea, having the board work the gate out from clues on GitHub so that C
 
 - Three gates: Design, Implementation, Prep for merge. Each is Claude working or complete; Design and Implementation are then approved by him; Prep ends at ready for merge.
 - Design is optional, chosen per piece of work.
-- A PR may be spun up to try something live and then thrown away.
+- A PR may be spun up to try something live and then thrown away, with no special marking on the board until one proves needed.
 - The lights show where in the flow a PR is. Progress is forward by default; going back is allowed and deliberate.
 - Only he merges, on GitHub. The board has no merge button and Claude has no permission to merge.
 - Claude writes the gate down; the board doesn't guess it.
@@ -337,11 +330,9 @@ A fourth idea, having the board work the gate out from clues on GitHub so that C
 - An open PR with no record shows as "No status written" in "Waiting on you".
 - An approval can carry a note; every card has a note box all the time.
 - A PR can be replaced and keep its record; a merge or close from any gate ends the record without complaint.
-- Trial PRs: marked, never shown as ready, opened as drafts with a `trial` label.
-
 ## Checked against the past
 
-On 2026-11-20 an agent read about 2,000 of Danyel's typed messages from 9 October to 20 November and followed about 20 torahmap and pr-board PRs. The skeleton held: "prep N for merge" (about 25 times) is the Implementation approval, choosing among options is the Design approval, and Claude's numbered questions are the paused state. Three cases showed the gates catching real mistakes: a PR built past a design he "never okayed" (429), five early merges, and an approval the old board forgot (626). The misfits it found are why this document has an approval that carries a note, a note box on every card, optional design, replaceable and trial PRs, and a record that ends quietly on any merge or close. The sample was excerpts from 11 sessions, nearly all one repo, and the counts are rough.
+On 2026-11-20 an agent read about 2,000 of Danyel's typed messages from 9 October to 20 November and followed about 20 torahmap and pr-board PRs. The skeleton held: "prep N for merge" (about 25 times) is the Implementation approval, choosing among options is the Design approval, and Claude's numbered questions are the paused state. Three cases showed the gates catching real mistakes: a PR built past a design he "never okayed" (429), five merges of PRs whose build wasn't finished, and an approval the old board forgot (626). The misfits it found are why this document has an approval that carries a note, a note box on every card, optional design, replaceable PRs, and a record that ends quietly on any merge or close. The sample was excerpts from 11 sessions, nearly all one repo, and the counts are rough.
 
 ## Left to the builder
 
