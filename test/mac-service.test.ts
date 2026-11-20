@@ -626,6 +626,27 @@ describe('mac-service', () => {
       expect(w.mine(id)).toEqual(['eyes', 'rocket']);
       expect(w.statusOf('acme/x#5')).toMatchObject({ waitingOn: 'owner', ask: 'look' });
       expect(r.err).toContain("couldn't take its 🚀 back off");
+      expect(r.err).toContain('will try again at the next look');
+    });
+
+    it('takes a stray 🚀 off at a later look, and holds back the item’s check until then', async () => {
+      const w = new World();
+      w.config();
+      w.item('acme/x#5');
+      w.worktree(`${HOME}/code/x`, 'feature-a', `${HOME}/code/x/.claude/worktrees/feature-a`);
+      const ours = w.answer('acme/x#5', 8);
+      const theirs = w.answer('acme/x#5', 7);
+      w.lostRace.add(theirs);
+      w.failUnreact = true;
+      const r = await run(w, [], (n, _, stop) => {
+        // Our session ends with the stray 🚀 still on the other session's (latest) answer: no check yet.
+        if (n === 1) w.started[0]!.finish(1);
+        if (n === 2) { expect(w.mine(theirs)).toEqual(['eyes', 'rocket']); expect(w.statusOf('acme/x#5')).toMatchObject({ ask: SERVICE_WORKING_ASK }); w.failUnreact = false; }
+        if (n === 4) stop();
+      });
+      expect(w.mine(theirs)).toEqual(['eyes']);
+      expect(w.mine(ours)).toEqual(['eyes', 'rocket']);
+      expect(r.out).toContain('acme/x#5: took its 🚀 back off the answer another session claimed first.');
     });
 
     it('takes its 🚀 back off an answer another session claimed first, and leaves it to that one', async () => {

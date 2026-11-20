@@ -1,7 +1,7 @@
 import type { AnswerSeen, ItemFacts, StageBox, Status, Turn } from '../shared/types.ts';
 import { asksForLook, codeWrittenStatus } from '../shared/answer.ts';
 import { statusFingerprint } from '../shared/fingerprint.ts';
-import { DAY_MS, PICKUP_GRACE_MS } from '../shared/names.ts';
+import { DAY_MS, PICKUP_GRACE_MS, WORKING_STALLS_MS } from '../shared/names.ts';
 import { extractToTest, hasStatusSection, parseStatus, statusText } from '../shared/status.ts';
 import { stageStrip, whyTag } from '../shared/stage.ts';
 import { effectiveTurn, formatWait, waitingSince } from '../shared/turn.ts';
@@ -35,8 +35,10 @@ export interface Card {
  * 'awaiting-pickup': answered, and no session has claimed it yet, for up to the grace period.
  * 'not-picked-up': still unclaimed after that, so it is back with the owner to notice.
  * 'picked-up': every answer has been claimed by a Claude session.
- * 'stalled': claimed that long ago, and the status still not rewritten: the session that claimed it
- *   seems to be gone (whoever claims an answer rewrites the status at once).
+ * 'stalled': the session that claimed it seems to be gone. Either claimed that long ago and the status
+ *   still not rewritten (whoever claims an answer rewrites it at once), or the watcher's "Working on your
+ *   answers" has stood unchanged for WORKING_STALLS_MS. The Mac service watches its own sessions, so its
+ *   status never stalls here.
  * 'gave-up': the Mac service's session ended without handing the item on, and the service handed it
  *   to the owner; the answer is the one it gave up on.
  */
@@ -94,14 +96,15 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
   const claimTimes = f.answers.map((a) => a.claimedAt).filter((t): t is string => t !== null);
   const lastClaim = claimTimes.length > 0 ? claimTimes.reduce((a, b) => (time(b) > time(a) ? b : a)) : null;
   const longAgo = (iso: string) => now.getTime() - time(iso) >= PICKUP_GRACE_MS;
+  const workingStalled = codeWrittenStatus(status) === 'working' && status?.writtenAt != null && now.getTime() - time(status.writtenAt) >= WORKING_STALLS_MS;
   const answerState: AnswerState | null =
     // A new answer after the session gave up goes through the usual states.
-    f.answers.length === 0 ? (codeWrittenStatus(status) === 'gave-up' ? 'gave-up' : null)
+    f.answers.length === 0 ? (codeWrittenStatus(status) === 'gave-up' ? 'gave-up' : workingStalled ? 'stalled' : null)
     : unclaimed.length === 0 ? (longAgo(lastClaim!) ? 'stalled' : 'picked-up')
     : longAgo(unclaimed[0]!.at) ? 'not-picked-up'
     : 'awaiting-pickup';
   // Back with the owner since the answer was sent, or since the claim that came to nothing; not since the item was handed over.
-  const since = answerState === 'not-picked-up' ? unclaimed[0]!.at : answerState === 'stalled' ? lastClaim : carried ? own ?? hidden.since : own;
+  const since = answerState === 'not-picked-up' ? unclaimed[0]!.at : answerState === 'stalled' ? lastClaim ?? status?.writtenAt ?? null : carried ? own ?? hidden.since : own;
   return {
     facts: f,
     status,
@@ -118,7 +121,8 @@ function makeCard(f: ItemFacts, now: Date, hidden: HiddenWait | undefined): Card
     asksLook: asksForLook(f, effective.turn),
     fingerprint: statusFingerprint(status),
     answerState,
-    answer: answerState === 'gave-up' ? f.lastAnswer : answer,
+    // With no answer since the status (gave up, or the watcher's status stalled), the answer last acted on.
+    answer: answerState && f.answers.length === 0 ? f.lastAnswer : answer,
     pickedUpAt: answerState === 'picked-up' ? lastClaim : null,
   };
 }

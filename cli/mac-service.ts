@@ -284,6 +284,11 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   const stopping = new Map<number, number | 'forced'>();
   /** Items whose hand-back failed partway in this run, to be finished on a later look. */
   const handBackFailed = new Set<string>();
+  /**
+   * 🚀s it couldn't take back off answers another session claimed first, by item. While one is there the
+   * answer looks like this service's, so the item isn't checked as an ended session's until it is off.
+   */
+  const strayRockets = new Map<string, { found: Found; reactionId: number | null }[]>();
   let planned = 0;
 
   const logHint = (ref: Ref) => `Its output is the newest ${ref.owner}-${ref.repo}-${ref.n}-*.log in ${config.logDir}; the service's own log says why it stopped (grep it for ${refString(ref)}).`;
@@ -297,7 +302,16 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
    */
   async function checkEnded(ref: Ref, ended: boolean): Promise<boolean> {
     const name = refString(ref);
-    const item = await readItem<RestComment>(gh, ref);
+    let item: Awaited<ReturnType<typeof readItem<RestComment>>>;
+    try {
+      item = await readItem<RestComment>(gh, ref);
+    } catch (e) {
+      // Only the item itself missing means it is gone; any later failure is tried again at the next look.
+      if (!isNotFound(e)) throw e;
+      warn(name, 'it is gone (deleted, or moved to another repo); no longer checking it.');
+      handBackFailed.delete(name);
+      return false;
+    }
     if (!item.open) return false;
     const latest = item.comments.filter((c) => isOwnerAnswer(c.user?.login, c.body)).at(-1);
     if (!latest) return false;
@@ -330,6 +344,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       handBackFailed.add(name);
       throw e;
     }
+    handBackFailed.delete(name);
     warn(name, `the session ended without handing the item on. Marked ${latest.html_url} 😕 and set the status to "${GAVE_UP_ASK}", waiting on ${OWNER_NAME}. This service won't take that answer again. ${logHint(ref)}`);
     return true;
   }
@@ -491,8 +506,13 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         continue;
       }
       say(name, `${f.url} was claimed by another session first; leaving it to that one.`);
-      // The answer is that session's, so a 🚀 left on it must not lead to it being handed back: only warn.
-      if (rocket) await unreact(gh, f, rocket.reactionId).catch((e: unknown) => warn(name, `couldn't take its 🚀 back off ${f.url} (${message(e)}); take it off by hand.`));
+      // The answer is that session's, so a 🚀 left on it must not lead to it being handed back.
+      if (rocket) {
+        await unreact(gh, f, rocket.reactionId).catch((e: unknown) => {
+          warn(name, `couldn't take its 🚀 back off ${f.url} (${message(e)}); will try again at the next look.`);
+          strayRockets.set(name, [...(strayRockets.get(name) ?? []), { found: f, reactionId: rocket.reactionId }]);
+        });
+      }
     }
     if (claimed.length === 0) {
       // GitHub may have taken the 🚀 and 👀 even though its reply was lost; with no session to act on them, check as for one that ended.
@@ -614,8 +634,17 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         failed = true;
         err(`Couldn't look for items its sessions left at startup (${message(e)}); will try again.`);
       }
-      // A session still running is checked once it has gone.
-      const checked = await inParallel([...toCheck].filter(([name]) => !live.has(name)), PARALLEL_READS, async ([name, ended]) => {
+      // Try again to take off 🚀s left on other sessions' answers.
+      for (const [name, left] of [...strayRockets]) {
+        const still: typeof left = [];
+        for (const r of left) await unreact(gh, r.found, r.reactionId).catch(() => still.push(r));
+        if (still.length === 0) {
+          strayRockets.delete(name);
+          say(name, "took its 🚀 back off the answer another session claimed first.");
+        } else strayRockets.set(name, still);
+      }
+      // A session still running is checked once it has gone; an item with a 🚀 still on another session's answer, once that is off.
+      const checked = await inParallel([...toCheck].filter(([name]) => !live.has(name) && !strayRockets.has(name)), PARALLEL_READS, async ([name, ended]) => {
         const ref = readRef(name);
         if (!('owner' in ref)) return { name, ended, left: false, ok: true };
         try {
@@ -623,11 +652,6 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
           toCheck.delete(name);
           return { name, ended, left, ok: true };
         } catch (e) {
-          if (isNotFound(e)) {
-            toCheck.delete(name);
-            warn(name, `it is gone (deleted, or moved to another repo); no longer checking it.`);
-            return { name, ended, left: false, ok: true };
-          }
           warn(name, `couldn't check whether its session handed the item on (${message(e)}); will try again.`);
           return { name, ended, left: false, ok: false };
         }

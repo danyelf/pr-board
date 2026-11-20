@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { isNotFound } from '../cli/gh.ts';
 import { inParallel } from '../cli/poll.ts';
 
 describe('inParallel', () => {
@@ -18,5 +19,13 @@ describe('inParallel', () => {
 
   it('returns nothing for nothing', async () => {
     expect(await inParallel([], 6, async () => 1)).toEqual([]);
+  });
+});
+
+describe('isNotFound', () => {
+  it('reads what GitHub said, not the request, which may name item #404', () => {
+    expect(isNotFound(new Error('gh api repos/acme/x/issues/404 failed: HTTP 502 Bad Gateway'))).toBe(false);
+    expect(isNotFound(new Error('gh api repos/acme/x/issues/7 failed: gh: Not Found (HTTP 404)'))).toBe(true);
+    expect(isNotFound(new Error('gh: HTTP 404'))).toBe(true);
   });
 });

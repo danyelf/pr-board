@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GAVE_UP_ASK } from '../src/shared/answer.ts';
+import { GAVE_UP_ASK, SERVICE_WORKING_ASK, WORKING_ASK } from '../src/shared/answer.ts';
 import { renderStatus } from '../src/shared/status.ts';
 import { buildBoard } from '../src/worker/board.ts';
 import { facts, status } from './helpers.ts';
@@ -230,6 +230,22 @@ describe('buildBoard and answers', () => {
     expect(card.why).toBe('Picked up, but nothing since');
     expect(card.waitingSince).toBe(minutesAgo(29));
     expect(card.answer?.url).toBe('https://example.com/b');
+  });
+
+  it('says nothing has happened since the pickup once the watcher’s working status has stood for an hour, but not before, nor for the Mac service’s', () => {
+    const picked = answer('w', 90, 61);
+    const working = (ask: string, ago: number) => facts({
+      number: 700, labels: [], lastActivityAt: minutesAgo(ago),
+      body: renderStatus({ waitingOn: 'claude', since: minutesAgo(ago), ask, questions: [], toTest: null, writtenAt: minutesAgo(ago) }),
+      answers: [], lastAnswer: picked,
+    });
+    const b = buildBoard([working(WORKING_ASK, 61)], [], NOW);
+    expect(where(b)).toBe('waiting');
+    expect(b.waiting[0]!.answerState).toBe('stalled');
+    expect(b.waiting[0]!.waitingSince).toBe(minutesAgo(61));
+    expect(b.waiting[0]!.answer).toBe(picked);
+    expect(buildBoard([working(WORKING_ASK, 59)], [], NOW).onClaude[0]!.answerState).toBeNull();
+    expect(buildBoard([working(SERVICE_WORKING_ASK, 120)], [], NOW).onClaude[0]!.answerState).toBeNull();
   });
 
   it('puts the card in front of the owner when the Mac service gave up, with the answer it gave up on', () => {
