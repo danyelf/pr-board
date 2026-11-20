@@ -19,7 +19,7 @@ import {
 } from '../src/shared/answer.ts';
 import { parseStatus } from '../src/shared/status.ts';
 import { claim, claudeReactions, describe, react, unreact, waitingAnswers, writeCodeStatus, writtenAt, type Found, type RestComment } from './answers.ts';
-import { OwnerError, flattenPages, gh as realGh, git as realGit, ps as realPs, readItem, readRef, refString, refuseOwner } from './gh.ts';
+import { OwnerError, flattenPages, isNotFound, gh as realGh, git as realGit, ps as realPs, readItem, readRef, refString, refuseOwner } from './gh.ts';
 import type { Gh, Ref } from './gh.ts';
 import { PARALLEL_READS, POLL_MS, backoff, inParallel, message } from './poll.ts';
 
@@ -280,9 +280,10 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   let previous: Set<string> | null = null;
   /** Items to check (a failed check is tried again): true for one whose session was seen to end, false for one found at startup. */
   const toCheck = new Map<string, boolean>();
-  /** Sessions it has asked to stop for running too long, with when it asked; and those it then forced to stop. */
-  const stopping = new Map<number, number>();
-  const forced = new Set<number>();
+  /** Sessions it has asked to stop for running too long, by process: when it asked, or 'forced' once it forced them. */
+  const stopping = new Map<number, number | 'forced'>();
+  /** Items whose hand-back failed partway in this run, to be finished on a later look. */
+  const handBackFailed = new Set<string>();
   let planned = 0;
 
   const logHint = (ref: Ref) => `Its output is the newest ${ref.owner}-${ref.repo}-${ref.n}-*.log in ${config.logDir}; the service's own log says why it stopped (grep it for ${refString(ref)}).`;
@@ -306,10 +307,11 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     const status = parseStatus(item.statusText);
     const kind = codeWrittenStatus(status);
     if (kind === 'gave-up') {
-      // Handed back already, unless writing the label failed after the status went up: then finish the hand-back.
-      if (item.labels.includes(LABEL_ON_OWNER) || dryRun) return false;
+      // Handed back already; but if this run's hand-back failed after the status went up (say, adding the label), finish it.
+      if (!handBackFailed.has(name) || item.labels.includes(LABEL_ON_OWNER) || dryRun) return false;
       for (const p of await writeCodeStatus(gh, ref, 'owner', GAVE_UP_ASK, logHint(ref), new Date(deps.now()))) warn(name, p);
-      warn(name, `its status said "${GAVE_UP_ASK}" but the item lacked the "${LABEL_ON_OWNER}" label; set both again.`);
+      handBackFailed.delete(name);
+      warn(name, `finished handing the item back to ${OWNER_NAME}: its status said "${GAVE_UP_ASK}" but the "${LABEL_ON_OWNER}" label hadn't gone on.`);
       return false;
     }
     const current = answersCurrentStatus({ login: latest.user?.login, body: latest.body, createdAt: latest.created_at }, await writtenAt(gh, ref, item));
@@ -322,7 +324,12 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       return true;
     }
     await react(gh, { ref, id: latest.id }, GAVE_UP_REACTION);
-    for (const p of await writeCodeStatus(gh, ref, 'owner', GAVE_UP_ASK, logHint(ref), new Date(deps.now()))) warn(name, p);
+    try {
+      for (const p of await writeCodeStatus(gh, ref, 'owner', GAVE_UP_ASK, logHint(ref), new Date(deps.now()))) warn(name, p);
+    } catch (e) {
+      handBackFailed.add(name);
+      throw e;
+    }
     warn(name, `the session ended without handing the item on. Marked ${latest.html_url} 😕 and set the status to "${GAVE_UP_ASK}", waiting on ${OWNER_NAME}. This service won't take that answer again. ${logHint(ref)}`);
     return true;
   }
@@ -339,7 +346,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         const labels = (row.labels ?? []).map((l) => l.name);
         // A PR's status is in its description; an issue's is in a comment, so any issue not parked might hold one.
         const could = row.pull_request
-          ? ['service-working', 'gave-up'].includes(codeWrittenStatus(parseStatus(row.body ?? '')) ?? '') || labels.includes(LABEL_ON_OWNER)
+          ? codeWrittenStatus(parseStatus(row.body ?? '')) === 'service-working' || labels.includes(LABEL_ON_OWNER)
           : !labels.includes(LABEL_PARKED);
         if (could) refs.push(ref);
       }
@@ -352,9 +359,12 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
    * session is still there a minute later. The check that follows any ended session then runs.
    */
   function stopLongRunning(live: Map<string, Running>): void {
+    // Forget processes that have gone, so a reused process id starts afresh.
+    const pids = new Set([...live.values()].map((s) => s.pid));
+    for (const pid of stopping.keys()) if (!pids.has(pid)) stopping.delete(pid);
     for (const [name, s] of live) {
-      if (s.elapsedMs < config.sessionMs || forced.has(s.pid)) continue;
       const asked = stopping.get(s.pid);
+      if (s.elapsedMs < config.sessionMs || asked === 'forced') continue;
       if (dryRun) {
         if (asked === undefined) say(name, `its session (process ${s.pid}) has run for ${Math.floor(s.elapsedMs / MIN)} min; would stop it.`);
         stopping.set(s.pid, deps.now());
@@ -367,8 +377,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         : `its session (process ${s.pid}) is still running a minute after being asked to stop; forcing it to stop.`);
       try {
         deps.kill(-s.pid, signal);
-        if (asked === undefined) stopping.set(s.pid, deps.now());
-        else forced.add(s.pid);
+        stopping.set(s.pid, asked === undefined ? deps.now() : 'forced');
       } catch (e) {
         // Tried again at the next look.
         warn(name, `couldn't stop process group ${s.pid}: ${message(e)}`);
@@ -466,20 +475,24 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     const claimed: Claimed[] = [];
     let claimFailed = false;
     for (const f of answers) {
+      let rocket: { reactionId: number | null } | null;
+      let eyes: { reactionId: number | null } | null;
       try {
         // 🚀 before 👀: a 👀 without a 🚀 is an open session's, so this order never leaves one of ours looking like that.
-        const rocket = await react(gh, f, SERVICE_REACTION);
-        const eyes = await claim(gh, f);
-        if (eyes) {
-          claimed.push({ found: f, rocketId: rocket?.reactionId ?? null, eyesId: eyes.reactionId });
-          continue;
-        }
-        say(name, `${f.url} was claimed by another session first; leaving it to that one.`);
-        if (rocket) await unreact(gh, f, rocket.reactionId);
+        rocket = await react(gh, f, SERVICE_REACTION);
+        eyes = await claim(gh, f);
       } catch (e) {
         claimFailed = true;
         warn(name, `couldn't claim ${f.url}: ${message(e)}`);
+        continue;
       }
+      if (eyes) {
+        claimed.push({ found: f, rocketId: rocket?.reactionId ?? null, eyesId: eyes.reactionId });
+        continue;
+      }
+      say(name, `${f.url} was claimed by another session first; leaving it to that one.`);
+      // The answer is that session's, so a 🚀 left on it must not lead to it being handed back: only warn.
+      if (rocket) await unreact(gh, f, rocket.reactionId).catch((e: unknown) => warn(name, `couldn't take its 🚀 back off ${f.url} (${message(e)}); take it off by hand.`));
     }
     if (claimed.length === 0) {
       // GitHub may have taken the 🚀 and 👀 even though its reply was lost; with no session to act on them, check as for one that ended.
@@ -509,13 +522,13 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     }
   }
 
-  /** The owner's waiting answers in one repo. Returns how many items had some past their grace period, and whether reading any item failed. */
-  async function serveRepo(repo: RepoConfig, live: Map<string, Running>): Promise<{ ripe: number; failed: boolean }> {
+  /** The owner's waiting answers in one repo. Returns how many items had some past their grace period, how many it read, and how many of those failed. */
+  async function serveRepo(repo: RepoConfig, live: Map<string, Running>): Promise<{ ripe: number; reads: number; unread: number }> {
     const label = encodeURIComponent(LABEL_ON_OWNER);
     const rows = flattenPages(await gh(['api', `repos/${repo.owner}/${repo.repo}/issues?labels=${label}&state=open&per_page=100`, '--paginate', '--slurp'])) as
       { number: number; comments?: number; pull_request?: unknown }[];
     let ripe = 0;
-    let failed = false;
+    let unread = 0;
     // An item with no comments has no answers, so it isn't read any further.
     const readable = rows.filter((r) => r.comments !== 0);
     if (once) {
@@ -527,10 +540,10 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     for (const [i, { row, ref }] of toRead.entries()) {
       const name = refString(ref);
       // One item that can't be read doesn't keep the rest of the repo from being served.
-      const { found: answers, failed: unread } = reads[i]!;
-      if (unread.length > 0) {
-        failed = true;
-        for (const line of unread) err(line);
+      const { found: answers, failed: why } = reads[i]!;
+      if (why.length > 0) {
+        unread++;
+        for (const line of why) err(line);
         continue;
       }
       if (answers.length === 0) {
@@ -554,7 +567,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         warn(name, `couldn't start a session: ${message(e)}`);
       }
     }
-    return { ripe, failed };
+    return { ripe, reads: toRead.length, unread };
   }
 
   // A repo it can't serve is logged once and left out; the others carry on.
@@ -574,8 +587,9 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   for (;;) {
     planned = 0;
     let failed = false;
-    // One item that fails is logged and tried again at the next look; only a failure to read the lists slows the service down.
-    let itemFailed = false;
+    // Items read this look, and how many of them failed.
+    let reads = 0;
+    let unread = 0;
     let ripe = 0;
     let live: Map<string, Running> | null = null;
     try {
@@ -609,11 +623,17 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
           toCheck.delete(name);
           return { name, ended, left, ok: true };
         } catch (e) {
+          if (isNotFound(e)) {
+            toCheck.delete(name);
+            warn(name, `it is gone (deleted, or moved to another repo); no longer checking it.`);
+            return { name, ended, left: false, ok: true };
+          }
           warn(name, `couldn't check whether its session handed the item on (${message(e)}); will try again.`);
           return { name, ended, left: false, ok: false };
         }
       });
-      itemFailed ||= checked.some((c) => !c.ok);
+      reads += checked.length;
+      unread += checked.filter((c) => !c.ok).length;
       if (previous !== null && atStartup > 0) {
         const fromStartup = checked.filter((c) => !c.ended);
         const left = fromStartup.filter((c) => c.left).map((c) => c.name);
@@ -625,7 +645,8 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         try {
           const served = await serveRepo(repo, live);
           ripe += served.ripe;
-          itemFailed ||= served.failed;
+          reads += served.reads;
+          unread += served.unread;
         } catch (e) {
           failed = true;
           err(`${repo.owner}/${repo.repo}: ${message(e)}`);
@@ -633,10 +654,11 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       }
     }
     if (once) {
-      if (ripe === 0 && !failed && !itemFailed) out(`No answers waiting past the ${config.graceMs / MIN} min grace period; nothing to do.`);
-      return failed || itemFailed ? 1 : 0;
+      if (ripe === 0 && !failed && unread === 0) out(`No answers waiting past the ${config.graceMs / MIN} min grace period; nothing to do.`);
+      return failed || unread > 0 ? 1 : 0;
     }
-    failures = failed ? failures + 1 : 0;
+    // Back off when the lists couldn't be read, or every item read failed (GitHub refusing reads, say); one bad item alone doesn't.
+    failures = failed || (reads > 0 && unread === reads) ? failures + 1 : 0;
     const wait = backoff(config.pollMs, failures);
     if (failures > 0) err(`Trying again in ${wait / 1000} s.`);
     if (deps.signal?.aborted) break;

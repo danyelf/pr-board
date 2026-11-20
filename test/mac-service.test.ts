@@ -45,6 +45,10 @@ class World {
   lostReply = new Set<number>();
   /** Sessions that ignore the polite stop signal. */
   ignoreTerm = false;
+  /** Taking a reaction back off fails. */
+  failUnreact = false;
+  /** Items GitHub no longer has (deleted, or moved to another repo). */
+  gone = new Set<string>();
   /** Items whose comments can't be read. */
   poisoned = new Set<string>();
   /** When set, the next session fails to start, the way a missing program does. */
@@ -164,6 +168,7 @@ class World {
     }
     const item = /^api repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(line);
     if (item) {
+      if (this.gone.has(`${item[1]}#${item[2]}`)) throw new Error('gh: Not Found (HTTP 404)');
       const it = this.items.get(`${item[1]}#${item[2]}`)!;
       return JSON.stringify({ state: it.open ? 'open' : 'closed', body: it.body, user: { login: 'robot' }, labels: it.labelled ? [{ name: 'on sam' }] : [], ...(it.kind === 'pr' ? { pull_request: {} } : {}) });
     }
@@ -192,6 +197,7 @@ class World {
     if (unreact) {
       const id = Number(unreact[1]);
       const list = this.reactions.get(id) ?? [];
+      if (this.failUnreact) throw new Error('gh: HTTP 502 Bad Gateway');
       if (!list.some((r) => r.id === Number(unreact[2]))) throw new Error('gh: HTTP 404 Not Found');
       this.reactions.set(id, list.filter((r) => r.id !== Number(unreact[2])));
       return '';
@@ -608,6 +614,20 @@ describe('mac-service', () => {
       expect(r.err).toContain("signed in as sam-gh, the board's owner");
     });
 
+    it('never hands back an answer another session claimed first, even when its 🚀 won’t come off', async () => {
+      const w = new World();
+      w.config();
+      w.item('acme/x#5');
+      const id = w.answer('acme/x#5', 6);
+      w.lostRace.add(id);
+      w.failUnreact = true;
+      const r = await run(w, [], (n, _, stop) => { if (n === 3) stop(); });
+      expect(w.started).toHaveLength(0);
+      expect(w.mine(id)).toEqual(['eyes', 'rocket']);
+      expect(w.statusOf('acme/x#5')).toMatchObject({ waitingOn: 'owner', ask: 'look' });
+      expect(r.err).toContain("couldn't take its 🚀 back off");
+    });
+
     it('takes its 🚀 back off an answer another session claimed first, and leaves it to that one', async () => {
       const w = new World();
       w.config();
@@ -879,7 +899,7 @@ describe('mac-service', () => {
       });
       expect(w.statusOf('acme/x#5')).toMatchObject({ waitingOn: 'owner', ask: GAVE_UP_ASK });
       expect(w.items.get('acme/x#5')!.labelled).toBe(true);
-      expect(r.err).toContain('lacked the "on sam" label; set both again.');
+      expect(r.err).toContain('acme/x#5: finished handing the item back to Sam');
     });
 
     it('hands the item back when GitHub took the 👀 but its reply was lost, so no session started', async () => {
@@ -943,6 +963,30 @@ describe('mac-service', () => {
       expect(w.statusOf('acme/x#5')).toMatchObject({ waitingOn: 'owner', ask: GAVE_UP_ASK });
       expect(r.out).not.toContain('acme/x#9:');
     });
+  });
+
+  it('backs off when every item it read failed', async () => {
+    const w = new World();
+    w.config();
+    w.item('acme/x#5');
+    w.answer('acme/x#5', 6);
+    w.poisoned.add('acme/x#5');
+    const r = await run(w, [], (n, _, stop) => { if (n === 2) stop(); });
+    expect(r.sleeps.slice(0, 2)).toEqual([120_000, 240_000]);
+  });
+
+  it('stops checking an item that is gone', async () => {
+    const w = new World();
+    w.config();
+    w.item('acme/x#5');
+    w.worktree(`${HOME}/code/x`, 'feature-a', `${HOME}/code/x/.claude/worktrees/feature-a`);
+    w.answer('acme/x#5', 6);
+    const r = await run(w, [], (n, _, stop) => {
+      if (n === 1) { w.gone.add('acme/x#5'); w.items.get('acme/x#5')!.labelled = false; w.started[0]!.finish(1); }
+      if (n === 4) stop();
+    });
+    expect(r.err.match(/acme\/x#5: it is gone/g)).toHaveLength(1);
+    expect(r.err).not.toContain("couldn't check whether its session handed the item on");
   });
 
   it('one item that can’t be read does not stop the items after it, nor slow the service down', async () => {
