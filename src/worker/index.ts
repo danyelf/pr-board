@@ -4,7 +4,7 @@ import { checkAccess, type Env } from './access.ts';
 import { buildBoard } from './board.ts';
 import { fetchItem, fetchItems, postComment } from './github.ts';
 import { ITEM_REF, postAnswer } from './post-answer.ts';
-import { renderBoard, renderMessage } from './render.ts';
+import { PAGE_SCRIPTS, renderBoard, renderMessage } from './render.ts';
 
 export type { Env } from './access.ts';
 
@@ -19,14 +19,29 @@ interface Deps {
 
 const CACHE_SECONDS = 60;
 
-const PAGE_HEADERS = {
-  'Content-Type': 'text/html; charset=utf-8',
-  'Cache-Control': 'no-store',
-  // The page has only inline styles and images from the web, and its forms post only to itself; no scripts, no frames.
-  'Content-Security-Policy': "default-src 'none'; img-src https:; style-src 'unsafe-inline'; form-action 'self'",
-  // Not no-referrer: under that, browsers send "Origin: null" on the page's own form posts, and /answer refuses them.
-  'Referrer-Policy': 'same-origin',
-};
+let scriptSources: Promise<string> | undefined;
+
+/** The policy's list of the page's scripts by SHA-256, worked out once from their text on the first request (Workers can't do it at load). */
+function pageScriptSources(): Promise<string> {
+  scriptSources ??= Promise.all(
+    PAGE_SCRIPTS.map(async (s) => {
+      const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+      return `'sha256-${btoa(String.fromCharCode(...new Uint8Array(d)))}'`;
+    }),
+  ).then((hashes) => hashes.join(' '));
+  return scriptSources;
+}
+
+async function pageHeaders(): Promise<Record<string, string>> {
+  return {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+    // Inline styles, images from the web, the page's own scripts by their hashes, and forms that post only to itself; nothing else, no frames.
+    'Content-Security-Policy': `default-src 'none'; img-src https:; style-src 'unsafe-inline'; script-src ${await pageScriptSources()}; form-action 'self'`,
+    // Not no-referrer: under that, browsers send "Origin: null" on the page's own form posts, and /answer refuses them.
+    'Referrer-Policy': 'same-origin',
+  };
+}
 
 // The part of Cloudflare's ExportedHandler this Worker uses, so the tests can type-check without the Workers type definitions.
 export interface Handler {
@@ -77,7 +92,7 @@ export function makeHandler(deps: Deps): Handler {
       await deps.cache?.delete(cacheKey(now()));
       return new Response(null, { status: 303, headers: { Location: `/?sent=${encodeURIComponent(result.sent)}` } });
     }
-    return new Response(renderMessage(result.title, result.text, result.link), { status: result.status, headers: PAGE_HEADERS });
+    return new Response(renderMessage(result.title, result.text, result.link), { status: result.status, headers: await pageHeaders() });
   }
 
   return {
@@ -97,7 +112,7 @@ export function makeHandler(deps: Deps): Handler {
       const sentParam = url.searchParams.get('sent');
       const sent = sentParam !== null && ITEM_REF.test(sentParam) ? sentParam : null;
       const { items, errors } = await load(env, at, sent !== null);
-      return new Response(renderBoard(buildBoard(items, errors, at), { sent }), { headers: PAGE_HEADERS });
+      return new Response(renderBoard(buildBoard(items, errors, at), { sent }), { headers: await pageHeaders() });
     },
   };
 }

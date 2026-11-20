@@ -57,6 +57,9 @@ const CSS = `
   .yours details[open] summary { display:none; }
   .yours details .all { white-space:pre-wrap; }
   .btn.send { font-size:13.5px; font-weight:600; padding:7px 18px; background:var(--ok); color:#fff; border-color:var(--ok); }
+  .btn.send.sending { opacity:1; cursor:progress; }
+  .btn.send.sending::before { content:''; display:inline-block; width:.85em; height:.85em; margin-right:7px; vertical-align:-1px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
   .ok { margin:6px 0 0; padding:6px 10px; border:1px solid #b9dcc3; background:#e9f5ec; color:#245e36; border-radius:6px; font-size:12.5px; }
   .shots { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
   .shots img { width:96px; height:auto; border:1px solid var(--line); border-radius:4px; display:block; }
@@ -123,6 +126,34 @@ interface RenderOptions {
 function choice(name: string, value: string, isDefault: boolean): string {
   return `<label class="btn${isDefault ? ' default' : ''}"><input type="radio" name="${esc(name)}" value="${esc(value)}"${isDefault ? ' checked' : ''}><span>${esc(value)}</span></label>`;
 }
+
+/**
+ * Once Send is clicked, its button shows a spinner and "Sending…" and can't be clicked again;
+ * coming back to the page with the browser's Back button resets it.
+ */
+const SEND_SCRIPT = `
+document.addEventListener('submit', (e) => {
+  const b = e.target.querySelector('button.send');
+  if (!b) return;
+  b.disabled = true;
+  b.classList.add('sending');
+  b.textContent = 'Sending…';
+});
+addEventListener('pageshow', () => {
+  for (const b of document.querySelectorAll('button.send.sending')) {
+    b.disabled = false;
+    b.classList.remove('sending');
+    b.textContent = 'Send answers';
+  }
+});
+`;
+
+/**
+ * Every script the board runs. The page's security policy allows exactly these texts, each by its
+ * hash, and no other script, so text that slips into the page as HTML still can't run as one.
+ * A new script goes here.
+ */
+export const PAGE_SCRIPTS = [SEND_SCRIPT];
 
 /** The questions, the look question when the card asks it, a note box and Send, as one form posted to /answer. */
 function answerForm(c: Card): string {
@@ -282,5 +313,5 @@ export function renderBoard(b: Board, opts: RenderOptions = {}): string {
   ${claude}
   <div class="sec">Quiet: nobody is working on these</div>
   ${quiet}
-</div></body></html>`;
+</div>${PAGE_SCRIPTS.map((s) => `<script>${s}</script>`).join('')}</body></html>`;
 }
