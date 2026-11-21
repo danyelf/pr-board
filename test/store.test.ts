@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { GAVE_UP_ASK, SERVICE_WORKING_ASK, WORKING_ASK } from '../src/shared/names.ts';
-import { Refused, type AnswerInput, type SetInput } from '../src/shared/work.ts';
+import { Refused, type AnswerInput, type AnswerRow, type SetInput } from '../src/shared/work.ts';
 import {
   addAnswer, claim, confirm, endWork, findWork, giveUp, importWork, openWork, serviceClaims, setStatus, unclaim,
   unclaimedAnswers, unclaimedOlderThan, type Db,
@@ -64,6 +64,17 @@ describe('setStatus and findWork', () => {
     expect(attached.record).toMatchObject({ id: first.record.id, issue: 3, pr: 5, version: 2 });
     expect((await findWork(db, { repo: 'o/r', n: 3 }))?.id).toBe(first.record.id);
     expect((await findWork(db, PR))?.id).toBe(first.record.id);
+  });
+
+  it('gives a second PR naming the same issue a record of its own, and the first PR keeps its record', async () => {
+    await setStatus(db, { repo: 'o/r', n: 3 }, input({ isPr: false }), T0);
+    const first = await setStatus(db, { repo: 'o/r', n: 4 }, input({ issue: 3, state: 'working', questions: [] }), T1);
+    const second = await setStatus(db, { repo: 'o/r', n: 5 }, input({ issue: 3 }), T2);
+    expect(second.record.id).not.toBe(first.record.id);
+    expect(second.record).toMatchObject({ pr: 5, issue: null });
+    expect(await findWork(db, { repo: 'o/r', n: 4 })).toMatchObject({ id: first.record.id, pr: 4, issue: 3 });
+    const next = await setStatus(db, { repo: 'o/r', n: 4 }, input({ issue: 3, state: 'paused' }), T3);
+    expect(next.record).toMatchObject({ id: first.record.id, version: 3, pr: 4, issue: 3 });
   });
 
   it('a replaced PR closing doesn\'t end the record', async () => {
@@ -214,13 +225,88 @@ describe('claim, unclaim and giveUp', () => {
     await expect(claim(db, PR, 'session', T1)).rejects.toThrow(Refused);
   });
 
-  it('leaves answers to an older version unclaimed', async () => {
+  it('claims an unclaimed answer to an older version, since it may be a note Claude never saw', async () => {
     await setStatus(db, PR, input(), T0);
-    await addAnswer(db, PR, answer(), T1);
+    await addAnswer(db, PR, answer({ choices: {}, note: 'late thought' }), T1);
     await setStatus(db, PR, input({ ask: 'Again?' }), T2);
+    expect((await unclaimedAnswers(db, [PR]))[0]?.answers).toHaveLength(1);
+    expect((await unclaimedOlderThan(db, T3))[0]?.answers).toHaveLength(1);
     const got = await claim(db, PR, 'session', T3);
-    expect(got.answers).toEqual([]);
-    expect(got.record).toMatchObject({ state: 'paused', ask: 'Again?' });
+    expect(got.answers).toHaveLength(1);
+    expect(got.answers[0]).toMatchObject({ version: 1, claimedAt: T3 });
+    expect(got.record).toMatchObject({ state: 'working', ask: WORKING_ASK, version: 2 });
+  });
+
+  it('moves turnSince on a claim, and unclaim puts it back', async () => {
+    await withTwoAnswers();
+    const got = await claim(db, PR, 'session', T2);
+    expect(got.record.turnSince).toBe(T2);
+    await unclaim(db, got.answers.map((a) => a.id));
+    expect((await findWork(db, PR))?.turnSince).toBe(T0);
+  });
+
+  it('moves turnSince when giving up', async () => {
+    await withTwoAnswers();
+    const got = await claim(db, PR, 'service', T2);
+    await giveUp(db, got.answers.map((a) => a.id), 'h', T3);
+    expect((await findWork(db, PR))?.turnSince).toBe(T3);
+  });
+
+  describe('a note sent while the work is being done', () => {
+    async function claimedThenNoted(): Promise<{ first: AnswerRow[]; late: AnswerRow }> {
+      await setStatus(db, PR, input(), T0);
+      await addAnswer(db, PR, answer(), T1);
+      const first = (await claim(db, PR, 'session', T1)).answers;
+      const late = await addAnswer(db, PR, answer({ choices: {}, note: 'also, wider' }), T2);
+      return { first, late };
+    }
+
+    it('is claimed without changing the record, and takes its before-values from the live claim', async () => {
+      const { first, late } = await claimedThenNoted();
+      const before = await findWork(db, PR);
+      const got = await claim(db, PR, 'service', T3);
+      expect(got.answers.map((a) => a.id)).toEqual([late.id]);
+      expect(got.record).toEqual(before);
+      expect(got.answers[0]).toMatchObject({ stateBefore: 'paused', claimedBy: 'service' });
+      expect(first[0]?.stateBefore).toBe('paused');
+    });
+
+    it('is left to the live claim by the Mac service query', async () => {
+      await claimedThenNoted();
+      expect(await unclaimedOlderThan(db, T3)).toEqual([]);
+      expect(await unclaimedAnswers(db, [PR])).toHaveLength(1);
+    });
+
+    it('is offered to the service once the live claim has been given up', async () => {
+      const { first } = await claimedThenNoted();
+      await giveUp(db, first.map((a) => a.id), 'h', T2);
+      expect((await unclaimedOlderThan(db, T3))[0]?.answers).toHaveLength(1);
+    });
+
+    it('giving up the late note alone leaves the first claim\'s record as it is', async () => {
+      const { late } = await claimedThenNoted();
+      await claim(db, PR, 'service', T3);
+      await giveUp(db, [late.id], 'h', T3);
+      expect(await findWork(db, PR)).toMatchObject({ state: 'working', ask: WORKING_ASK });
+    });
+
+    it('giving up never writes working with the gave-up ask', async () => {
+      await setStatus(db, PR, input({ state: 'working', questions: [] }), T0);
+      const note = await addAnswer(db, PR, answer({ choices: {}, note: 'hi' }), T1);
+      const got = await claim(db, PR, 'service', T2);
+      expect(got.answers[0]).toMatchObject({ id: note.id, stateBefore: 'working' });
+      expect(got.record.state).toBe('working');
+      await giveUp(db, [note.id], 'h', T3);
+      expect(await findWork(db, PR)).toMatchObject({ state: 'paused', ask: GAVE_UP_ASK, turnSince: T3 });
+    });
+
+    it('giving up restores complete when the work was complete', async () => {
+      await setStatus(db, PR, input({ state: 'complete', questions: [] }), T0);
+      const got0 = await addAnswer(db, PR, answer({ choices: {}, note: 'x' }), T1);
+      await claim(db, PR, 'service', T2);
+      await giveUp(db, [got0.id], 'h', T3);
+      expect(await findWork(db, PR)).toMatchObject({ state: 'complete', ask: GAVE_UP_ASK });
+    });
   });
 
   it('unclaim puts the answers back and restores the record\'s state and ask', async () => {

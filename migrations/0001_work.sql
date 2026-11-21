@@ -40,8 +40,9 @@ CREATE TABLE answer (
   claimed_at TEXT,
   claimed_by TEXT,
   state_before TEXT,
-  -- The ask the record had before the claim, so a failed start can put it back.
+  -- The state, ask and turn time the record had before the claim, so a failed start can put them back.
   ask_before TEXT,
+  turn_since_before TEXT,
   gave_up_at TEXT,
   give_up_hint TEXT
 );

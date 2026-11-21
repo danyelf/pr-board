@@ -60,6 +60,7 @@ interface AnswerDbRow {
   claimed_by: AnswerRow['claimedBy'];
   state_before: State | null;
   ask_before: string | null;
+  turn_since_before: string | null;
   gave_up_at: string | null;
 }
 
@@ -114,8 +115,11 @@ function logStmt(db: Db, workId: number | 'last', at: string, actor: Actor, chan
 
 const STILL_OPEN_AT = 'EXISTS (SELECT 1 FROM work WHERE id = ? AND version = ? AND ended_at IS NULL)';
 
-async function findOpen(db: Db, column: 'pr' | 'issue', repo: string, n: number): Promise<WorkRecord | null> {
-  const row = await db.prepare(`SELECT * FROM work WHERE repo = ? AND ${column} = ? AND ended_at IS NULL`).bind(repo, n).first<WorkRow>();
+async function findOpen(db: Db, column: 'pr' | 'issue', repo: string, n: number, withoutPr = false): Promise<WorkRecord | null> {
+  const row = await db
+    .prepare(`SELECT * FROM work WHERE repo = ? AND ${column} = ? AND ended_at IS NULL${withoutPr ? ' AND pr IS NULL' : ''}`)
+    .bind(repo, n)
+    .first<WorkRow>();
   return row ? toRecord(row) : null;
 }
 
@@ -156,12 +160,16 @@ export async function setStatus(
   const prev =
     (await findWork(db, ref)) ??
     (input.replaces !== null ? await findOpen(db, 'pr', ref.repo, input.replaces) : null) ??
-    (input.issue !== null ? await findOpen(db, 'issue', ref.repo, input.issue) : null);
+    // An issue's record takes a PR only while it has none. Otherwise this PR (a split, say) gets a record of its own.
+    (input.issue !== null ? await findOpen(db, 'issue', ref.repo, input.issue, true) : null);
   const f = applySet(prev, input, now);
   const handedOver = turnOf(f.state) === 'owner' && (prev === null || turnOf(prev.state) !== 'owner');
+  // The issue can sit on one open record only; a PR that names an issue another record already holds goes without it.
+  const issueFree =
+    input.issue !== null && input.issue !== prev?.issue && (await findOpen(db, 'issue', ref.repo, input.issue)) === null ? input.issue : null;
 
   if (prev === null) {
-    const issue = input.isPr ? input.issue : ref.n;
+    const issue = input.isPr ? issueFree : ref.n;
     const pr = input.isPr ? ref.n : null;
     const results = (await db.batch([
       insertRecord(db, ref.repo, issue, pr, f, now),
@@ -170,7 +178,7 @@ export async function setStatus(
     return { record: await recordById(db, results[0]!.results[0]!.id), handedOver };
   }
 
-  const issue = input.isPr ? (input.issue ?? prev.issue) : ref.n;
+  const issue = input.isPr ? (issueFree ?? prev.issue) : ref.n;
   const pr = input.isPr ? ref.n : prev.pr;
   const results = (await db.batch([
     db
@@ -247,11 +255,14 @@ export async function addAnswer(db: Db, ref: ItemRef, a: AnswerInput, now: strin
   return (await answersByIds(db, [id]))[0]!;
 }
 
-/** Answers to the record's current version that nobody has claimed. */
+/**
+ * Answers nobody has claimed, to any version. A choice or approval can only be stored against the version it answers,
+ * but a note can arrive late; an unclaimed answer to an older version is a note Claude hasn't seen.
+ */
 async function waiting(db: Db, r: WorkRecord): Promise<AnswerRow[]> {
   const { results } = await db
-    .prepare('SELECT * FROM answer WHERE work_id = ? AND version = ? AND claimed_at IS NULL ORDER BY id')
-    .bind(r.id, r.version)
+    .prepare('SELECT * FROM answer WHERE work_id = ? AND claimed_at IS NULL ORDER BY id')
+    .bind(r.id)
     .all<AnswerDbRow>();
   return results.map(toAnswer);
 }
@@ -269,11 +280,14 @@ export async function unclaimedAnswers(db: Db, refs: ItemRef[]): Promise<{ recor
   return out;
 }
 
+/** For the Mac service. Records that already have a live claim are left out, so it never starts a second session on one. */
 export async function unclaimedOlderThan(db: Db, before: string): Promise<{ record: WorkRecord; answers: AnswerRow[] }[]> {
   const { results } = await db
     .prepare(
       `SELECT a.* FROM answer a JOIN work w ON w.id = a.work_id
-       WHERE w.ended_at IS NULL AND a.version = w.version AND a.claimed_at IS NULL AND a.at < ? ORDER BY a.id`,
+       WHERE w.ended_at IS NULL AND a.claimed_at IS NULL AND a.at < ?
+         AND NOT EXISTS (SELECT 1 FROM answer c WHERE c.work_id = w.id AND c.version = w.version AND c.claimed_at IS NOT NULL AND c.gave_up_at IS NULL)
+       ORDER BY a.id`,
     )
     .bind(before)
     .all<AnswerDbRow>();
@@ -283,23 +297,30 @@ export async function unclaimedOlderThan(db: Db, before: string): Promise<{ reco
 /**
  * Claims every waiting answer of a record and sets the record to working, in one batch. The answers update
  * only takes answers nobody has claimed, and the record update only runs if this call's claim is there to find,
- * so a second claim changes nothing. The claim leaves the version alone.
+ * so a second claim changes nothing. The claim leaves the version alone. It takes the answers of every version.
+ * A claim that lands on a record already working (a late note) marks the answers and leaves the record as it is;
+ * its "before" values come from the record's live claim if there is one, since that claim saw the record first.
  */
 export async function claim(db: Db, ref: ItemRef, by: 'session' | 'service', now: string): Promise<{ record: WorkRecord; answers: AnswerRow[] }> {
   const r = await findWork(db, ref);
   if (!r) throw new Refused(`${ref.repo}#${ref.n} is not open on the board`);
   const mine = 'EXISTS (SELECT 1 FROM answer WHERE work_id = ? AND claimed_at = ? AND claimed_by = ?)';
+  const liveClaim = (column: string) =>
+    `(SELECT l.${column} FROM answer l WHERE l.work_id = ? AND l.version = (SELECT version FROM work WHERE id = ?)
+       AND l.claimed_at IS NOT NULL AND l.gave_up_at IS NULL AND l.state_before IS NOT NULL ORDER BY l.claimed_at, l.id LIMIT 1)`;
   const results = (await db.batch([
     db
       .prepare(
         `UPDATE answer SET claimed_at = ?, claimed_by = ?,
-           state_before = (SELECT state FROM work WHERE id = ?), ask_before = (SELECT ask FROM work WHERE id = ?)
-         WHERE work_id = ? AND claimed_at IS NULL AND version = (SELECT version FROM work WHERE id = ?) RETURNING id`,
+           state_before = COALESCE(${liveClaim('state_before')}, (SELECT state FROM work WHERE id = ?)),
+           ask_before = COALESCE(${liveClaim('ask_before')}, (SELECT ask FROM work WHERE id = ?)),
+           turn_since_before = COALESCE(${liveClaim('turn_since_before')}, (SELECT turn_since FROM work WHERE id = ?))
+         WHERE work_id = ? AND claimed_at IS NULL RETURNING id`,
       )
-      .bind(now, by, r.id, r.id, r.id, r.id),
+      .bind(now, by, ...Array<number>(10).fill(r.id)),
     db
-      .prepare(`UPDATE work SET state = 'working', ask = ? WHERE id = ? AND ${mine}`)
-      .bind(by === 'service' ? SERVICE_WORKING_ASK : WORKING_ASK, r.id, r.id, now, by),
+      .prepare(`UPDATE work SET state = 'working', ask = ?, turn_since = ? WHERE id = ? AND state <> 'working' AND ${mine}`)
+      .bind(by === 'service' ? SERVICE_WORKING_ASK : WORKING_ASK, now, r.id, r.id, now, by),
     logStmt(db, r.id, now, 'claim', { by, version: r.version }, mine, [r.id, now, by]),
   ])) as Written[];
   return { record: await recordById(db, r.id), answers: await answersByIds(db, results[0]!.results.map((x) => x.id)) };
@@ -321,12 +342,17 @@ export async function unclaim(db: Db, answerIds: number[]): Promise<void> {
   if (!first || first.state_before === null || first.ask_before === null) return;
   const marks = answerIds.map(() => '?').join(',');
   await db.batch([
-    db
-      .prepare("UPDATE work SET state = ?, ask = ? WHERE id = ? AND version = ? AND state = 'working' AND ended_at IS NULL")
-      .bind(first.state_before, first.ask_before, first.work_id, first.version),
+    // The record goes back only when no other claim is still live; a late note's claim leaves the first claim's work alone.
     db
       .prepare(
-        `UPDATE answer SET claimed_at = NULL, claimed_by = NULL, state_before = NULL, ask_before = NULL
+        `UPDATE work SET state = ?, ask = ?, turn_since = ?
+         WHERE id = ? AND version = ? AND state = 'working' AND ended_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM answer WHERE work_id = ? AND version = ? AND claimed_at IS NOT NULL AND gave_up_at IS NULL AND id NOT IN (${marks}))`,
+      )
+      .bind(first.state_before, first.ask_before, first.turn_since_before, first.work_id, first.version, first.work_id, first.version, ...answerIds),
+    db
+      .prepare(
+        `UPDATE answer SET claimed_at = NULL, claimed_by = NULL, state_before = NULL, ask_before = NULL, turn_since_before = NULL
          WHERE id IN (${marks}) AND claimed_at IS NOT NULL AND gave_up_at IS NULL`,
       )
       .bind(...answerIds),
@@ -343,10 +369,16 @@ export async function giveUp(db: Db, answerIds: number[], hint: string, now: str
   if (!first || first.state_before === null) return;
   const marks = answerIds.map(() => '?').join(',');
   const gaveUp = 'EXISTS (SELECT 1 FROM answer WHERE id = ? AND gave_up_at = ?)';
+  // Giving up hands the item back to the owner, so it never writes "working" next to the gave-up ask.
+  const handBackTo = first.state_before === 'paused' || first.state_before === 'complete' ? first.state_before : 'paused';
   await db.batch([
     db
-      .prepare("UPDATE work SET state = ?, ask = ?, to_test = ? WHERE id = ? AND version = ? AND state = 'working' AND ended_at IS NULL")
-      .bind(first.state_before, GAVE_UP_ASK, hint, first.work_id, first.version),
+      .prepare(
+        `UPDATE work SET state = ?, ask = ?, to_test = ?, turn_since = ?
+         WHERE id = ? AND version = ? AND state = 'working' AND ended_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM answer WHERE work_id = ? AND version = ? AND claimed_at IS NOT NULL AND gave_up_at IS NULL AND id NOT IN (${marks}))`,
+      )
+      .bind(handBackTo, GAVE_UP_ASK, hint, now, first.work_id, first.version, first.work_id, first.version, ...answerIds),
     db
       .prepare(`UPDATE answer SET gave_up_at = ?, give_up_hint = ? WHERE id IN (${marks}) AND claimed_at IS NOT NULL AND gave_up_at IS NULL`)
       .bind(now, hint, ...answerIds),
