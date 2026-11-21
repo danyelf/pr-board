@@ -1,5 +1,4 @@
-import assert from 'node:assert/strict';
-import { beforeEach, describe, it } from 'node:test';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { Facts } from '../src/shared/facts.ts';
 import type { Env } from '../src/worker/access.ts';
 import { handleApi, type ApiDeps } from '../src/worker/api.ts';
@@ -9,6 +8,13 @@ import { sqliteDb } from './sqlite-d1.ts';
 
 const ORIGIN = 'https://board.example';
 const NOW_ISO = NOW.toISOString();
+
+const assert = {
+  equal: (actual: unknown, expected: unknown) => expect(actual).toBe(expected),
+  deepEqual: (actual: unknown, expected: unknown) => expect(actual).toEqual(expected),
+  ok: (value: unknown) => expect(value).toBeTruthy(),
+  match: (text: string, pattern: RegExp) => expect(text).toMatch(pattern),
+};
 
 interface Harness {
   db: Db;
