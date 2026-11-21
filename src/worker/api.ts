@@ -139,7 +139,7 @@ async function status(env: Env, deps: ApiDeps, b: Record<string, unknown>): Prom
   const existing = await findWork(env.DB, ref);
   const got = await deps.facts(env, existing ? [existing] : [], true, named === null ? [ref] : [ref, { repo: ref.repo, n: named }]);
   const factsOf = (facts: Facts[], n: number) => facts.find((x) => x.repo === ref.repo && x.number === n);
-  const unreadable = (n: number) => json({ error: `Couldn't read ${ref.repo}#${n} from GitHub${got.errors.length > 0 ? `: ${got.errors.join('; ')}` : ''}` }, 502);
+  const unreadable = (n: number, errors = got.errors) => json({ error: `Couldn't read ${ref.repo}#${n} from GitHub${errors.length > 0 ? `: ${errors.join('; ')}` : ''}` }, 502);
   const f = factsOf(got.facts, ref.n);
   if (!f) return unreadable(ref.n);
 
@@ -153,8 +153,14 @@ async function status(env: Env, deps: ApiDeps, b: Record<string, unknown>): Prom
   } else if (f.kind === 'pr' && f.linkedIssue !== null) {
     // With no issue named, a PR joins the issue GitHub links it to (Closes, Fixes, Resolves or Refs), when that is an issue.
     const linked = f.linkedIssue;
-    const lf = factsOf(got.facts, linked) ?? factsOf((await deps.facts(env, [], true, [{ repo: ref.repo, n: linked }])).facts, linked);
-    issue = lf?.kind === 'issue' ? linked : null;
+    let lf = factsOf(got.facts, linked);
+    if (!lf) {
+      const again = await deps.facts(env, [], true, [{ repo: ref.repo, n: linked }]);
+      lf = factsOf(again.facts, linked);
+      // A failed read is not GitHub saying it is a PR; joining no issue then would split the PR from its issue's record for good.
+      if (!lf) return unreadable(linked, again.errors);
+    }
+    issue = lf.kind === 'pr' ? null : linked;
   }
 
   const input: StatusInput = {

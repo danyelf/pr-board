@@ -82,16 +82,18 @@ async function setStatus(deps: Deps, ref: Ref, opts: SetOptions, out: (l: string
   out(`Recorded ${refString(ref)} at ${opts.gate}, ${opts.state} (version ${sent.record.version})`);
   if (!sent.handedOver) return [];
   // Running set again won't ask for the review, since the record is already the owner's turn; so say how to ask by hand.
-  const byHand = `⚠️ The status was recorded on the board, but ${OWNER_LOGIN} wasn't asked to review, so GitHub won't notify them. Run: gh pr edit ${ref.n} -R ${ref.owner}/${ref.repo} --add-reviewer ${OWNER_LOGIN}`;
+  const asked = `⚠️ The status was recorded on the board, but ${OWNER_LOGIN} wasn't asked to review, so GitHub won't notify them.`;
+  const command = `gh pr edit ${ref.n} -R ${ref.owner}/${ref.repo} --add-reviewer ${OWNER_LOGIN}`;
   let item: Item;
   try {
     item = await readItem(deps.gh, ref);
   } catch (e) {
-    return [`Couldn't read ${refString(ref)} from GitHub: ${message(e)}`, byHand];
+    // Whether the item is a PR isn't known here, and the command works only on one.
+    return [`Couldn't read ${refString(ref)} from GitHub: ${message(e)}`, `${asked} If #${ref.n} is a pull request, run: ${command}`];
   }
   if (!item.isPr) return [];
   const problem = await requestReview(deps.gh, ref, item.author);
-  return problem ? [problem, byHand] : [];
+  return problem ? [problem, `${asked} Run: ${command}`] : [];
 }
 
 export async function main(argv: string[], deps: Deps): Promise<number> {

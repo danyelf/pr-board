@@ -169,7 +169,7 @@ describe('pr-status set asks the owner to review', () => {
     expect(w.reviewers).toEqual([]);
     expect(r.errors[0]).toContain('rate limit');
     expect(r.errors[1]).toMatch(/^⚠️ The status was recorded on the board/);
-    expect(r.errors[1]).toContain('Run: gh pr edit 5 -R acme/x --add-reviewer sam-gh');
+    expect(r.errors[1]).toContain('If #5 is a pull request, run: gh pr edit 5 -R acme/x --add-reviewer sam-gh');
   });
 });
 

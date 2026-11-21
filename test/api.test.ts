@@ -158,6 +158,15 @@ describe('the API', () => {
       assert.match(((await res.json()) as { error: string }).error, /o\/r#12 is a pull request, not an issue/);
       assert.equal(await findWork(h.db, { repo: 'o/r', n: 5 }), null);
     });
+    it('answers 502 and writes nothing when the linked issue cannot be read', async () => {
+      h.items = [facts({ number: 3, kind: 'issue' })];
+      await call(h, 'claude', 'POST', '/api/status', { ...STATUS, number: 3, gate: 'design', state: 'working', questions: [], noDesign: false });
+      h.items = [facts({ number: 5, linkedIssue: 3 })];
+      const res = await call(h, 'claude', 'POST', '/api/status', { ...STATUS, gate: 'design', state: 'working', questions: [], noDesign: false });
+      assert.equal(res.status, 502);
+      assert.match(((await res.json()) as { error: string }).error, /Couldn't read o\/r#3 from GitHub/);
+      assert.equal((await findWork(h.db, { repo: 'o/r', n: 3 }))?.pr, null);
+    });
     it('does not take a linked number as the issue when GitHub says it is a pull request', async () => {
       h.items = [facts({ number: 12 })];
       await call(h, 'claude', 'POST', '/api/status', { ...STATUS, number: 12 });
