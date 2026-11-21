@@ -11,7 +11,7 @@ export interface Deps extends BaseDeps {
 }
 
 const USAGE = 'Usage: pr-status set <owner/repo#N | #N> --gate design|implementation|prep --state working|paused|complete|parked [--ask <text>] [--question "Q? (**default** | other)"]… [--to-test <text>] [--reason <text>] [--no-design] [--replaces <N>] [--issue <N>]';
-const OTHER_USAGE = 'Usage: pr-status ok|show <owner/repo#N | #N>   or   pr-status import <owner/repo#N | #N> --json <file>';
+const OTHER_USAGE = 'Usage: pr-status ok|show <owner/repo#N | #N>   or   pr-status import <owner/repo#N | #N> --json <file>   (import is for the switch-over to the board only; don\'t use it otherwise)';
 
 interface SetOptions {
   gate: string;
