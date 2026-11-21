@@ -46,7 +46,7 @@ Other flags, used only when they apply:
 - `--no-design`: on the first status of a piece of work that has no design step. Its card then has only implementation and prep.
 - `--reason "…"`: why the work goes back to an earlier gate. Required for any move back.
 - `--replaces <old PR number>`: this PR takes over the record of a PR you threw away or split. The record keeps its approvals unless you also move it back a gate.
-- `--issue <N>`: the issue this work belongs to, when the PR's description doesn't say `Closes #N` or `Refs #N`. Normally the command finds it there, so the PR joins the record that began on the issue.
+- `--issue <N>`: the issue this work belongs to, when the PR's description doesn't say `Closes #N` or `Refs #N`. Normally the command finds it there, so the PR joins the record that began on the issue. GitHub reads `Closes #N` only on a PR into the default branch, so a PR built on another PR's branch needs `Refs #N` or `--issue`.
 
 The rules the command enforces:
 
@@ -101,7 +101,7 @@ It costs nothing while it waits. The rules:
 
 - Start it after your first `set` in the session.
 - When you write a status for an item the running watcher doesn't cover, stop that watcher and start one that covers all your items. Never run two.
-- When it exits, it has claimed an answer (which sets the record to working, with the ask "Working on your answers") and printed it. Deal with what it printed, then start it again for all your items.
+- When it exits, it has claimed an answer (which sets the record to working, with the ask "Working on your answers") and printed it. Start it again for all your items straight away, then deal with what it printed, so a note Danyel sends meanwhile still reaches you.
 
 The watcher matters most while you are working. The Mac service leaves an item in the working state alone, so a note Danyel sends while you work waits for your watcher; with none running, it sits there and shows as "Answered, not picked up" after 10 minutes.
 
