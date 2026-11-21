@@ -1,12 +1,14 @@
 // Finding, claiming and describing the owner's answers from the board. The watcher and the Mac
 // service both use this, so the rule for a waiting answer and the printed form have one definition.
 import { CLAIM_REACTION, answerLines, answersCurrentStatus, fromClaudeSide, parseAnswer, type Answer, type CommentSeen } from '../src/shared/answer.ts';
+import { OWNER_LOGIN } from '../src/shared/config.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
-import { descriptionEditedAt, parseStatus, statusWrittenAt } from '../src/shared/status.ts';
-import { flattenPages, readItem, refString } from './gh.ts';
+import { LABEL_ON_OWNER, LABEL_PARKED, type WaitingOn } from '../src/shared/names.ts';
+import { descriptionEditedAt, parseStatus, pickStatusComment, renderStatus, replaceStatus, statusWrittenAt } from '../src/shared/status.ts';
+import type { Status } from '../src/shared/types.ts';
+import { flattenPages, isNotFound, issueComments, readItem, refString } from './gh.ts';
 import type { Gh, ItemRead, Ref } from './gh.ts';
 import { message } from './poll.ts';
-import { setStatus } from './pr-status.ts';
 
 export interface RestComment {
   id: number; user: { login: string } | null; body: string; html_url: string; created_at: string; updated_at: string;
@@ -115,7 +117,7 @@ export async function unreact(gh: Gh, f: Pick<Found, 'ref' | 'id'>, reactionId: 
  * Returns the problems that didn't stop it, as `setStatus` does; throws when it couldn't be written.
  */
 export function writeCodeStatus(gh: Gh, ref: Ref, waiting: 'claude' | 'owner', ask: string, toTest: string | null, now: Date): Promise<string[]> {
-  return setStatus(gh, ref, { waiting, ask, questions: [], toTest }, now);
+  return setStatus(gh, ref, { waiting, ask, toTest }, now);
 }
 
 /** The items these answers are on, each once, in order. */
@@ -139,4 +141,94 @@ export function describe(f: Found): string {
   }
   if (f.answer.note) lines.push(`  Note: ${f.answer.note.split('\n').join('\n    ')}`);
   return lines.join('\n');
+}
+
+// Removed when the watcher and Mac service move to the board.
+interface SetOptions { waiting: WaitingOn; ask: string; toTest: string | null }
+
+function nextStatus(opts: SetOptions, previous: Status | null, now: Date): Status {
+  const since = previous && previous.waitingOn === opts.waiting && previous.since ? previous.since : now.toISOString();
+  return { waitingOn: opts.waiting, since, ask: opts.ask, questions: [], toTest: opts.toTest, writtenAt: now.toISOString() };
+}
+
+/** A PR that has just been handed to the owner, and who opened it; null otherwise. */
+type HandedOver = { author: string | null } | null;
+
+async function writeStatus(gh: Gh, ref: Ref, opts: SetOptions, now: Date): Promise<HandedOver> {
+  const root = `repos/${ref.owner}/${ref.repo}`;
+  const item = JSON.parse(await gh(['api', `${root}/issues/${ref.n}`])) as {
+    pull_request?: unknown;
+    body?: string | null;
+    user?: { login: string } | null;
+  };
+  if (item.pull_request) {
+    const body = item.body ?? '';
+    const previous = parseStatus(body);
+    const status = nextStatus(opts, previous, now);
+    await gh(['api', '-X', 'PATCH', `${root}/pulls/${ref.n}`, '-f', `body=${replaceStatus(body, status)}`]);
+    const handedOver = opts.waiting === 'owner' && previous?.waitingOn !== status.waitingOn;
+    return handedOver ? { author: item.user?.login ?? null } : null;
+  }
+  const login = (await gh(['api', 'user', '-q', '.login'])).trim();
+  const comments = await issueComments<{ id: number; body: string; user: { login: string } | null }>(gh, ref);
+  // The board reads the last status comment. Edit it if it is ours; otherwise a new one becomes the last.
+  const current = pickStatusComment(comments);
+  const status = nextStatus(opts, current ? parseStatus(current.body) : null, now);
+  if (current && current.user?.login === login) {
+    await gh(['api', '-X', 'PATCH', `${root}/issues/comments/${current.id}`, '-f', `body=${replaceStatus(current.body, status)}`]);
+  } else {
+    await gh(['api', '-X', 'POST', `${root}/issues/${ref.n}/comments`, '-f', `body=${renderStatus(status)}`]);
+  }
+  return null;
+}
+
+/** Asks the board's owner to review, so GitHub notifies them. Returns what went wrong, or null. */
+async function requestReview(gh: Gh, ref: Ref, author: string | null): Promise<string | null> {
+  if (author === OWNER_LOGIN) return null; // GitHub won't ask someone to review their own PR.
+  try {
+    await gh(['api', '-X', 'POST', `repos/${ref.owner}/${ref.repo}/pulls/${ref.n}/requested_reviewers`, '-f', `reviewers[]=${OWNER_LOGIN}`]);
+    return null;
+  } catch (e) {
+    return `Couldn't ask ${OWNER_LOGIN} to review ${refString(ref)}: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+/** Returns the names of labels that were wanted but don't exist in the repo. */
+async function syncLabels(gh: Gh, ref: Ref, waiting: WaitingOn): Promise<string[]> {
+  const root = `repos/${ref.owner}/${ref.repo}`;
+  const add = waiting === 'owner' ? [LABEL_ON_OWNER] : waiting === 'nobody' ? [LABEL_PARKED] : [];
+  const remove = waiting === 'owner' ? [LABEL_PARKED] : waiting === 'nobody' ? [LABEL_ON_OWNER] : [LABEL_ON_OWNER, LABEL_PARKED];
+  const missing: string[] = [];
+  for (const name of add) {
+    try {
+      await gh(['api', `${root}/labels/${encodeURIComponent(name)}`]);
+    } catch (e) {
+      if (!isNotFound(e)) throw e;
+      missing.push(name);
+      continue;
+    }
+    await gh(['api', '-X', 'POST', `${root}/issues/${ref.n}/labels`, '-f', `labels[]=${name}`]);
+  }
+  for (const name of remove) {
+    try {
+      await gh(['api', '-X', 'DELETE', `${root}/issues/${ref.n}/labels/${encodeURIComponent(name)}`]);
+    } catch (e) {
+      if (!isNotFound(e)) throw e;
+    }
+  }
+  return missing;
+}
+
+/**
+ * Writes the item's status and its turn labels, and asks the owner to review a PR just handed to
+ * them. Returns what went wrong that didn't stop the status being written; throws when the status
+ * itself couldn't be written.
+ */
+async function setStatus(gh: Gh, ref: Ref, opts: SetOptions, now: Date): Promise<string[]> {
+  const handedOver = await writeStatus(gh, ref, opts, now);
+  const problems = (await syncLabels(gh, ref, opts.waiting))
+    .map((name) => `Label "${name}" doesn't exist in ${ref.owner}/${ref.repo}; run cli/setup-labels.ts`);
+  const reviewProblem = handedOver ? await requestReview(gh, ref, handedOver.author) : null;
+  if (reviewProblem) problems.push(reviewProblem);
+  return problems;
 }
