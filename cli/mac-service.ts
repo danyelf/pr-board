@@ -1,27 +1,23 @@
-// The always-on service on the Mac. Once a minute it looks, in each repo it is set up for, for the
-// owner's answers from the board that no Claude session has claimed within a grace period, claims
-// them and starts a fresh Claude session for them in the item's worktree.
+// The always-on service on the Mac. Once a minute it asks the board for the owner's answers that no
+// Claude session has claimed within a grace period, claims them there and starts a fresh Claude
+// session for them in the item's worktree.
 //   node cli/mac-service.ts [--config <file>] [--dry-run] [--once]
 // The config file is --config, else $PR_BOARD_SERVICE_CONFIG, else ~/.pr-board/service.json.
-// It keeps no state of its own: what it has done is on GitHub (reactions on the answers, and the
-// statuses it writes), and the sessions it has running are in the process list, found by name. So
-// a restart picks up where it left off. It never stops on its own because of errors; it stops on
-// SIGTERM or SIGINT and leaves the sessions it started running.
+// It keeps no state of its own: what it has claimed is on the board, and the sessions it has running
+// are in the process list, found by name. So a restart picks up where it left off. It never stops on
+// its own because of errors; it stops on SIGTERM or SIGINT and leaves the sessions it started running.
 import { spawn as spawnChild } from 'node:child_process';
 import { accessSync, appendFileSync, closeSync, constants, mkdirSync, openSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { OWNER_NAME } from '../src/shared/config.ts';
-import { CLAUDE_BOT_KEY, LABEL_ON_OWNER, LABEL_PARKED, PICKUP_GRACE_MS, SERVICE_GRACE_MS } from '../src/shared/names.ts';
-import {
-  CLAIM_REACTION, GAVE_UP_ASK, GAVE_UP_REACTION, SERVICE_REACTION, SERVICE_WORKING_ASK,
-  answersCurrentStatus, codeWrittenStatus, isOwnerAnswer,
-} from '../src/shared/answer.ts';
-import { parseStatus } from '../src/shared/status.ts';
-import { claim, claudeReactions, describe, react, unreact, waitingAnswers, writeCodeStatus, writtenAt, type Found, type RestComment } from './old-answers.ts';
-import { OwnerError, flattenPages, isNotFound, gh as realGh, git as realGit, ps as realPs, readItem, readRef, refString, refuseOwner } from './gh.ts';
+import { CLAUDE_BOT_KEY, GAVE_UP_ASK, PICKUP_GRACE_MS, SERVICE_GRACE_MS, SERVICE_WORKING_ASK } from '../src/shared/names.ts';
+import type { AnswerRow, WorkRecord } from '../src/shared/work.ts';
+import { describe } from './answers.ts';
+import { BoardError, boardCall, type BoardDeps } from './board.ts';
+import { OwnerError, gh as realGh, git as realGit, ps as realPs, refString, refuseOwner } from './gh.ts';
 import type { Gh, Ref } from './gh.ts';
-import { PARALLEL_READS, POLL_MS, backoff, inParallel, message } from './poll.ts';
+import { POLL_MS, backoff, message } from './poll.ts';
 
 const MIN = 60_000;
 const USAGE = 'Usage: mac-service [--config <file>] [--dry-run] [--once]';
@@ -65,6 +61,8 @@ export interface Running { pid: number; elapsedMs: number }
 export interface ServiceDeps {
   gh: Gh;
   git: Gh;
+  /** How it reaches the board, signed in with the service token. */
+  board: BoardDeps;
   /** Runs ps with these arguments. */
   ps: Gh;
   files: {
@@ -188,20 +186,31 @@ function worktreeOn(porcelain: string, branch: string): string | null {
 }
 
 /** What the fresh session is told: the answers, as the watcher prints them, and where to act on them. */
-function promptFor(ref: Ref, cwd: string, described: string[]): string {
+function promptFor(ref: Ref, cwd: string, described: string): string {
   return [
-    `${OWNER_NAME}'s answers from PR Board to ${refString(ref)}. Nobody picked them up, so the PR Board service on the Mac started this fresh session for them in ${cwd}, claimed them with a 👀 and set the status to "${SERVICE_WORKING_ASK}".`,
+    `${OWNER_NAME}'s answers from PR Board to ${refString(ref)}. Nobody picked them up, so the PR Board service on the Mac started this fresh session for them in ${cwd}, after claiming them on the board, which set the ask to "${SERVICE_WORKING_ASK}".`,
     '',
-    ...described.flatMap((d) => [d, '']),
+    described,
+    '',
     'Follow the pr-status skill under "Answers from the board", which says what a session started this way must do.',
-    'End with pr-status set --waiting owner (or nobody), never claude: once this session ends, nobody is left to carry on.',
+    'End with pr-status set --state paused, complete or parked, never working: once this session ends, nobody is left to carry on.',
   ].join('\n');
 }
 
 const indent = (text: string) => text.split('\n').map((l) => `    ${l}`).join('\n');
 
-/** An answer claimed for a session, with the ids of this account's 🚀 and 👀 on it, to take them back if the session can't start. */
-interface Claimed { found: Found; rocketId: number | null; eyesId: number | null }
+/** A record on the board and some of its answers, as the board's routes return them. */
+interface Found { record: WorkRecord; answers: AnswerRow[] }
+
+/** The item a record is known by: its PR when it has one, otherwise its issue. Null for a repo name it can't read. */
+function refOf(record: WorkRecord): Ref | null {
+  const [owner, repo, ...rest] = record.repo.split('/');
+  const n = record.pr ?? record.issue;
+  return owner && repo && rest.length === 0 && n !== null ? { owner, repo, n } : null;
+}
+
+/** The item as the board's routes take it. */
+const where = (ref: Ref) => ({ repo: `${ref.owner}/${ref.repo}`, number: ref.n });
 
 export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   const out = deps.out ?? ((l) => console.log(l));
@@ -250,8 +259,8 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   };
   /** Claude's own GitHub token. */
   const readToken = (): string | null => readSecret(config.tokenFile);
-  // The service's own GitHub calls, the claim among them, run as Claude's account. With no token they
-  // refuse: under launchd gh would otherwise use whichever account it is logged in as, often the owner's.
+  // The service's own GitHub calls run as Claude's account. With no token they refuse: under launchd
+  // gh would otherwise use whichever account it is logged in as, often the owner's.
   const gh: Gh = async (args, opts) => {
     const token = readToken();
     if (!token) throw new Error(`${config.tokenFile} is missing or empty, so there is no token for Claude's own GitHub account`);
@@ -280,98 +289,58 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     say(ref, line);
   };
 
-  // Only in memory, and rebuilt from GitHub and the process list after a restart.
+  /** A failure as a log line says it: the board's own ⚠️ words, or what went wrong and while doing what. */
+  const failure = (e: unknown, doing: string): string => (e instanceof BoardError ? `${e.message} (${doing})` : `couldn't ${doing}: ${message(e)}`);
+
+  // Only in memory, and rebuilt from the board and the process list after a restart.
   /** The items whose sessions were running at the last look; null before the first. */
   let previous: Set<string> | null = null;
-  /** Items to check (a failed check is tried again): true for one whose session was seen to end, false for one found at startup. */
-  const toCheck = new Map<string, boolean>();
+  /** Whether the board's list of this service's claims has been read once since it started. */
+  let checkedAtStartup = false;
   /** Sessions it has asked to stop for running too long, by process: when it asked, or 'forced' once it forced them. */
   const stopping = new Map<number, number | 'forced'>();
-  /** Items whose hand-back failed partway in this run, to be finished on a later look. */
-  const handBackFailed = new Set<string>();
-  /**
-   * 🚀s it couldn't take back off answers another session claimed first, by item. While one is there the
-   * answer looks like this service's, so the item isn't checked as an ended session's until it is off.
-   */
-  const strayRockets = new Map<string, { found: Found; reactionId: number | null }[]>();
+  /** In a dry run, the items it has said it would hand back, so that isn't said every minute. */
+  const wouldHandBack = new Set<string>();
   let planned = 0;
 
   const logHint = (ref: Ref) => `Its output is the newest ${ref.owner}-${ref.repo}-${ref.n}-*.log in ${config.logDir}; the service's own log says why it stopped (grep it for ${refString(ref)}).`;
 
-  /**
-   * After the service's session for an item has ended: if the item's status is still the one the
-   * service wrote as it started the session, or the answer is still current, the session didn't hand
-   * the item on. Marks the answer 😕 and hands the item to the owner, saying so in its status, and
-   * returns true (in a dry run, says it would). `ended` is false for the check at startup, when most
-   * items had no session that just ended.
-   */
-  async function checkEnded(ref: Ref, ended: boolean): Promise<boolean> {
-    const name = refString(ref);
-    let item: Awaited<ReturnType<typeof readItem<RestComment>>>;
-    try {
-      item = await readItem<RestComment>(gh, ref);
-    } catch (e) {
-      // Only the item itself missing means it is gone; any later failure is tried again at the next look.
-      if (!isNotFound(e)) throw e;
-      warn(name, 'it is gone (deleted, or moved to another repo); no longer checking it.');
-      handBackFailed.delete(name);
-      return false;
-    }
-    if (!item.open) return false;
-    const latest = item.comments.filter((c) => isOwnerAnswer(c.user?.login, c.body)).at(-1);
-    if (!latest) return false;
-    const kinds = await claudeReactions(gh, ref, latest);
-    // Without the 🚀 the claim is an open session's, which this service must leave alone.
-    if (!kinds.has(SERVICE_REACTION) || !kinds.has(CLAIM_REACTION)) return false;
-    const status = parseStatus(item.statusText);
-    const kind = codeWrittenStatus(status);
-    if (kind === 'gave-up') {
-      // Handed back already; but if this run's hand-back failed after the status went up (say, adding the label), finish it.
-      if (!handBackFailed.has(name) || item.labels.includes(LABEL_ON_OWNER) || dryRun) return false;
-      for (const p of await writeCodeStatus(gh, ref, 'owner', GAVE_UP_ASK, logHint(ref), new Date(deps.now()))) warn(name, p);
-      handBackFailed.delete(name);
-      warn(name, `finished handing the item back to ${OWNER_NAME}: its status said "${GAVE_UP_ASK}" but the "${LABEL_ON_OWNER}" label hadn't gone on.`);
-      return false;
-    }
-    const current = answersCurrentStatus({ login: latest.user?.login, body: latest.body, createdAt: latest.created_at }, await writtenAt(gh, ref, item));
-    if (kind !== 'service-working' && !current) {
-      if (ended) say(name, `the session handed the item on; its status now waits on ${status?.waitingOn ?? 'nobody it says'}.`);
-      return false;
-    }
-    if (dryRun) {
-      say(name, `the session ended without handing the item on; would mark ${latest.html_url} 😕 and hand it back to ${OWNER_NAME}.`);
-      return true;
-    }
-    await react(gh, { ref, id: latest.id }, GAVE_UP_REACTION);
-    try {
-      for (const p of await writeCodeStatus(gh, ref, 'owner', GAVE_UP_ASK, logHint(ref), new Date(deps.now()))) warn(name, p);
-    } catch (e) {
-      handBackFailed.add(name);
-      throw e;
-    }
-    handBackFailed.delete(name);
-    warn(name, `the session ended without handing the item on. Marked ${latest.html_url} 😕 and set the status to "${GAVE_UP_ASK}", waiting on ${OWNER_NAME}. This service won't take that answer again. ${logHint(ref)}`);
-    return true;
-  }
+  /** Whether a session of this service is running for the record, under its PR or its issue. */
+  const runningFor = (record: WorkRecord, live: Map<string, Running>): boolean =>
+    [record.pr, record.issue].some((n) => n !== null && live.has(`${record.repo}#${n}`));
 
-  /** Every open item in the repos that a session of this service could have left: run once at startup, when the process list is all there is. */
-  async function itemsToCheckAtStartup(repos: RepoConfig[], live: Map<string, Running>): Promise<Ref[]> {
-    const refs: Ref[] = [];
-    for (const repo of repos) {
-      const rows = flattenPages(await gh(['api', `repos/${repo.owner}/${repo.repo}/issues?state=open&per_page=100`, '--paginate', '--slurp'])) as
-        { number: number; comments?: number; body?: string | null; pull_request?: unknown; labels?: { name: string }[] }[];
-      for (const row of rows) {
-        const ref: Ref = { owner: repo.owner, repo: repo.repo, n: row.number };
-        if (live.has(refString(ref)) || row.comments === 0) continue;
-        const labels = (row.labels ?? []).map((l) => l.name);
-        // A PR's status is in its description; an issue's is in a comment, so any issue not parked might hold one.
-        const could = row.pull_request
-          ? codeWrittenStatus(parseStatus(row.body ?? '')) === 'service-working' || labels.includes(LABEL_ON_OWNER)
-          : !labels.includes(LABEL_PARKED);
-        if (could) refs.push(ref);
+  /**
+   * The board lists the answers this service claimed while the record is still at the version it had
+   * when they were claimed, so a claim listed here with no session running is one whose session ended
+   * without writing a new status (or never started). Each goes back to the owner, with where the
+   * session's output is. Returns the items handed back. A session that wrote a new status moved the
+   * version on, so its claim isn't listed and nothing is done.
+   */
+  async function giveUpOrphans(live: Map<string, Running>): Promise<{ claims: Found[]; handedBack: string[] }> {
+    const claims = await boardCall<Found[]>(deps.board, 'GET', '/api/service-claims');
+    const handedBack: string[] = [];
+    for (const c of claims) {
+      if (runningFor(c.record, live)) continue;
+      const ref = refOf(c.record);
+      const name = ref ? refString(ref) : `${c.record.repo} (record ${c.record.id})`;
+      const hint = ref ? logHint(ref) : `The service's own log says why it stopped (grep it for ${c.record.repo}).`;
+      if (dryRun) {
+        if (!wouldHandBack.has(name)) say(name, `its session is no longer running and no new status was written; would hand the item back to ${OWNER_NAME} with the ask "${GAVE_UP_ASK}".`);
+        wouldHandBack.add(name);
+        handedBack.push(name);
+        continue;
       }
+      try {
+        await boardCall(deps.board, 'POST', '/api/gave-up', { answerIds: c.answers.map((a) => a.id), hint });
+      } catch (e) {
+        // Still listed at the next look, so it is tried again then.
+        warn(name, `${failure(e, `hand the item back to ${OWNER_NAME}`)}; will try again at the next look.`);
+        continue;
+      }
+      handedBack.push(name);
+      warn(name, `the session ended without writing a new status. Handed the item back to ${OWNER_NAME} on the board, with the ask "${GAVE_UP_ASK}"; this service won't take those answers again. ${hint}`);
     }
-    return refs;
+    return { claims, handedBack };
   }
 
   /**
@@ -449,24 +418,15 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       : `${repo.clone} is not marked ${CLAUDE_BOT_KEY}=true, so a session there would act as ${OWNER_NAME}'s own GitHub account. To let Claude act there under its own account: git -C ${repo.clone} config ${CLAUDE_BOT_KEY} true`;
   }
 
-  /** Takes this account's reactions back off one answer, so the board shows it as waiting again. */
-  async function takeBack(name: string, f: Found, ids: (number | null)[], why: string): Promise<void> {
-    try {
-      for (const id of ids) await unreact(gh, f, id);
-      warn(name, `${why} Took this account's reactions back off ${f.url} so a session can pick it up.`);
-    } catch (e) {
-      warn(name, `${why} Couldn't take this account's reactions off ${f.url} (${message(e)}); take its 🚀 and 👀 off by hand.`);
-    }
-  }
-
   /**
    * Finds the worktree and writes the prompt, all before anything is claimed, so an answer this
-   * service can't serve stays free for others. Then marks each answer 🚀 and claims it with 👀,
-   * starts the session and sets the status to say a Mac session is working on it. If the session
-   * can't start, the reactions are taken back.
+   * service can't serve stays free for others. Then claims the answers on the board, which in the
+   * same step sets the ask to say a Mac session is working on them, and starts the session. If the
+   * session can't start, the claim is given back.
    */
-  async function startSession(repo: RepoConfig, ref: Ref, isPr: boolean, answers: Found[]): Promise<void> {
+  async function startSession(repo: RepoConfig, ref: Ref, waiting: Found): Promise<void> {
     const name = refString(ref);
+    const isPr = waiting.record.pr !== null;
     const unmarked = await markProblem(repo);
     if (unmarked) {
       warn(name, `not starting a session: ${unmarked}`);
@@ -485,105 +445,72 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     const env = { ...deps.env, GH_TOKEN: token, ...(claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken } : {}) };
     const branch = isPr ? await prBranch(ref) : `issue-${ref.n}`;
     const cwd = await worktreeFor(repo, ref, isPr, branch);
-    const promptOf = (some: Found[]) => promptFor(ref, cwd, some.map(describe));
     const logPath = join(config.logDir, `${ref.owner}-${ref.repo}-${ref.n}-${new Date(deps.now()).toISOString().replace(/[:.]/g, '-')}.log`);
     // The name comes first, so the process list shows it before the long prompt.
     const argsFor = (prompt: string) => ['--name', sessionName(ref), '-p', prompt, ...config.claudeArgs];
+    const prompt = promptFor(ref, cwd, describe(waiting.record, waiting.answers));
     if (dryRun) {
       planned++;
-      say(name, `would claim and start: ${config.claude} --name "${sessionName(ref)}" -p <the prompt below> ${config.claudeArgs.join(' ')}\n  in ${cwd}\n  with GH_TOKEN from ${config.tokenFile}${config.claudeTokenFile ? ` and CLAUDE_CODE_OAUTH_TOKEN from ${config.claudeTokenFile}` : ''}\n  output to ${logPath}\n  prompt:\n${indent(promptOf(answers))}`);
+      say(name, `would claim and start: ${config.claude} --name "${sessionName(ref)}" -p <the prompt below> ${config.claudeArgs.join(' ')}\n  in ${cwd}\n  with GH_TOKEN from ${config.tokenFile}${config.claudeTokenFile ? ` and CLAUDE_CODE_OAUTH_TOKEN from ${config.claudeTokenFile}` : ''}\n  output to ${logPath}\n  prompt:\n${indent(prompt)}`);
       return;
     }
     deps.files.mkdir(config.logDir);
 
-    // The last check before the claim: the token must not be the owner's, whose 👀 the board ignores.
+    // The last check before the claim: the session must not act as the owner's own GitHub account.
     await refuseOwner(gh, ownerAdvice);
-    const claimed: Claimed[] = [];
-    let claimFailed = false;
-    for (const f of answers) {
-      let rocket: { reactionId: number | null } | null;
-      let eyes: { reactionId: number | null } | null;
-      try {
-        // 🚀 before 👀: a 👀 without a 🚀 is an open session's, so this order never leaves one of ours looking like that.
-        rocket = await react(gh, f, SERVICE_REACTION);
-        eyes = await claim(gh, f);
-      } catch (e) {
-        claimFailed = true;
-        warn(name, `couldn't claim ${f.url}: ${message(e)}`);
-        continue;
-      }
-      if (eyes) {
-        claimed.push({ found: f, rocketId: rocket?.reactionId ?? null, eyesId: eyes.reactionId });
-        continue;
-      }
-      say(name, `${f.url} was claimed by another session first; leaving it to that one.`);
-      // The answer is that session's, so a 🚀 left on it must not lead to it being handed back.
-      if (rocket) {
-        await unreact(gh, f, rocket.reactionId).catch((e: unknown) => {
-          warn(name, `couldn't take its 🚀 back off ${f.url} (${message(e)}); will try again at the next look.`);
-          strayRockets.set(name, [...(strayRockets.get(name) ?? []), { found: f, reactionId: rocket.reactionId }]);
-        });
-      }
-    }
-    if (claimed.length === 0) {
-      // GitHub may have taken the 🚀 and 👀 even though its reply was lost; with no session to act on them, check as for one that ended.
-      if (claimFailed) toCheck.set(name, true);
+    // If the board takes the claim but its reply is lost, no session starts; the next look finds the
+    // claim with no session running and hands the item back.
+    const claimed = await boardCall<Found>(deps.board, 'POST', '/api/claim', { ...where(ref), by: 'service' });
+    if (claimed.answers.length === 0) {
+      say(name, 'another session claimed its answers first; leaving them to that one.');
       return;
     }
+    const answerIds = claimed.answers.map((a) => a.id);
 
-    const args = argsFor(promptOf(claimed.map((c) => c.found)));
+    // The claim may hold answers that came in since the list was read, so the prompt is written from what was claimed.
+    const args = argsFor(promptFor(ref, cwd, describe(claimed.record, claimed.answers)));
     let session: Session;
     try {
       session = deps.spawn(config.claude, args, { cwd, env, logPath });
       await session.spawned;
     } catch (e) {
-      for (const c of claimed) await takeBack(name, c.found, [c.eyesId, c.rocketId], `Couldn't start a session (${message(e)}).`);
+      const why = `Couldn't start a session (${message(e)}).`;
+      try {
+        await boardCall(deps.board, 'POST', '/api/unclaim', { answerIds });
+        warn(name, `${why} Its claim is off: gave its answers back on the board so a session can pick them up.`);
+      } catch (u) {
+        warn(name, `${why} And couldn't give its answers back on the board: ${message(u)} The next look hands the item back to ${OWNER_NAME}.`);
+      }
       return;
     }
     planned++;
-    // Counted as running from now, so it is checked once it has gone even if that is before the next look.
+    // Counted as running from now, so its end is noticed even if that is before the next look.
     previous?.add(name);
-    say(name, `started a session (process ${session.pid ?? 'unknown'}) in ${cwd} for ${claimed.map((c) => c.found.url).join(', ')}; its output goes to ${logPath}.`);
+    say(name, `started a session (process ${session.pid ?? 'unknown'}) in ${cwd} for ${answerIds.length === 1 ? 'its answer' : `its ${answerIds.length} answers`}; its output goes to ${logPath}.`);
     void session.exited.then((code) => say(name, `the session finished (exit code ${code ?? 'unknown'}).`));
-    try {
-      for (const p of await writeCodeStatus(gh, ref, 'claude', SERVICE_WORKING_ASK, null, new Date(deps.now()))) warn(name, p);
-    } catch (e) {
-      // The session runs on; if it ends without handing the item on, the answer is still current and the check after it catches that.
-      warn(name, `couldn't set the status to "${SERVICE_WORKING_ASK}": ${message(e)}`);
-    }
   }
 
-  /** The owner's waiting answers in one repo. Returns how many items had some past their grace period, how many it read, and how many of those failed. */
-  async function serveRepo(repo: RepoConfig, live: Map<string, Running>): Promise<{ ripe: number; reads: number; unread: number }> {
-    const label = encodeURIComponent(LABEL_ON_OWNER);
-    const rows = flattenPages(await gh(['api', `repos/${repo.owner}/${repo.repo}/issues?labels=${label}&state=open&per_page=100`, '--paginate', '--slurp'])) as
-      { number: number; comments?: number; pull_request?: unknown }[];
+  /** Starts sessions for the answers the board says nobody claimed within the grace period. Returns how many items had some. */
+  async function serveWaiting(live: Map<string, Running>): Promise<number> {
+    const waiting = await boardCall<Found[]>(deps.board, 'POST', '/api/unclaimed', { olderThanMs: config.graceMs });
     let ripe = 0;
-    let unread = 0;
-    // An item with no comments has no answers, so it isn't read any further.
-    const readable = rows.filter((r) => r.comments !== 0);
-    if (once) {
-      out(`${repo.owner}/${repo.repo}: ${rows.length} open ${rows.length === 1 ? 'item carries' : 'items carry'} "${LABEL_ON_OWNER}"; ${readable.length} with comments read for answers.`);
-    }
-    // Read every item first, several at once; then act on them one at a time, so the session count stays right.
-    const toRead = readable.map((row) => ({ row, ref: { owner: repo.owner, repo: repo.repo, n: row.number } satisfies Ref })).filter(({ ref }) => !live.has(refString(ref)));
-    const reads = await inParallel(toRead, PARALLEL_READS, ({ ref }) => waitingAnswers(gh, [ref], out));
-    for (const [i, { row, ref }] of toRead.entries()) {
+    const seen = new Set<string>();
+    for (const w of waiting) {
+      const ref = refOf(w.record);
+      if (!ref) {
+        err(`The board has answers for ${w.record.repo}, which isn't a repo name it can read; leaving them alone.`);
+        continue;
+      }
       const name = refString(ref);
-      // One item that can't be read doesn't keep the rest of the repo from being served.
-      const { found: answers, failed: why } = reads[i]!;
-      if (why.length > 0) {
-        unread++;
-        for (const line of why) err(line);
+      seen.add(name);
+      const repo = repos.find((r) => r.owner === ref.owner && r.repo === ref.repo);
+      if (!repo) {
+        sayOnce(name, `has answers nobody picked up, but ${w.record.repo} is not one of the repos this service serves; leaving them for a session.`);
         continue;
       }
-      if (answers.length === 0) {
-        lastSaid.delete(name);
-        continue;
-      }
-      const oldest = Math.min(...answers.map((f) => Date.parse(f.createdAt)));
-      if (deps.now() - oldest < config.graceMs) {
-        sayOnce(name, `an answer is waiting; it takes it after ${config.graceMs / MIN} min if no open session does first.`);
+      // A session of its own may still be running after writing a new status; the next one waits for it.
+      if (runningFor(w.record, live)) {
+        sayOnce(name, 'has new answers, but its session from before is still running; it waits for that one to finish.');
         continue;
       }
       ripe++;
@@ -593,12 +520,14 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       }
       lastSaid.delete(name);
       try {
-        await startSession(repo, ref, Boolean(row.pull_request), answers);
+        await startSession(repo, ref, w);
       } catch (e) {
-        warn(name, `couldn't start a session: ${message(e)}`);
+        warn(name, failure(e, 'start a session'));
       }
     }
-    return { ripe, reads: toRead.length, unread };
+    // An item no longer waiting is said afresh if it comes back.
+    for (const name of [...lastSaid.keys()]) if (!seen.has(name)) lastSaid.delete(name);
+    return ripe;
   }
 
   // A repo it can't serve is logged once and left out; the others carry on.
@@ -613,14 +542,14 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     return 1;
   }
 
-  out(`${dryRun ? 'Dry run: claims nothing, creates nothing, starts nothing, writes no status. ' : ''}Looking every ${config.pollMs / 1000} s in ${repos.map((r) => `${r.owner}/${r.repo}`).join(', ')} for answers unclaimed after ${config.graceMs / MIN} min; at most ${config.maxSessions} sessions at once.`);
+  /** A failure of a whole look as a log line: the board's own ⚠️ words first, or what went wrong. */
+  const lookFailure = (e: unknown, doing: string): string => (e instanceof BoardError ? e.message : `Couldn't ${doing} (${message(e)}).`);
+
+  out(`${dryRun ? 'Dry run: claims nothing, creates nothing, starts nothing, writes nothing to the board. ' : ''}Looking every ${config.pollMs / 1000} s on the board for answers to ${repos.map((r) => `${r.owner}/${r.repo}`).join(', ')} unclaimed after ${config.graceMs / MIN} min; at most ${config.maxSessions} sessions at once.`);
   let failures = 0;
   for (;;) {
     planned = 0;
     let failed = false;
-    // Items read this look, and how many of them failed.
-    let reads = 0;
-    let unread = 0;
     let ripe = 0;
     let live: Map<string, Running> | null = null;
     try {
@@ -630,70 +559,39 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       err(`Couldn't list the running processes (${message(e)}), so it can't tell which sessions are running; starting none this time.`);
     }
     if (live) {
-      let atStartup = 0;
+      if (previous === null && live.size > 0) out(`Found ${live.size} ${live.size === 1 ? 'session' : 'sessions'} of its own still running: ${[...live.keys()].join(', ')}.`);
       try {
-        if (previous === null) {
-          if (live.size > 0) out(`Found ${live.size} ${live.size === 1 ? 'session' : 'sessions'} of its own still running: ${[...live.keys()].join(', ')}.`);
-          const refs = await itemsToCheckAtStartup(repos, live);
-          atStartup = refs.length;
-          for (const ref of refs) if (!toCheck.has(refString(ref))) toCheck.set(refString(ref), false);
-        } else {
-          for (const name of previous) if (!live.has(name)) toCheck.set(name, true);
+        const { claims, handedBack } = await giveUpOrphans(live);
+        if (!checkedAtStartup) {
+          checkedAtStartup = true;
+          if (claims.length > 0) {
+            out(`At startup, ${claims.length} ${claims.length === 1 ? 'item had answers' : 'items had answers'} claimed by its sessions; ${handedBack.length === 0 ? 'every one still has its session running' : `${handedBack.length} had no session still running and ${dryRun ? 'would go' : 'went'} back to ${OWNER_NAME}: ${handedBack.join(', ')}`}.`);
+          }
         }
-        previous = new Set(live.keys());
+        // A session seen running last time whose claim is no longer listed ended after a new status moved the version on.
+        const claimed = new Set(claims.flatMap((c) => [c.record.pr, c.record.issue].filter((n) => n !== null).map((n) => `${c.record.repo}#${n}`)));
+        for (const name of previous ?? []) {
+          if (!live.has(name) && !claimed.has(name)) say(name, 'the session ended after a new status was written, or the item closed; nothing to do.');
+        }
       } catch (e) {
         failed = true;
-        err(`Couldn't look for items its sessions left at startup (${message(e)}); will try again.`);
+        err(lookFailure(e, "read the board's list of answers its sessions claimed"));
       }
-      // Try again to take off 🚀s left on other sessions' answers.
-      for (const [name, left] of [...strayRockets]) {
-        const still: typeof left = [];
-        for (const r of left) await unreact(gh, r.found, r.reactionId).catch(() => still.push(r));
-        if (still.length === 0) {
-          strayRockets.delete(name);
-          say(name, "took its 🚀 back off the answer another session claimed first.");
-        } else strayRockets.set(name, still);
-      }
-      // A session still running is checked once it has gone; an item with a 🚀 still on another session's answer, once that is off.
-      const checked = await inParallel([...toCheck].filter(([name]) => !live.has(name) && !strayRockets.has(name)), PARALLEL_READS, async ([name, ended]) => {
-        const ref = readRef(name);
-        if (!('owner' in ref)) return { name, ended, left: false, ok: true };
-        try {
-          const left = await checkEnded(ref, ended);
-          toCheck.delete(name);
-          return { name, ended, left, ok: true };
-        } catch (e) {
-          warn(name, `couldn't check whether its session handed the item on (${message(e)}); will try again.`);
-          return { name, ended, left: false, ok: false };
-        }
-      });
-      reads += checked.length;
-      unread += checked.filter((c) => !c.ok).length;
-      if (previous !== null && atStartup > 0) {
-        const fromStartup = checked.filter((c) => !c.ended);
-        const left = fromStartup.filter((c) => c.left).map((c) => c.name);
-        const unread = fromStartup.filter((c) => !c.ok).length;
-        out(`Checked ${atStartup} open ${atStartup === 1 ? 'item' : 'items'} for sessions that ended while it was stopped; ${left.length === 0 ? 'none left an item behind' : `${left.length} left an item behind: ${left.join(', ')}`}${unread > 0 ? `; ${unread} couldn't be read and will be checked again` : ''}.`);
-      }
+      previous = new Set(live.keys());
       stopLongRunning(live);
-      for (const repo of repos) {
-        try {
-          const served = await serveRepo(repo, live);
-          ripe += served.ripe;
-          reads += served.reads;
-          unread += served.unread;
-        } catch (e) {
-          failed = true;
-          err(`${repo.owner}/${repo.repo}: ${message(e)}`);
-        }
+      try {
+        ripe = await serveWaiting(live);
+      } catch (e) {
+        failed = true;
+        err(lookFailure(e, 'ask the board for answers nobody claimed'));
       }
     }
     if (once) {
-      if (ripe === 0 && !failed && unread === 0) out(`No answers waiting past the ${config.graceMs / MIN} min grace period; nothing to do.`);
-      return failed || unread > 0 ? 1 : 0;
+      if (ripe === 0 && !failed) out(`No answers waiting past the ${config.graceMs / MIN} min grace period; nothing to do.`);
+      return failed ? 1 : 0;
     }
-    // Back off when the lists couldn't be read, or every item read failed (GitHub refusing reads, say); one bad item alone doesn't.
-    failures = failed || (reads > 0 && unread === reads) ? failures + 1 : 0;
+    // Back off when the board or the process list couldn't be read; one item failing alone doesn't.
+    failures = failed ? failures + 1 : 0;
     const wait = backoff(config.pollMs, failures);
     if (failures > 0) err(`Trying again in ${wait / 1000} s.`);
     if (deps.signal?.aborted) break;
@@ -733,6 +631,7 @@ if (import.meta.main) {
   process.exitCode = await main(process.argv.slice(2), {
     gh: realGh,
     git: realGit,
+    board: { fetch, readFile: (p) => readFileSync(p, 'utf8'), env: process.env, home: homedir() },
     ps: realPs,
     files: {
       read: (p) => readFileSync(p, 'utf8'),
