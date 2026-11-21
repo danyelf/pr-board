@@ -142,7 +142,8 @@ async function status(env: Env, deps: ApiDeps, b: Record<string, unknown>): Prom
     toTest: strOrNull(b, 'toTest'), reason: strOrNull(b, 'reason'), noDesign,
     // The head and the kind come from GitHub, whatever the client says.
     headSha: f.headSha, isPr: f.kind === 'pr',
-    issue: intOrNull(b, 'issue'), replaces: intOrNull(b, 'replaces'),
+    // With no issue named, a PR joins the issue GitHub links it to (Closes, Fixes, Resolves or Refs).
+    issue: intOrNull(b, 'issue') ?? (f.kind === 'pr' ? f.linkedIssue : null), replaces: intOrNull(b, 'replaces'),
   };
   const result = await setStatus(env.DB, ref, input, deps.now().toISOString());
 

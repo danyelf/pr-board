@@ -267,7 +267,7 @@ describe('claim, unclaim and giveUp', () => {
       expect(got[0]?.answers.map((a) => a.id)).toEqual([id]);
     });
 
-    it('unclaimedOlderThan skips the record while the claim is live', async () => {
+    it('unclaimedOlderThan skips the record while the claim keeps it working', async () => {
       await lateNote('session');
       const second = await addAnswer(db, PR, answer({ version: 2, choices: {}, note: 'more' }), T3);
       expect(second.id).toBeGreaterThan(0);
@@ -315,6 +315,15 @@ describe('claim, unclaim and giveUp', () => {
       expect(await unclaimedAnswers(db, [PR])).toHaveLength(1);
     });
 
+    it('is left alone by the Mac service query when a session wrote working itself, with no claim', async () => {
+      await setStatus(db, PR, input({ state: 'working', questions: [], ask: 'Building it' }), T0);
+      await addAnswer(db, PR, answer({ choices: {}, note: 'also, wider' }), T1);
+      expect(await unclaimedOlderThan(db, T3)).toEqual([]);
+      expect((await unclaimedAnswers(db, [PR]))[0]?.answers).toHaveLength(1);
+      await setStatus(db, PR, input({ state: 'paused' }), T2);
+      expect((await unclaimedOlderThan(db, T3))[0]?.answers).toHaveLength(1);
+    });
+
     it('is offered to the service once the live claim has been given up', async () => {
       const { first } = await claimedThenNoted();
       await giveUp(db, first.map((a) => a.id), 'h', T2);
@@ -357,13 +366,27 @@ describe('claim, unclaim and giveUp', () => {
     expect(again.answers[0]).toMatchObject({ claimedAt: T3, claimedBy: 'session' });
   });
 
-  it('giveUp marks the answers and hands the record back with the hint', async () => {
-    const id = await withTwoAnswers();
+  it('giveUp marks the answers with the hint and hands the record back, leaving its how-to-test alone', async () => {
+    const { record } = await setStatus(db, PR, input({ toTest: 'open the preview' }), T0);
+    await addAnswer(db, PR, answer(), T1);
     const got = await claim(db, PR, 'service', T2);
     await giveUp(db, got.answers.map((a) => a.id), 'output is in /tmp/x.log', T3);
-    expect(await findWork(db, PR)).toMatchObject({ id, state: 'paused', ask: GAVE_UP_ASK, toTest: 'output is in /tmp/x.log', version: 1 });
+    expect(await findWork(db, PR)).toMatchObject({ id: record.id, state: 'paused', ask: GAVE_UP_ASK, toTest: 'open the preview', version: 1 });
     const { answers } = await openWork(db);
-    for (const a of answers) expect(a.gaveUpAt).toBe(T3);
+    for (const a of answers) expect(a).toMatchObject({ gaveUpAt: T3, giveUpHint: 'output is in /tmp/x.log' });
+  });
+
+  it('takes a second answer with choices after a give-up, and a later claim hands it over', async () => {
+    await setStatus(db, PR, input(), T0);
+    await addAnswer(db, PR, answer({ choices: { '1': 'red' } }), T1);
+    const first = await claim(db, PR, 'service', T1);
+    await giveUp(db, first.answers.map((a) => a.id), 'h', T2);
+    const again = await addAnswer(db, PR, answer({ choices: { '1': 'green' }, note: 'try again' }), T2);
+    expect(again).toMatchObject({ version: 1, choices: { '1': 'green' }, claimedAt: null });
+    await expect(addAnswer(db, PR, answer({ choices: { '1': 'red' } }), T3)).rejects.toThrow('already has an answer');
+    const got = await claim(db, PR, 'session', T3);
+    expect(got.answers.map((a) => a.id)).toEqual([again.id]);
+    expect(got.record).toMatchObject({ state: 'working', ask: WORKING_ASK });
   });
 
   it('does not offer a given-up answer to be claimed again', async () => {

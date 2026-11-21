@@ -63,6 +63,7 @@ interface AnswerDbRow {
   ask_before: string | null;
   turn_since_before: string | null;
   gave_up_at: string | null;
+  give_up_hint: string | null;
 }
 
 type Written = { results: { id: number }[] };
@@ -81,6 +82,7 @@ function toAnswer(r: AnswerDbRow): AnswerRow {
   return {
     id: r.id, workId: r.work_id, version: r.version, at: r.at, choices: JSON.parse(r.choices), approval: r.approval, note: r.note,
     claimedAt: r.claimed_at, claimedBy: r.claimed_by, stateBefore: r.state_before, gaveUpAt: r.gave_up_at,
+    giveUpHint: r.give_up_hint,
   };
 }
 
@@ -211,6 +213,7 @@ export async function confirm(db: Db, ref: ItemRef, now: string): Promise<WorkRe
 
 /**
  * Stores an answer from the owner. A version takes one answer with choices or an approval; notes alone are always kept.
+ * An answer a session gave up on doesn't count, so the owner can answer again after a give-up.
  * The checks run inside the insert, so two sends at once can't both land.
  */
 export async function addAnswer(db: Db, ref: ItemRef, a: AnswerInput, now: string): Promise<AnswerRow> {
@@ -221,7 +224,7 @@ export async function addAnswer(db: Db, ref: ItemRef, a: AnswerInput, now: strin
 
   const takesTheAnswer = Object.keys(a.choices).length > 0 || a.approval !== null;
   const noOtherAnswer = takesTheAnswer
-    ? " AND NOT EXISTS (SELECT 1 FROM answer WHERE work_id = ? AND version = ? AND (approval IS NOT NULL OR choices <> '{}'))"
+    ? " AND NOT EXISTS (SELECT 1 FROM answer WHERE work_id = ? AND version = ? AND gave_up_at IS NULL AND (approval IS NOT NULL OR choices <> '{}'))"
     : '';
   const insert = db
     .prepare(
@@ -281,13 +284,15 @@ export async function unclaimedAnswers(db: Db, refs: ItemRef[]): Promise<{ recor
   return out;
 }
 
-/** For the Mac service. Records that already have a live claim are left out, so it never starts a second session on one. */
+/**
+ * For the Mac service. Records in the working state are left out, whether a claim set it or a session wrote it, so the
+ * service never starts a second session beside one that is working. A note to such a record waits for that session's watcher.
+ */
 export async function unclaimedOlderThan(db: Db, before: string): Promise<{ record: WorkRecord; answers: AnswerRow[] }[]> {
   const { results } = await db
     .prepare(
       `SELECT a.* FROM answer a JOIN work w ON w.id = a.work_id
-       WHERE w.ended_at IS NULL AND a.claimed_at IS NULL AND a.at < ?
-         AND NOT EXISTS (SELECT 1 FROM answer c WHERE c.work_id = w.id AND c.claimed_at_version = w.version AND c.claimed_at IS NOT NULL AND c.gave_up_at IS NULL)
+       WHERE w.ended_at IS NULL AND a.claimed_at IS NULL AND a.at < ? AND w.state <> 'working'
        ORDER BY a.id`,
     )
     .bind(before)
@@ -365,7 +370,10 @@ export async function unclaim(db: Db, answerIds: number[]): Promise<void> {
   ]);
 }
 
-/** The session ended without writing a new status: the record goes back to the owner, with a hint where to look. */
+/**
+ * The session ended without writing a new status: the record goes back to the owner. The hint where to look is kept on
+ * the answers, and the record's how-to-test is left as it was.
+ */
 export async function giveUp(db: Db, answerIds: number[], hint: string, now: string): Promise<void> {
   const first = await claimedFrom(db, answerIds);
   if (!first || first.state_before === null) return;
@@ -377,11 +385,11 @@ export async function giveUp(db: Db, answerIds: number[], hint: string, now: str
   await db.batch([
     db
       .prepare(
-        `UPDATE work SET state = ?, ask = ?, to_test = ?, turn_since = ?
+        `UPDATE work SET state = ?, ask = ?, turn_since = ?
          WHERE id = ? AND version = ? AND state = 'working' AND ended_at IS NULL
            AND NOT EXISTS (SELECT 1 FROM answer WHERE work_id = ? AND claimed_at_version = ? AND claimed_at IS NOT NULL AND gave_up_at IS NULL AND id NOT IN (${marks}))`,
       )
-      .bind(handBackTo, GAVE_UP_ASK, hint, now, first.work_id, claimedVersion, first.work_id, claimedVersion, ...answerIds),
+      .bind(handBackTo, GAVE_UP_ASK, now, first.work_id, claimedVersion, first.work_id, claimedVersion, ...answerIds),
     db
       .prepare(`UPDATE answer SET gave_up_at = ?, give_up_hint = ? WHERE id IN (${marks}) AND claimed_at IS NOT NULL AND gave_up_at IS NULL`)
       .bind(now, hint, ...answerIds),

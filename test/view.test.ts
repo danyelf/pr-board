@@ -254,6 +254,21 @@ describe('answer state', () => {
     expect(c.lastAnswer?.at).toBe(ago(90));
   });
 
+  it('shows the given-up answer\'s hint on the card, and keeps the record\'s how-to-test', () => {
+    const r = record({ state: 'paused', questions: paused.questions, toTest: 'open the preview', ask: 'A Mac session gave up on your answers', turnSince: ago(5) });
+    const c = state([answer({ at: ago(90), claimedAt: ago(85), claimedBy: 'service', gaveUpAt: ago(5), giveUpHint: 'Its output is the newest x.log' })], r);
+    expect(c.gaveUpHint).toBe('Its output is the newest x.log');
+    expect(c.toTest).toBe('open the preview');
+    expect(state([answer({ at: ago(2) })]).gaveUpHint).toBeNull();
+  });
+
+  it('shows no question badge on a paused gate with no questions, as after a give-up from working', () => {
+    const r = record({ state: 'paused', questions: [], ask: 'A Mac session gave up on your answers', turnSince: ago(5) });
+    const c = state([answer({ at: ago(90), claimedAt: ago(85), claimedBy: 'service', gaveUpAt: ago(5) })], r);
+    expect(c.boxes.find((b) => b.look === 'paused')?.badge).toBeNull();
+    expect(state([], record({ state: 'paused', questions: paused.questions })).boxes.find((b) => b.look === 'paused')?.badge).toBe('1 question');
+  });
+
   it('ignores a given-up answer to an older version', () => {
     const c = state([answer({ version: 2, at: ago(900), claimedAt: ago(890), claimedBy: 'service', gaveUpAt: ago(800) })]);
     expect(c.answerState).toBeNull();

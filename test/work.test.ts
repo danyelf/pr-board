@@ -119,6 +119,12 @@ describe('applySet: rounds, prep, version, turn', () => {
     expect(applySet(base, input({ state: 'complete', toTest: 'open it' }), T1).rounds.implementation).toBe(1);
     expect(applySet(base, input({ state: 'working' }), T1).rounds.implementation).toBe(0);
   });
+  it('writing complete again at a gate already complete adds no round', () => {
+    const complete = record({ state: 'complete', toTest: 'open it', rounds: { design: 1, implementation: 1, prep: 0 } });
+    expect(applySet(complete, input({ state: 'complete', toTest: 'open it, then scroll' }), T1).rounds.implementation).toBe(1);
+    const paused = record({ state: 'paused', rounds: { design: 1, implementation: 1, prep: 0 } });
+    expect(applySet(paused, input({ state: 'complete', toTest: 'open it' }), T1).rounds.implementation).toBe(2);
+  });
   it('prep complete stores the head commit, and needs one', () => {
     expect(applySet(base, input({ gate: 'prep', state: 'complete', headSha: 'abc1234' }), T1).prepSha).toBe('abc1234');
     expect(() => applySet(base, input({ gate: 'prep', state: 'complete' }), T1)).toThrow(Refused);

@@ -124,7 +124,7 @@ class Board {
       const before = this.clock() - (body!.olderThanMs as number);
       return reply(200, this.group(this.answers.filter((a) => {
         const r = this.records.find((x) => x.id === a.workId)!;
-        return r.endedAt === null && a.claimedAt === null && Date.parse(a.at) < before && !this.answers.some((c) => c.workId === r.id && this.isLive(c, r));
+        return r.endedAt === null && a.claimedAt === null && Date.parse(a.at) < before && r.state !== 'working';
       })));
     }
     if (method === 'POST' && url.pathname === '/api/claim') {
@@ -147,8 +147,9 @@ class Board {
       for (const id of body!.answerIds as number[]) {
         const a = this.answer(id);
         const r = this.records.find((x) => x.id === a.workId)!;
-        if (a.gaveUpAt === null && r.state === 'working') { r.state = 'paused'; r.ask = GAVE_UP_ASK; r.toTest = body!.hint as string; }
+        if (a.gaveUpAt === null && r.state === 'working') { r.state = 'paused'; r.ask = GAVE_UP_ASK; }
         a.gaveUpAt = new Date(this.clock()).toISOString();
+        a.giveUpHint = body!.hint as string;
       }
       return answer({});
     }
@@ -225,7 +226,7 @@ class World {
     const id = this.board.nextId++;
     this.board.answers.push({
       id, workId: r.id, version: r.version, at: new Date(this.now - ago * MIN).toISOString(), choices, approval: null, note,
-      claimedAt: null, claimedBy: null, stateBefore: null, gaveUpAt: null,
+      claimedAt: null, claimedBy: null, stateBefore: null, gaveUpAt: null, giveUpHint: null,
     });
     return id;
   }
@@ -948,7 +949,7 @@ describe('mac-service', () => {
       expect(gaveUp[0]!.body!.answerIds).toEqual([id]);
       expect(gaveUp[0]!.body!.hint).toContain(`acme-x-5-*.log in ${HOME}/.pr-board/logs`);
       expect(w.board.of('acme/x#5')).toMatchObject({ state: 'paused', ask: GAVE_UP_ASK });
-      expect(w.board.of('acme/x#5').toTest).toContain('acme-x-5-*.log');
+      expect(w.board.answers.find((a) => a.id === id)!.giveUpHint).toContain('acme-x-5-*.log');
       expect(r.err).toContain('acme/x#5: the session ended without writing a new status. Handed the item back to Sam');
       expect(w.started).toHaveLength(1);
 

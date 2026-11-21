@@ -75,6 +75,8 @@ export interface AnswerRow {
   claimedBy: 'session' | 'service' | null;
   stateBefore: State | null;
   gaveUpAt: string | null;
+  /** When a session gave up on this answer, where its output is. */
+  giveUpHint: string | null;
 }
 
 /** A status or an answer the board will not accept. The message says why, in words for whoever sent it. */
@@ -157,7 +159,9 @@ export function applySet(
   }
 
   const rounds = { ...(prev?.rounds ?? { design: 0, implementation: 0, prep: 0 }) };
-  if (input.state === 'complete') rounds[input.gate] += 1;
+  // Writing complete again at a gate that is already complete (to fix the ask, say) is not a new round.
+  const alreadyComplete = prev?.state === 'complete' && prev.gate === input.gate;
+  if (input.state === 'complete' && !alreadyComplete) rounds[input.gate] += 1;
 
   const reached = prev && GATES.indexOf(prev.reached) > target ? prev.reached : input.gate;
   const turnChanged = !prev || turnOf(prev.state) !== turnOf(input.state);

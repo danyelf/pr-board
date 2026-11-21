@@ -69,35 +69,24 @@ async function run(w: World, argv: string[], reply: (sent: Sent) => Reply = () =
 const SET = ['set', 'acme/x#5', '--gate', 'implementation', '--state', 'paused', '--ask', 'look', '--question', 'Colour? (**red** | green)'];
 
 describe('pr-status set', () => {
-  it('posts the status to the board, with the issue found from the PR body', async () => {
+  it('posts the status to the board with no issue, leaving the link to the board, and reads nothing from GitHub', async () => {
     const r = await run(world(), [...SET, '--to-test', 'open it', '--reason', 'why', '--replaces', '4']);
     expect(r.code).toBe(0);
     expect(r.sent).toEqual([{
       method: 'POST', path: '/api/status',
       body: {
         repo: 'acme/x', number: 5, gate: 'implementation', state: 'paused', ask: 'look', questions: ['Colour? (**red** | green)'],
-        toTest: 'open it', reason: 'why', noDesign: false, issue: 3, replaces: 4,
+        toTest: 'open it', reason: 'why', noDesign: false, issue: null, replaces: 4,
       },
     }]);
+    expect(r.calls).toEqual([]);
   });
 
-  it('uses --issue over the PR body, and does not read the PR then', async () => {
+  it('sends --issue when given, as an override', async () => {
     const r = await run(world(), [...SET, '--issue', '9', '--no-design']);
     expect(r.code).toBe(0);
     expect(r.sent[0]!.body).toMatchObject({ issue: 9, noDesign: true, toTest: null, reason: null, replaces: null });
     expect(r.calls).toEqual([]);
-  });
-
-  it('reads Refs too, and sends no issue when the body names none', async () => {
-    const refs = await run(world({ body: 'Part of it.\nRefs #12' }), SET);
-    expect(refs.sent[0]!.body).toMatchObject({ issue: 12 });
-    const none = await run(world({ body: 'Nothing.' }), SET);
-    expect(none.sent[0]!.body).toMatchObject({ issue: null });
-  });
-
-  it('sends no issue for an issue', async () => {
-    const r = await run(world({ kind: 'issue', body: 'Closes #3' }), SET);
-    expect(r.sent[0]!.body).toMatchObject({ issue: null });
   });
 
   it('refuses without --gate and --state, with a usage line, before any call', async () => {

@@ -21,7 +21,7 @@ function record(over: Partial<WorkRecord> = {}): WorkRecord {
 function answer(over: Partial<AnswerRow> = {}): AnswerRow {
   return {
     id: 10, workId: 1, version: 3, at: '2026-11-08T10:05:00Z', choices: { '1': 'change' }, approval: 'looks good, prep for merge', note: 'tint is strong\nbut fine',
-    claimedAt: null, claimedBy: null, stateBefore: 'complete', gaveUpAt: null, ...over,
+    claimedAt: null, claimedBy: null, stateBefore: 'complete', gaveUpAt: null, giveUpHint: null, ...over,
   };
 }
 

@@ -15,10 +15,11 @@ const NEEDS_CHANGES = 'needs changes';
 
 /**
  * Whether the card offers its questions and approval. Once the owner has answered this version they are
- * not offered again; the card shows what was sent instead. A new version brings them back.
+ * not offered again; the card shows what was sent instead. A new version brings them back, and so does a
+ * session giving up on the answer, so the owner can answer again.
  */
 export function offersQuestions(c: CardView): boolean {
-  return c.answerState === null;
+  return c.answerState === null || c.answerState === 'gave-up';
 }
 
 /** Whether the card can be answered at all: a PR with no status written has no record to answer. */

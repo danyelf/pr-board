@@ -51,6 +51,8 @@ export interface CardView {
   noteLabel: string;
   answerState: AnswerState | null;
   lastAnswer: { at: string; note: string; choices: Record<string, string> } | null;
+  /** When a session gave up on the answer, where its output is. */
+  gaveUpHint: string | null;
   links: { pr: string | null; issue: string | null; preview: string | null; merge: string | null };
   screenshots: string[];
   /** What the Worker should change on GitHub so the labels match the card. */
@@ -166,7 +168,8 @@ function boxesOf(r: WorkRecord, ready: ReturnType<typeof readyToMerge> | null, a
       }
       // A gate that isn't complete is in its next round.
       if (r.state === 'working') return box(gate, 'working', 'Claude working', handed + 1);
-      if (r.state === 'paused') return box(gate, 'paused', 'Claude paused', handed + 1, plural(r.questions.length, 'question'));
+      // A give-up from working hands the record back paused with no questions; it then has no badge.
+      if (r.state === 'paused') return box(gate, 'paused', 'Claude paused', handed + 1, r.questions.length > 0 ? plural(r.questions.length, 'question') : null);
       return box(gate, 'parked', 'parked', handed + 1);
     }
     // Once the owner has approved the current gate, the next one carries the line saying where the answer is.
@@ -239,6 +242,7 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
     noteLabel: prepDone ? 'needs changes' : 'Note',
     answerState,
     lastAnswer: found ? { at: found.answer.at, note: found.answer.note, choices: found.answer.choices } : null,
+    gaveUpHint: found?.state === 'gave-up' ? found.answer.giveUpHint : null,
     links: {
       pr: r.pr !== null ? (pr?.url ?? url) : null,
       issue: issueNumber !== null ? (issue?.url ?? issueUrl(r.repo, issueNumber)) : null,
@@ -265,7 +269,7 @@ function noRecordCard(f: Facts): Placed {
       key: `${f.repo}#${f.number}`, repo: f.repo, number: f.number, title: f.title, url: f.url, kind: f.kind,
       version: null, boxes: [], tag: NO_STATUS_TAG, turn: 'owner', waitingSince: null, startedAt: f.createdAt,
       ask: '', toTest: null, backReason: null, questions: [], approval: null, noteLabel: 'Note',
-      answerState: null, lastAnswer: null,
+      answerState: null, lastAnswer: null, gaveUpHint: null,
       links: { pr: f.url, issue: f.linkedIssue !== null ? issueUrl(f.repo, f.linkedIssue) : null, preview: f.previewUrl, merge: null },
       screenshots: f.screenshots,
       // The board keeps labels only on items with a record.

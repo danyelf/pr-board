@@ -1,4 +1,4 @@
-// How often the long-running commands look at GitHub, and how they back off when it fails.
+// How often the long-running commands ask the board for answers, and how they back off when that fails.
 // The watcher and the Mac service both use these, so they behave alike.
 
 export const POLL_MS = 60_000;

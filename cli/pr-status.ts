@@ -61,19 +61,13 @@ function parseSetArgs(args: string[]): SetOptions {
   return opts;
 }
 
-interface Item { isPr: boolean; body: string; author: string | null }
+interface Item { isPr: boolean; author: string | null }
 
 async function readItem(gh: Gh, ref: Ref): Promise<Item> {
   const item = JSON.parse(await gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}`])) as {
-    pull_request?: unknown; body?: string | null; user?: { login: string } | null;
+    pull_request?: unknown; user?: { login: string } | null;
   };
-  return { isPr: Boolean(item.pull_request), body: item.body ?? '', author: item.user?.login ?? null };
-}
-
-/** The issue a PR says it closes or refers to, if its description names one. */
-function issueNamedBy(body: string): number | null {
-  const match = /\b(?:closes|refs)\s+#(\d+)/i.exec(body);
-  return match ? Number(match[1]) : null;
+  return { isPr: Boolean(item.pull_request), author: item.user?.login ?? null };
 }
 
 /** Asks the board's owner to review, so GitHub notifies them. Returns what went wrong, or null. */
@@ -88,19 +82,14 @@ async function requestReview(gh: Gh, ref: Ref, author: string | null): Promise<s
 }
 
 async function setStatus(deps: Deps, ref: Ref, opts: SetOptions, out: (l: string) => void): Promise<string[]> {
-  let item: Item | null = null;
-  let issue = opts.issue;
-  if (issue === null) {
-    item = await readItem(deps.gh, ref);
-    if (item.isPr) issue = issueNamedBy(item.body);
-  }
+  // With no --issue, the board links a PR to its issue from what GitHub says.
   const sent = await boardCall<{ record: { version: number }; handedOver: boolean }>(deps.board, 'POST', '/api/status', {
     repo: `${ref.owner}/${ref.repo}`, number: ref.n, gate: opts.gate, state: opts.state, ask: opts.ask, questions: opts.questions,
-    toTest: opts.toTest, reason: opts.reason, noDesign: opts.noDesign, issue, replaces: opts.replaces,
+    toTest: opts.toTest, reason: opts.reason, noDesign: opts.noDesign, issue: opts.issue, replaces: opts.replaces,
   });
   out(`Recorded ${refString(ref)} at ${opts.gate}, ${opts.state} (version ${sent.record.version})`);
   if (!sent.handedOver) return [];
-  item ??= await readItem(deps.gh, ref);
+  const item = await readItem(deps.gh, ref);
   if (!item.isPr) return [];
   const problem = await requestReview(deps.gh, ref, item.author);
   return problem ? [problem] : [];

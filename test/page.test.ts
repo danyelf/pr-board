@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { drawCard } from '../src/page/draw.ts';
 import { el } from '../src/page/el.ts';
 import { afterRefusal, formProblem, initialForm, offersQuestions, toAnswer } from '../src/page/form.ts';
 import { plan } from '../src/page/merge.ts';
@@ -29,6 +30,17 @@ class FakeElement {
     this.children.push(n);
     return n;
   }
+  addEventListener(): void {}
+}
+
+/** Every element under `e`, itself included. */
+function walk(e: FakeElement): FakeElement[] {
+  return [e, ...e.children.flatMap((c) => (c instanceof FakeElement ? walk(c) : []))];
+}
+
+/** The text directly and indirectly inside `e`. */
+function textOf(e: FakeElement): string {
+  return e.children.map((c) => (c instanceof FakeElement ? textOf(c) : c.data)).join('');
 }
 class FakeDocument {
   readonly made: (FakeElement | FakeText)[] = [];
@@ -58,7 +70,7 @@ function card(over: Partial<CardView> = {}): CardView {
       { n: 1, text: 'Pin colour?', choices: ['gold', 'grey'], defaultChoice: 'gold' },
       { n: 2, text: 'Where?', choices: ['top', 'bottom', 'file an issue'], defaultChoice: 'bottom' },
     ],
-    approval: null, noteLabel: 'Note', answerState: null, lastAnswer: null,
+    approval: null, noteLabel: 'Note', answerState: null, lastAnswer: null, gaveUpHint: null,
     links: { pr: 'https://github.com/o/r/pull/5', issue: null, preview: null, merge: null },
     screenshots: [], labels: { add: [], remove: [] },
     ...over,
@@ -147,6 +159,24 @@ describe('the answer form', () => {
     expect(offersQuestions(c)).toBe(false);
     const s = { choices: { '1': 'grey' }, approval: null, note: 'and also this', touched: true };
     expect(toAnswer(c, s)).toEqual({ version: 3, choices: {}, approval: null, note: 'and also this' });
+  });
+
+  it('offers the whole form again, with defaults, after a session gave up, and shows where its output is', () => {
+    const c = card({
+      answerState: 'gave-up', tag: 'A session tried and gave up', gaveUpHint: 'Its output is the newest o-r-5-*.log',
+      approval: { choices: ['approve, build it', 'needs changes'], defaultChoice: 'approve, build it' },
+      lastAnswer: { at: '2026-11-20T11:00:00.000Z', note: '', choices: { '1': 'grey' } },
+    });
+    expect(offersQuestions(c)).toBe(true);
+    const s = initialForm(c);
+    expect(s).toEqual({ choices: { '1': 'gold', '2': 'bottom' }, approval: 'approve, build it', note: '', touched: false });
+    expect(toAnswer(c, s)).toEqual({ version: 3, choices: { '1': 'gold', '2': 'bottom' }, approval: 'approve, build it', note: '' });
+
+    const { doc } = fakeDoc();
+    const node = drawCard(doc, c, s, { send: () => {}, changed: () => {}, reload: () => {} }, new Date('2026-11-20T12:00:00.000Z')) as unknown as FakeElement;
+    const radios = walk(node).filter((e) => e.tag === 'input' && e.attrs.type === 'radio');
+    expect(radios.map((r) => r.attrs.value)).toEqual(['gold', 'grey', 'top', 'bottom', 'file an issue', 'approve, build it', 'needs changes']);
+    expect(walk(node).filter((e) => e.attrs['data-role'] === 'gave-up-hint').map(textOf)).toEqual(['Its output is the newest o-r-5-*.log']);
   });
 
   it('asks for a note with "needs changes"', () => {

@@ -183,7 +183,8 @@ export function drawCard(doc: Document, c: CardView, s: FormState, h: CardHandle
     c.toTest ? el(doc, 'p', { class: 'to-test' }, el(doc, 'strong', {}, 'To test: '), c.toTest) : null,
     links(doc, c),
     screenshots(doc, c),
-    offersQuestions(c) ? null : sent(doc, c),
+    offersQuestions(c) && c.answerState !== 'gave-up' ? null : sent(doc, c),
+    c.gaveUpHint ? el(doc, 'p', { class: 'gave-up-hint', 'data-role': 'gave-up-hint' }, c.gaveUpHint) : null,
     el(doc, 'p', { class: 'error', 'data-role': 'error', hidden: '' }),
     canAnswer(c) ? form(doc, c, s, h) : el(doc, 'p', { class: 'muted' }, 'No status written yet, so there is nothing to answer here.'),
   );

@@ -37,7 +37,7 @@ export function facts(over: Partial<Facts> = {}): Facts {
 export function answer(over: Partial<AnswerRow> = {}): AnswerRow {
   return {
     id: 1, workId: 1, version: 3, at: ago(2), choices: {}, approval: null, note: 'a note',
-    claimedAt: null, claimedBy: null, stateBefore: null, gaveUpAt: null,
+    claimedAt: null, claimedBy: null, stateBefore: null, gaveUpAt: null, giveUpHint: null,
     ...over,
   };
 }

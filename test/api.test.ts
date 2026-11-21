@@ -133,6 +133,23 @@ describe('the API', () => {
       const record = await findWork(h.db, { repo: 'o/r', n: 5 });
       assert.equal(record?.prepSha, 'abc123');
     });
+    it('joins a PR to the issue GitHub links it to when the client names none, and lets the client override it', async () => {
+      h.items = [facts({ number: 3, kind: 'issue' })];
+      const onIssue = await call(h, 'claude', 'POST', '/api/status', { ...STATUS, number: 3, gate: 'design', state: 'working', questions: [], noDesign: false });
+      assert.equal(onIssue.status, 200);
+      const issueRecord = await findWork(h.db, { repo: 'o/r', n: 3 });
+
+      h.items = [facts({ number: 5, linkedIssue: 3 })];
+      const onPr = await call(h, 'claude', 'POST', '/api/status', { ...STATUS, gate: 'design', state: 'working', questions: [], noDesign: false, issue: null });
+      assert.equal(onPr.status, 200);
+      const joined = await findWork(h.db, { repo: 'o/r', n: 5 });
+      assert.equal(joined?.id, issueRecord?.id);
+      assert.equal(joined?.issue, 3);
+
+      h.items = [facts({ number: 7, linkedIssue: 3 })];
+      await call(h, 'claude', 'POST', '/api/status', { ...STATUS, number: 7, issue: 9 });
+      assert.equal((await findWork(h.db, { repo: 'o/r', n: 7 }))?.issue, 9);
+    });
     it('queues the label changes', async () => {
       await seedPaused(h);
       await Promise.all(h.waiting);

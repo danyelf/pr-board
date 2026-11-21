@@ -2,7 +2,7 @@ import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
 import type { Db } from './store.ts';
 
 export interface Env {
-  /** The owner's token. The board reads with it, and posts the owner's answers with it. */
+  /** Claude's account's GitHub token. The board reads GitHub and sets its labels with it; it never posts as anyone. */
   GITHUB_TOKEN: string;
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;

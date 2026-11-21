@@ -91,13 +91,21 @@ Every failure to reach the board, or to be accepted by it, prints a line startin
 
 Danyel answers on the board. An answer can hold a choice for each of your questions, an approval when a gate was complete, and a note. **A note can come at any time**, also while you are working, with no choices at all: it is feedback mid-work, and it reaches you the same way an answer does. An approval can carry a note too, meaning "yes, and also do this".
 
-**After every `set`**, make sure a watcher is running in the background for the items you have written a status for in this session (all of them, in one command), with the Bash tool's background option:
+**Keep one watcher running** in the background for all the items you have written a status for in this session, with the Bash tool's background option:
 
 ```
 node /Users/danyel/code/MISC/pr-board/cli/watch-answers.ts <owner/repo#N> [<owner/repo#M> ...]
 ```
 
-It costs nothing while it waits. Don't stop it, and don't start a second one for the same items. When an answer comes, it claims it on the board (which sets the record to working, with the ask "Working on your answers"), prints it and exits, which wakes you. Then act on each answer:
+It costs nothing while it waits. The rules:
+
+- Start it after your first `set` in the session.
+- When you write a status for an item the running watcher doesn't cover, stop that watcher and start one that covers all your items. Never run two.
+- When it exits, it has claimed an answer (which sets the record to working, with the ask "Working on your answers") and printed it. Deal with what it printed, then start it again for all your items.
+
+The watcher matters most while you are working. The Mac service leaves an item in the working state alone, so a note Danyel sends while you work waits for your watcher; with none running, it sits there and shows as "Answered, not picked up" after 10 minutes.
+
+Act on each answer:
 
 | The answer says | What you do |
 |---|---|
@@ -111,8 +119,8 @@ It costs nothing while it waits. Don't stop it, and don't start a second one for
 
 Read the note whatever the choices say; it can change what they mean.
 
-When you are done, write a new status with what is left, and keep a watcher running for the items you have written a status for.
+When you are done, write a new status with what is left.
 
-What Danyel sees on the board while an answer waits: "answered, waiting for Claude to pick it up" for its first 10 minutes; then "Answered, not picked up" at the top of his page. Once claimed, "Claude is working on your answers"; if no new status follows within 10 minutes, or the ask is still "Working on your answers" an hour on, "Picked up, but nothing since". So write the new status as soon as you have acted.
+What Danyel sees on the board while an answer waits: "answered, waiting for Claude to pick it up" for its first 10 minutes; then "Answered, not picked up" at the top of his page. Once claimed, "Claude is working on your answers"; if an hour passes after the pickup with no new status, "Picked up, but nothing since". So write the new status as soon as you have acted.
 
-**A session can also start with the answers in its first message.** When no session claims an answer within 5 minutes, the PR Board service on the Mac claims it, starts a fresh session (`claude -p`) in the item's worktree with the answers in the prompt, printed the way the watcher prints them, and sets the ask to "A Mac session is working on your answers". That session has no chat memory: read the PR or issue and its record (`show`) first, check the branch is up to date (the worktree may be new, so install dependencies before running tests), then act on the answers as above. Don't start the watcher in such a session; it ends when you finish, and the service starts a new one for the next answers. End with `--state paused`, `complete` or `parked`, even to say you couldn't act; never end on `working`, since nobody is left to carry on. If the session ends without writing a new status, the service marks the answer as given up and hands the item back to Danyel as "A Mac session gave up on your answers".
+**A session can also start with the answers in its first message.** When an item is not in the working state and no session claims its answer within 5 minutes, the PR Board service on the Mac claims it, starts a fresh session (`claude -p`) in the item's worktree with the answers in the prompt, printed the way the watcher prints them, and sets the ask to "A Mac session is working on your answers". That session has no chat memory: read the PR or issue and its record (`show`) first, check the branch is up to date (the worktree may be new, so install dependencies before running tests), then act on the answers as above. Don't start the watcher in such a session; it ends when you finish, and the service starts a new one for the next answers. End with `--state paused`, `complete` or `parked`, even to say you couldn't act; never end on `working`, since nobody is left to carry on. If the session ends without writing a new status, the service marks the answer as given up and hands the item back to Danyel as "A Mac session gave up on your answers".
