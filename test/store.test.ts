@@ -237,6 +237,44 @@ describe('claim, unclaim and giveUp', () => {
     expect(got.record).toMatchObject({ state: 'working', ask: WORKING_ASK, version: 2 });
   });
 
+  describe('a late note answering an older version', () => {
+    async function lateNote(by: 'session' | 'service'): Promise<number> {
+      await setStatus(db, PR, input(), T0);
+      const note = await addAnswer(db, PR, answer({ choices: {}, note: 'late thought' }), T1);
+      await setStatus(db, PR, input({ ask: 'Again?' }), T2);
+      await claim(db, PR, by, T3);
+      return note.id;
+    }
+
+    it('unclaim restores the record', async () => {
+      const id = await lateNote('service');
+      expect(await findWork(db, PR)).toMatchObject({ state: 'working', version: 2 });
+      await unclaim(db, [id]);
+      expect(await findWork(db, PR)).toMatchObject({ state: 'paused', ask: 'Again?', turnSince: T0, version: 2 });
+      expect((await unclaimedAnswers(db, [PR]))[0]?.answers).toHaveLength(1);
+    });
+
+    it('giveUp hands the record back to the owner', async () => {
+      const id = await lateNote('service');
+      await giveUp(db, [id], 'h', T3);
+      expect(await findWork(db, PR)).toMatchObject({ state: 'paused', ask: GAVE_UP_ASK, turnSince: T3 });
+    });
+
+    it('serviceClaims lists the claim', async () => {
+      const id = await lateNote('service');
+      const got = await serviceClaims(db);
+      expect(got).toHaveLength(1);
+      expect(got[0]?.answers.map((a) => a.id)).toEqual([id]);
+    });
+
+    it('unclaimedOlderThan skips the record while the claim is live', async () => {
+      await lateNote('session');
+      const second = await addAnswer(db, PR, answer({ version: 2, choices: {}, note: 'more' }), T3);
+      expect(second.id).toBeGreaterThan(0);
+      expect(await unclaimedOlderThan(db, '2026-11-21T00:00:00.000Z')).toEqual([]);
+    });
+  });
+
   it('moves turnSince on a claim, and unclaim puts it back', async () => {
     await withTwoAnswers();
     const got = await claim(db, PR, 'session', T2);

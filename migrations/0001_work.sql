@@ -39,6 +39,8 @@ CREATE TABLE answer (
   note TEXT NOT NULL,
   claimed_at TEXT,
   claimed_by TEXT,
+  -- The record's version when the claim was made. A claim is live while the record is still at that version.
+  claimed_at_version INTEGER,
   state_before TEXT,
   -- The state, ask and turn time the record had before the claim, so a failed start can put them back.
   ask_before TEXT,
