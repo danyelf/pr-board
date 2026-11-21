@@ -12,6 +12,14 @@ export const LABEL_READY_TO_MERGE = 'ready to merge';
 /** Means: go with the default, and file the question as a new issue to decide later. */
 export const FILE_AN_ISSUE = 'file an issue';
 
+// The asks written by code rather than by a session, so the board and the service can tell them apart.
+/** Written as an answer is claimed by a session, before it is woken. */
+export const WORKING_ASK = 'Working on your answers';
+/** Written when the Mac service claims an answer and starts a session for it. */
+export const SERVICE_WORKING_ASK = 'A Mac session is working on your answers';
+/** Written when that session ended without handing the item on; it hands it to the owner. */
+export const GAVE_UP_ASK = 'A Mac session gave up on your answers';
+
 /** The longest note an answer may carry. */
 export const NOTE_MAX = 2000;
 

@@ -157,13 +157,9 @@ export function isClaimReaction(login: string | null | undefined, content: strin
   return fromClaudeSide(login) && content.toLowerCase() === CLAIM_REACTION;
 }
 
-// The statuses written by code rather than by a session, so the board and the service can tell them apart.
-/** Written by the watcher as it claims an answer, before it wakes its session. */
-export const WORKING_ASK = 'Working on your answers';
-/** Written by the Mac service once the session it started for an answer is running. */
-export const SERVICE_WORKING_ASK = 'A Mac session is working on your answers';
-/** Written by the Mac service when that session ended without handing the item on; it hands it to the owner. */
-export const GAVE_UP_ASK = 'A Mac session gave up on your answers';
+// The statuses written by code rather than by a session now live in names.ts.
+import { GAVE_UP_ASK, SERVICE_WORKING_ASK, WORKING_ASK } from './names.ts';
+export { GAVE_UP_ASK, SERVICE_WORKING_ASK, WORKING_ASK };
 
 /** Which of those statuses this is, or null for one a session wrote. */
 export function codeWrittenStatus(s: Pick<Status, 'waitingOn' | 'ask'> | null): 'working' | 'service-working' | 'gave-up' | null {
