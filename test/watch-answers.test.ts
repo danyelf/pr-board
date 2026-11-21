@@ -58,7 +58,8 @@ class Board {
     }
     if (url.pathname === '/api/claim') {
       const rec = this.find(body!.repo as string, body!.number as number);
-      if (!rec) return reply(404, { error: 'not open on the board' });
+      // The real board refuses a claim on an item with no open record.
+      if (!rec) return reply(409, { error: 'not open on the board' });
       const mine = this.answers.filter((a) => a.workId === rec.id && a.claimedAt === null && !this.lostRace.has(a.id));
       for (const a of this.answers) if (this.lostRace.has(a.id)) a.claimedAt = 'other';
       for (const a of mine) { a.claimedAt = 'now'; a.claimedBy = body!.by as 'session'; }
@@ -170,6 +171,18 @@ describe('watch-answers', () => {
     expect(r.sleeps).toEqual([POLL, POLL]);
     expect(r.out).toContain('acme/x#5 has ended on the board; no longer watching it.');
     expect(r.out).toContain('nothing left to watch');
+  });
+
+  it('prints the answers it claimed when another watched item has ended, and stops watching that one', async () => {
+    const w = new World();
+    w.board.records.push(record({ id: 2, repo: 'acme/y', pr: 7, endedAt: '2026-11-09T00:00:00Z' }));
+    w.board.answers.push(answer());
+    const r = await watch(w, ['acme/x#5', 'acme/y#7']);
+    expect(r.code).toBe(0);
+    expect(r.sleeps).toEqual([COLLECT]);
+    expect(w.board.answers[0]!.claimedBy).toBe('session');
+    expect(r.out).toContain('acme/y#7 has ended on the board');
+    expect(r.out).toContain('1. Colour? → change');
   });
 
   it("works out a #N reference's repo inside the loop, so a passing failure is retried rather than fatal", async () => {

@@ -10,7 +10,7 @@ import { describe } from './answers.ts';
 import { OwnerError, currentRepo, gh, readRef, refString, refuseOwner } from './gh.ts';
 import type { Deps as BaseDeps, Ref } from './gh.ts';
 import { POLL_MS, backoff, message } from './poll.ts';
-import type { AnswerRow, WorkRecord } from '../src/shared/work.ts';
+import { Refused, type AnswerRow, type WorkRecord } from '../src/shared/work.ts';
 
 export interface Deps extends BaseDeps {
   board: BoardDeps;
@@ -64,11 +64,17 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
         await deps.sleep(COLLECT_MS);
         const claimed: Found[] = [];
         // Every watched item is claimed, since more may have come in during the wait; one with nothing left comes back empty.
-        for (const ref of refs) {
+        for (const ref of [...refs]) {
           try {
             const got = await boardCall<Found>(deps.board, 'POST', '/api/claim', { ...where(ref), by: 'session' });
             if (got.answers.length > 0) claimed.push(got);
           } catch (e) {
+            if (e instanceof Refused) {
+              // The board refuses a claim on an item that has ended; there is nothing to claim, and no answer will come.
+              refs.splice(refs.indexOf(ref), 1);
+              out(`${refString(ref)} has ended on the board (${e.message}); no longer watching it.`);
+              continue;
+            }
             if (!(e instanceof BoardError)) throw e;
             // Left unclaimed, so the next check sees it.
             err(`Couldn't claim ${refString(ref)}: ${e.message}`);

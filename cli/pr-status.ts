@@ -4,6 +4,7 @@ import { OWNER_LOGIN } from '../src/shared/config.ts';
 import { GATES, STATES, Refused, parseQuestion } from '../src/shared/work.ts';
 import { BoardError, boardCall, type BoardDeps } from './board.ts';
 import { gh, parseRef, refString } from './gh.ts';
+import { message } from './poll.ts';
 import type { Deps as BaseDeps, Gh, Ref } from './gh.ts';
 
 export interface Deps extends BaseDeps {
@@ -89,10 +90,17 @@ async function setStatus(deps: Deps, ref: Ref, opts: SetOptions, out: (l: string
   });
   out(`Recorded ${refString(ref)} at ${opts.gate}, ${opts.state} (version ${sent.record.version})`);
   if (!sent.handedOver) return [];
-  const item = await readItem(deps.gh, ref);
+  // Running set again won't ask for the review, since the record is already the owner's turn; so say how to ask by hand.
+  const byHand = `⚠️ The status was recorded on the board, but ${OWNER_LOGIN} wasn't asked to review, so GitHub won't notify them. Run: gh pr edit ${ref.n} -R ${ref.owner}/${ref.repo} --add-reviewer ${OWNER_LOGIN}`;
+  let item: Item;
+  try {
+    item = await readItem(deps.gh, ref);
+  } catch (e) {
+    return [`Couldn't read ${refString(ref)} from GitHub: ${message(e)}`, byHand];
+  }
   if (!item.isPr) return [];
   const problem = await requestReview(deps.gh, ref, item.author);
-  return problem ? [problem] : [];
+  return problem ? [problem, byHand] : [];
 }
 
 export async function main(argv: string[], deps: Deps): Promise<number> {

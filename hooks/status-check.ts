@@ -5,6 +5,7 @@ import { BoardError, boardCall } from '../cli/board.ts';
 import type { BoardDeps } from '../cli/board.ts';
 import { currentRepo, gh, git, refString } from '../cli/gh.ts';
 import type { Deps, Gh, Ref } from '../cli/gh.ts';
+import { message } from '../cli/poll.ts';
 
 export interface HookDeps extends Deps {
   git: Gh;
@@ -234,9 +235,16 @@ async function standing(item: Touched, turnStart: number, deps: HookDeps): Promi
 export async function main(deps: HookDeps): Promise<number> {
   const out = deps.out ?? ((l) => console.log(l));
   const err = deps.err ?? ((l) => console.error(l));
+  let input: { transcript_path: string; cwd?: string; stop_hook_active?: boolean };
   try {
-    const input = JSON.parse(deps.stdin) as { transcript_path: string; cwd?: string; stop_hook_active?: boolean };
-    if (input.stop_hook_active) return 0;
+    input = JSON.parse(deps.stdin) as typeof input;
+  } catch (e) {
+    // Without the hook's input it can't tell whether it already blocked once, so blocking could stop every turn.
+    err(`status-check: ${message(e).split('\n')[0]}`);
+    return 0;
+  }
+  if (input.stop_hook_active) return 0;
+  try {
 
     const entries = (await readFile(input.transcript_path, 'utf8'))
       .split('\n')
@@ -275,19 +283,10 @@ export async function main(deps: HookDeps): Promise<number> {
 
     const stale: string[] = [];
     const noRecord: string[] = [];
-    try {
-      for (const [ref, item] of touched) {
-        const s = await standing(item, turnStart, deps);
-        if (s === 'stale') stale.push(ref);
-        else if (s === 'no-record') noRecord.push(ref);
-      }
-    } catch (e) {
-      // The board is down or won't accept us. Say so once; the retry (stop_hook_active) is let through above.
-      if (e instanceof BoardError) {
-        out(JSON.stringify({ decision: 'block', reason: e.message }));
-        return 0;
-      }
-      throw e;
+    for (const [ref, item] of touched) {
+      const s = await standing(item, turnStart, deps);
+      if (s === 'stale') stale.push(ref);
+      else if (s === 'no-record') noRecord.push(ref);
     }
 
     const command = `node ${PR_STATUS_SCRIPT} set <ref> --gate … --state …`;
@@ -302,7 +301,10 @@ export async function main(deps: HookDeps): Promise<number> {
     }));
     return 0;
   } catch (e) {
-    err(`status-check: ${(e instanceof Error ? e.message : String(e)).split('\n')[0]}`);
+    // Whatever went wrong, the turn's statuses went unchecked, so Claude is told once; the retry (stop_hook_active) is let through above.
+    // The board's own failures already start with ⚠️ and say what to do.
+    const reason = e instanceof BoardError ? e.message : `status-check failed: ${message(e).split('\n')[0]}`;
+    out(JSON.stringify({ decision: 'block', reason }));
     return 0;
   }
 }

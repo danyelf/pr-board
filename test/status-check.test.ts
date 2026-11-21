@@ -101,11 +101,13 @@ describe('status-check hook', () => {
     expect((await run('no-github.jsonl')).out).toEqual([]);
   });
 
-  it('prints nothing and one stderr line when gh fails', async () => {
+  it('blocks once saying the check failed when gh fails, and lets the retry through', async () => {
     const r = await run('pr-comment.jsonl', { throwOn: 'repo view' });
     expect(r.code).toBe(0);
-    expect(r.out).toEqual([]);
-    expect(r.errors).toHaveLength(1);
+    expect(r.block?.decision).toBe('block');
+    expect(r.block?.reason).toBe('status-check failed: boom');
+    const again = await run('pr-comment.jsonl', { throwOn: 'repo view' }, { stop_hook_active: true });
+    expect(again.out).toEqual([]);
   });
 
   it('takes the number of a created PR from the tool result URL', async () => {

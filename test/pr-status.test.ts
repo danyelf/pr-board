@@ -9,6 +9,7 @@ interface World {
   author: string;
   reviewers: string[];
   reviewFails?: boolean;
+  readFails?: boolean;
   /** What the board answers to POST /api/status. */
   handedOver: boolean;
 }
@@ -19,6 +20,7 @@ function fakeGh(world: World) {
     calls.push(args);
     const line = args.join(' ');
     if (line === 'api repos/acme/x/issues/5') {
+      if (world.readFails) throw new Error('gh: API rate limit exceeded (HTTP 403)');
       return JSON.stringify({ body: world.body, user: { login: world.author }, ...(world.kind === 'pr' ? { pull_request: {} } : {}) });
     }
     if (line.startsWith('api -X POST repos/acme/x/pulls/5/requested_reviewers')) {
@@ -169,6 +171,19 @@ describe('pr-status set asks the owner to review', () => {
     expect(r.code).toBe(1);
     expect(r.sent).toHaveLength(1);
     expect(r.errors[0]).toMatch(/^Couldn't ask sam-gh to review acme\/x#5: .*HTTP 422/);
+    expect(r.errors[1]).toMatch(/^⚠️ The status was recorded on the board/);
+    expect(r.errors[1]).toContain('Run: gh pr edit 5 -R acme/x --add-reviewer sam-gh');
+  });
+
+  it('says the status was recorded and how to ask for the review by hand when the PR cannot be read', async () => {
+    const w = world({ handedOver: true, readFails: true });
+    const r = await run(w, SET);
+    expect(r.code).toBe(1);
+    expect(r.sent).toHaveLength(1);
+    expect(w.reviewers).toEqual([]);
+    expect(r.errors[0]).toContain('rate limit');
+    expect(r.errors[1]).toMatch(/^⚠️ The status was recorded on the board/);
+    expect(r.errors[1]).toContain('Run: gh pr edit 5 -R acme/x --add-reviewer sam-gh');
   });
 });
 
