@@ -1,7 +1,11 @@
 // The Mac side's way of talking to the board: its /api routes, signed in with a Cloudflare Access service token.
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { BOARD_URL } from '../src/shared/config.ts';
+import { message } from '../src/shared/helpers.ts';
 import { Refused } from '../src/shared/work.ts';
+import type { Ref } from './gh.ts';
 
 export interface BoardDeps {
   fetch: typeof fetch;
@@ -9,6 +13,17 @@ export interface BoardDeps {
   env: NodeJS.ProcessEnv;
   home: string;
 }
+
+/** How the commands reach the board when they run for real. */
+export function realBoardDeps(): BoardDeps {
+  return { fetch, readFile: (p) => readFileSync(p, 'utf8'), env: process.env, home: homedir() };
+}
+
+/** The item as the board's routes take it in a body. */
+export const where = (ref: Ref) => ({ repo: `${ref.owner}/${ref.repo}`, number: ref.n });
+
+/** The address of the board's record of an item, with its answers. */
+export const workPath = (ref: Ref) => `/api/work?repo=${encodeURIComponent(`${ref.owner}/${ref.repo}`)}&number=${ref.n}`;
 
 /** The board couldn't be reached or didn't accept us. The message starts with ⚠️ and says what to do. */
 export class BoardError extends Error {
@@ -61,7 +76,7 @@ export async function boardCall<T>(deps: BoardDeps, method: 'GET' | 'POST', path
   try {
     res = await deps.fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), redirect: 'manual' });
   } catch (e) {
-    throw new BoardError(`⚠️ Couldn't reach the board at ${url}: ${e instanceof Error ? e.message : String(e)}. Check the network and try again; nothing was written.`);
+    throw new BoardError(`⚠️ Couldn't reach the board at ${url}: ${message(e)}. Check the network and try again; nothing was written.`);
   }
 
   const refused = `⚠️ The board did not accept the service token in ${tokenFile}. It may have expired or been revoked: make a new one in Cloudflare Access and put it in that file.`;

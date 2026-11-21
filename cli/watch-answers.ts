@@ -3,14 +3,13 @@
 //   node cli/watch-answers.ts owner/repo#N [owner/repo#M ...]
 // It costs nothing while it waits, and it never exits on a timer or because of errors, since every
 // exit is a paid wake-up for the session.
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { BoardError, boardCall, type BoardDeps } from './board.ts';
+import { BoardError, boardCall, realBoardDeps, where, workPath, type BoardDeps } from './board.ts';
 import { describe } from './answers.ts';
 import { OwnerError, currentRepo, gh, readRef, refString, refuseOwner } from './gh.ts';
 import type { Deps as BaseDeps, Ref } from './gh.ts';
-import { POLL_MS, backoff, message } from './poll.ts';
-import { Refused, type AnswerRow, type WorkRecord } from '../src/shared/work.ts';
+import { message } from '../src/shared/helpers.ts';
+import { POLL_MS, backoff } from './poll.ts';
+import { Refused, type Found } from '../src/shared/work.ts';
 
 export interface Deps extends BaseDeps {
   board: BoardDeps;
@@ -19,10 +18,6 @@ export interface Deps extends BaseDeps {
 
 /** After the first answer, how long to wait for the rest, so one wake-up takes them all. */
 const COLLECT_MS = 60_000;
-
-interface Found { record: WorkRecord; answers: AnswerRow[] }
-
-const where = (ref: Ref) => ({ repo: `${ref.owner}/${ref.repo}`, number: ref.n });
 
 export async function main(argv: string[], deps: Deps): Promise<number> {
   const out = deps.out ?? ((l) => console.log(l));
@@ -89,7 +84,7 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
         // Nothing waiting: drop the items whose record has ended, since no answer will come for them.
         for (const ref of [...refs]) {
           try {
-            await boardCall(deps.board, 'GET', `/api/work?repo=${encodeURIComponent(`${ref.owner}/${ref.repo}`)}&number=${ref.n}`);
+            await boardCall(deps.board, 'GET', workPath(ref));
           } catch (e) {
             if (!(e instanceof BoardError) || e.status !== 404) throw e;
             refs.splice(refs.indexOf(ref), 1);
@@ -114,6 +109,5 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
 
 if (import.meta.main) {
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-  const board: BoardDeps = { fetch, readFile: (p) => readFileSync(p, 'utf8'), env: process.env, home: homedir() };
-  process.exitCode = await main(process.argv.slice(2), { gh, board, sleep });
+  process.exitCode = await main(process.argv.slice(2), { gh, board: realBoardDeps(), sleep });
 }

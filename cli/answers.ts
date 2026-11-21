@@ -1,14 +1,10 @@
 // The owner's answers in words, as the watcher prints them for the session that handed the work over.
-import type { AnswerRow, WorkRecord } from '../src/shared/work.ts';
-
-/** The work as the session knows it: the PR when there is one, otherwise the issue. */
-function itemName(record: WorkRecord): string {
-  return `${record.repo}#${record.pr ?? record.issue}`;
-}
+import { itemKey, recordNumber, type AnswerRow, type WorkRecord } from '../src/shared/work.ts';
 
 /** The item, each question with the choice made, the approval if any, and the note, indented. */
 export function describe(record: WorkRecord, answers: AnswerRow[]): string {
-  const lines = [itemName(record)];
+  // The work as the session knows it: the PR when there is one, otherwise the issue.
+  const lines = [itemKey(record.repo, recordNumber(record))];
   for (const a of answers) {
     for (const q of record.questions) {
       const choice = a.choices[String(q.n)];

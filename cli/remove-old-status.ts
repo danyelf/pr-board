@@ -3,6 +3,7 @@
 //   node cli/remove-old-status.ts [--dry-run] owner/repo [owner/repo ...]
 // On each open PR it removes the status section from the description. On each open issue it deletes
 // the comments that this account wrote and that begin with a status section; anyone else's are left.
+import { message } from '../src/shared/helpers.ts';
 import { flattenPages, gh, refuseOwner } from './gh.ts';
 import type { Deps } from './gh.ts';
 
@@ -44,7 +45,7 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
   try {
     me = await refuseOwner(deps.gh, 'Run this as Claude\'s account, which wrote the status comments it deletes.');
   } catch (e) {
-    err(e instanceof Error ? e.message : String(e));
+    err(message(e));
     return 1;
   }
 
@@ -81,12 +82,12 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
           }
         } catch (e) {
           failed = true;
-          err(`${name}: ${e instanceof Error ? e.message : String(e)}`);
+          err(`${name}: ${message(e)}`);
         }
       }
     } catch (e) {
       failed = true;
-      err(`${repo}: ${e instanceof Error ? e.message : String(e)}`);
+      err(`${repo}: ${message(e)}`);
     }
   }
   return failed ? 1 : 0;

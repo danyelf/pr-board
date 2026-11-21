@@ -28,11 +28,14 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 /** How long an answer may wait for a Claude session to claim it before the board says nobody has. */
 export const PICKUP_GRACE_MS = 10 * 60 * 1000;
 
+/** How long the Mac service lets a session run, unless its config says otherwise. */
+export const SESSION_LIMIT_MS = 60 * 60 * 1000;
+
 /**
  * How long the watcher's "Working on your answers" may stand unchanged before the board says nothing
- * has happened since the pickup. The same as the Mac service's default session limit.
+ * has happened since the pickup: as long as a session the Mac service starts may run.
  */
-export const WORKING_STALLS_MS = 60 * 60 * 1000;
+export const WORKING_STALLS_MS = SESSION_LIMIT_MS;
 
 /** How long the Mac service waits before starting a session for an answer. It must stay below PICKUP_GRACE_MS. */
 export const SERVICE_GRACE_MS = 5 * 60 * 1000;

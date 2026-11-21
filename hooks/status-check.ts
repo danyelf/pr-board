@@ -1,11 +1,10 @@
-import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { BoardError, boardCall } from '../cli/board.ts';
+import { BoardError, boardCall, realBoardDeps, workPath } from '../cli/board.ts';
 import type { BoardDeps } from '../cli/board.ts';
 import { currentRepo, gh, git, refString } from '../cli/gh.ts';
 import type { Deps, Gh, Ref } from '../cli/gh.ts';
-import { message } from '../cli/poll.ts';
+import { message } from '../src/shared/helpers.ts';
 
 export interface HookDeps extends Deps {
   git: Gh;
@@ -222,7 +221,7 @@ type Standing = 'ok' | 'no-record' | 'stale';
 async function standing(item: Touched, turnStart: number, deps: HookDeps): Promise<Standing> {
   try {
     const { record } = await boardCall<{ record: { writtenAt: string; confirmedAt: string | null } }>(
-      deps.board, 'GET', `/api/work?repo=${encodeURIComponent(`${item.owner}/${item.repo}`)}&number=${item.n}`,
+      deps.board, 'GET', workPath(item),
     );
     const latest = Math.max(Date.parse(record.writtenAt), record.confirmedAt ? Date.parse(record.confirmedAt) : 0);
     return latest >= turnStart ? 'ok' : 'stale';
@@ -310,11 +309,10 @@ export async function main(deps: HookDeps): Promise<number> {
 }
 
 if (import.meta.main) {
-  const { homedir } = await import('node:os');
   let stdin = '';
   for await (const chunk of process.stdin) stdin += chunk;
   process.exitCode = await main({
     gh, git, stdin,
-    board: { fetch, readFile: (p) => readFileSync(p, 'utf8'), env: process.env, home: homedir() },
+    board: realBoardDeps(),
   });
 }

@@ -11,13 +11,14 @@ import { accessSync, appendFileSync, closeSync, constants, mkdirSync, openSync, 
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { OWNER_NAME } from '../src/shared/config.ts';
-import { CLAUDE_BOT_KEY, GAVE_UP_ASK, PICKUP_GRACE_MS, SERVICE_GRACE_MS, SERVICE_WORKING_ASK } from '../src/shared/names.ts';
-import type { AnswerRow, WorkRecord } from '../src/shared/work.ts';
+import { CLAUDE_BOT_KEY, GAVE_UP_ASK, PICKUP_GRACE_MS, SERVICE_GRACE_MS, SERVICE_WORKING_ASK, SESSION_LIMIT_MS } from '../src/shared/names.ts';
+import { itemKey, recordNumber, type Found, type WorkRecord } from '../src/shared/work.ts';
 import { describe } from './answers.ts';
-import { BoardError, boardCall, type BoardDeps } from './board.ts';
+import { BoardError, boardCall, realBoardDeps, where, type BoardDeps } from './board.ts';
 import { OwnerError, gh as realGh, git as realGit, ps as realPs, refString, refuseOwner } from './gh.ts';
 import type { Gh, Ref } from './gh.ts';
-import { POLL_MS, backoff, message } from './poll.ts';
+import { message } from '../src/shared/helpers.ts';
+import { POLL_MS, backoff } from './poll.ts';
 
 const MIN = 60_000;
 const USAGE = 'Usage: mac-service [--config <file>] [--dry-run] [--once]';
@@ -131,7 +132,7 @@ export function loadConfig(text: string, home: string, path: string): Config {
     graceMs: num('graceMinutes', SERVICE_GRACE_MS / MIN, (n) => n >= 0, 'a number of minutes, 0 or more') * MIN,
     maxSessions: num('maxSessions', 2, (n) => Number.isInteger(n) && n >= 1, 'a whole number, 1 or more'),
     pollMs: num('pollSeconds', POLL_MS / 1000, (n) => n >= 1, 'a number of seconds, 1 or more') * 1000,
-    sessionMs: num('sessionMinutes', 60, (n) => n > 0, 'a number of minutes, more than 0') * MIN,
+    sessionMs: num('sessionMinutes', SESSION_LIMIT_MS / MIN, (n) => n > 0, 'a number of minutes, more than 0') * MIN,
     logDir: d.logDir === undefined ? join(home, '.pr-board', 'logs') : absolute(d.logDir, 'logDir'),
     tokenFile: d.tokenFile === undefined ? join(home, '.config', 'claude-github', 'token') : absolute(d.tokenFile, 'tokenFile'),
     claudeTokenFile: d.claudeTokenFile == null ? null : absolute(d.claudeTokenFile, 'claudeTokenFile'),
@@ -199,18 +200,11 @@ function promptFor(ref: Ref, cwd: string, described: string): string {
 
 const indent = (text: string) => text.split('\n').map((l) => `    ${l}`).join('\n');
 
-/** A record on the board and some of its answers, as the board's routes return them. */
-interface Found { record: WorkRecord; answers: AnswerRow[] }
-
 /** The item a record is known by: its PR when it has one, otherwise its issue. Null for a repo name it can't read. */
 function refOf(record: WorkRecord): Ref | null {
   const [owner, repo, ...rest] = record.repo.split('/');
-  const n = record.pr ?? record.issue;
-  return owner && repo && rest.length === 0 && n !== null ? { owner, repo, n } : null;
+  return owner && repo && rest.length === 0 ? { owner, repo, n: recordNumber(record) } : null;
 }
-
-/** The item as the board's routes take it. */
-const where = (ref: Ref) => ({ repo: `${ref.owner}/${ref.repo}`, number: ref.n });
 
 export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   const out = deps.out ?? ((l) => console.log(l));
@@ -307,7 +301,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
 
   /** Whether a session of this service is running for the record, under its PR or its issue. */
   const runningFor = (record: WorkRecord, live: Map<string, Running>): boolean =>
-    [record.pr, record.issue].some((n) => n !== null && live.has(`${record.repo}#${n}`));
+    [record.pr, record.issue].some((n) => n !== null && live.has(itemKey(record.repo, n)));
 
   /**
    * The board lists the answers this service claimed while the record is still at the version it had
@@ -569,7 +563,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
           }
         }
         // A session seen running last time whose claim is no longer listed ended after a new status moved the version on.
-        const claimed = new Set(claims.flatMap((c) => [c.record.pr, c.record.issue].filter((n) => n !== null).map((n) => `${c.record.repo}#${n}`)));
+        const claimed = new Set(claims.flatMap((c) => [c.record.pr, c.record.issue].filter((n) => n !== null).map((n) => itemKey(c.record.repo, n))));
         for (const name of previous ?? []) {
           if (!live.has(name) && !claimed.has(name)) say(name, 'the session ended after a new status was written, or the item closed; nothing to do.');
         }
@@ -631,7 +625,7 @@ if (import.meta.main) {
   process.exitCode = await main(process.argv.slice(2), {
     gh: realGh,
     git: realGit,
-    board: { fetch, readFile: (p) => readFileSync(p, 'utf8'), env: process.env, home: homedir() },
+    board: realBoardDeps(),
     ps: realPs,
     files: {
       read: (p) => readFileSync(p, 'utf8'),

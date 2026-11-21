@@ -100,27 +100,13 @@ describe('pr-status set', () => {
     }
   });
 
-  it('refuses a gate or state it does not know', async () => {
-    const r = await run(world(), ['set', 'acme/x#5', '--gate', 'build', '--state', 'working']);
+  it('leaves the checks of the gate, the state, line breaks and questions to the board, which refuses before writing', async () => {
+    const argv = ['set', 'acme/x#5', '--gate', 'build', '--state', 'done', '--to-test', '1. pin\n2. press', '--question', 'Colour? (red | green)'];
+    const r = await run(world(), argv, () => ({ status: 400, body: { error: '"gate" must be one of design, implementation, prep' } }));
     expect(r.code).toBe(1);
-    expect(r.errors.join('\n')).toContain('--gate must be design, implementation or prep');
-    const s = await run(world(), ['set', 'acme/x#5', '--gate', 'design', '--state', 'done']);
-    expect(s.errors.join('\n')).toContain('--state must be working, paused, complete or parked');
-    expect(r.sent.length + s.sent.length).toBe(0);
-  });
-
-  it('refuses a line break, without calling the board', async () => {
-    const r = await run(world(), ['set', 'acme/x#5', '--gate', 'implementation', '--state', 'complete', '--ask', 'a', '--to-test', '1. pin\n2. press']);
-    expect(r.code).toBe(1);
-    expect(r.errors.join('\n')).toContain('--to-test must be one line');
-    expect(r.sent).toEqual([]);
-  });
-
-  it('refuses a question with no bold default, without calling the board', async () => {
-    const r = await run(world(), ['set', 'acme/x#5', '--gate', 'design', '--state', 'paused', '--ask', 'a', '--question', 'Colour? (red | green)']);
-    expect(r.code).toBe(1);
-    expect(r.errors.join('\n')).toContain('exactly one choice in bold');
-    expect(r.sent).toEqual([]);
+    expect(r.sent).toHaveLength(1);
+    expect(r.sent[0]!.body).toMatchObject({ gate: 'build', state: 'done', toTest: '1. pin\n2. press', questions: ['Colour? (red | green)'] });
+    expect(r.errors).toEqual(['"gate" must be one of design, implementation, prep']);
   });
 
   it('refuses a flag it does not know, such as the old --waiting', async () => {

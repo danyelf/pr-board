@@ -4,6 +4,7 @@ import {
   LABEL_READY_TO_MERGE, REPO_WINDOW_DAYS,
 } from '../src/shared/names.ts';
 import { MANAGED_LABELS } from '../src/shared/labels.ts';
+import { message } from '../src/shared/helpers.ts';
 import { flattenPages, gh } from './gh.ts';
 import type { Deps as BaseDeps } from './gh.ts';
 
@@ -54,13 +55,13 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
         }
       } catch (e) {
         failed = true;
-        err(`${name}: ${e instanceof Error ? e.message : String(e)}`);
+        err(`${name}: ${message(e)}`);
       }
     }
     if (repos.length === 0) out(`No repos pushed to in the last ${REPO_WINDOW_DAYS} days.`);
     return failed ? 1 : 0;
   } catch (e) {
-    err(e instanceof Error ? e.message : String(e));
+    err(message(e));
     return 1;
   }
 }

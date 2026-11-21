@@ -1,10 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { OWNER_LOGIN } from '../src/shared/config.ts';
-import { GATES, STATES, Refused, parseQuestion } from '../src/shared/work.ts';
-import { BoardError, boardCall, type BoardDeps } from './board.ts';
+import { BoardError, boardCall, realBoardDeps, where, workPath, type BoardDeps } from './board.ts';
 import { gh, parseRef, refString } from './gh.ts';
-import { message } from './poll.ts';
+import { message } from '../src/shared/helpers.ts';
 import type { Deps as BaseDeps, Gh, Ref } from './gh.ts';
 
 export interface Deps extends BaseDeps {
@@ -39,9 +36,6 @@ function parseSetArgs(args: string[]): SetOptions {
     if (!['--gate', '--state', '--ask', '--question', '--to-test', '--reason', '--replaces', '--issue'].includes(flag)) throw new Error(`Unknown option ${flag}`);
     if (value === undefined) throw new Error(`${flag} needs a value`);
     i++;
-    if (flag !== '--gate' && flag !== '--state' && /[\r\n]/.test(value)) {
-      throw new Error(`${flag} must be one line; join the steps with "; " or "1) … 2) …" instead of line breaks`);
-    }
     if (flag === '--gate') opts.gate = value;
     else if (flag === '--state') opts.state = value;
     else if (flag === '--ask') opts.ask = value;
@@ -54,11 +48,8 @@ function parseSetArgs(args: string[]): SetOptions {
       else opts.issue = Number(value);
     }
   }
+  // Everything else about the status is checked by the board, which refuses before writing anything.
   if (!opts.gate || !opts.state) throw new Error(USAGE);
-  if (!(GATES as readonly string[]).includes(opts.gate)) throw new Error(`--gate must be ${GATES.slice(0, -1).join(', ')} or ${GATES.at(-1)}`);
-  if (!(STATES as readonly string[]).includes(opts.state)) throw new Error(`--state must be ${STATES.slice(0, -1).join(', ')} or ${STATES.at(-1)}`);
-  // Check the questions here so a mistake is caught before anything is sent.
-  opts.questions.forEach((q, i) => parseQuestion(q, i + 1));
   return opts;
 }
 
@@ -78,14 +69,14 @@ async function requestReview(gh: Gh, ref: Ref, author: string | null): Promise<s
     await gh(['api', '-X', 'POST', `repos/${ref.owner}/${ref.repo}/pulls/${ref.n}/requested_reviewers`, '-f', `reviewers[]=${OWNER_LOGIN}`]);
     return null;
   } catch (e) {
-    return `Couldn't ask ${OWNER_LOGIN} to review ${refString(ref)}: ${e instanceof Error ? e.message : String(e)}`;
+    return `Couldn't ask ${OWNER_LOGIN} to review ${refString(ref)}: ${message(e)}`;
   }
 }
 
 async function setStatus(deps: Deps, ref: Ref, opts: SetOptions, out: (l: string) => void): Promise<string[]> {
   // With no --issue, the board links a PR to its issue from what GitHub says.
   const sent = await boardCall<{ record: { version: number }; handedOver: boolean }>(deps.board, 'POST', '/api/status', {
-    repo: `${ref.owner}/${ref.repo}`, number: ref.n, gate: opts.gate, state: opts.state, ask: opts.ask, questions: opts.questions,
+    ...where(ref), gate: opts.gate, state: opts.state, ask: opts.ask, questions: opts.questions,
     toTest: opts.toTest, reason: opts.reason, noDesign: opts.noDesign, issue: opts.issue, replaces: opts.replaces,
   });
   out(`Recorded ${refString(ref)} at ${opts.gate}, ${opts.state} (version ${sent.record.version})`);
@@ -114,7 +105,6 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
     }
     const opts = command === 'set' ? parseSetArgs(rest) : null;
     const ref = await parseRef(refText, deps.gh);
-    const where = { repo: `${ref.owner}/${ref.repo}`, number: ref.n };
 
     if (opts) {
       const problems = await setStatus(deps, ref, opts, out);
@@ -123,13 +113,13 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
     }
 
     if (command === 'ok') {
-      await boardCall(deps.board, 'POST', '/api/ok', where);
+      await boardCall(deps.board, 'POST', '/api/ok', where(ref));
       return 0;
     }
 
     if (command === 'show') {
       try {
-        const work = await boardCall(deps.board, 'GET', `/api/work?repo=${encodeURIComponent(where.repo)}&number=${where.number}`);
+        const work = await boardCall(deps.board, 'GET', workPath(ref));
         out(JSON.stringify(work, null, 2));
         return 0;
       } catch (e) {
@@ -149,13 +139,13 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
     try {
       record = JSON.parse(deps.board.readFile(file));
     } catch (e) {
-      throw new Error(`Couldn't read a JSON record from ${file}: ${e instanceof Error ? e.message : String(e)}`);
+      throw new Error(`Couldn't read a JSON record from ${file}: ${message(e)}`);
     }
-    await boardCall(deps.board, 'POST', '/api/import', { ...where, record });
+    await boardCall(deps.board, 'POST', '/api/import', { ...where(ref), record });
     out(`Imported ${refString(ref)}`);
     return 0;
   } catch (e) {
-    err(e instanceof Error ? e.message : String(e));
+    err(message(e));
     return 1;
   }
 }
@@ -163,6 +153,6 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
 if (import.meta.main) {
   process.exitCode = await main(process.argv.slice(2), {
     gh,
-    board: { fetch, readFile: (p) => readFileSync(p, 'utf8'), env: process.env, home: homedir() },
+    board: realBoardDeps(),
   });
 }

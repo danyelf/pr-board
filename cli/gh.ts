@@ -62,13 +62,6 @@ export function flattenPages(json: string): unknown[] {
   return Array.isArray(parsed) ? parsed.flat() : [];
 }
 
-/** Whether GitHub said 404. Reads only what the command printed, not the command, whose path may hold a 404 (item #404). */
-export function isNotFound(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const at = message.lastIndexOf(' failed: ');
-  return /\b404\b|Not Found/i.test(at === -1 ? message : message.slice(at + ' failed: '.length));
-}
-
 /** Reads "owner/repo#N", or "#N" (just the number, in the current directory's repo). Throws on anything else. */
 export function readRef(text: string): Ref | { n: number } {
   const full = /^([^/\s#]+)\/([^/\s#]+)#(\d+)$/.exec(text);
