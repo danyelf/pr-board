@@ -3,7 +3,10 @@
 // other's results from JavaScript, so a statement that must depend on an earlier one asks the database itself
 // (a `WHERE EXISTS` over what the earlier statement wrote).
 import { GAVE_UP_ASK, SERVICE_WORKING_ASK, WORKING_ASK } from '../shared/names.ts';
-import { APPROVAL_CHOICES, Refused, applySet, checkAnswer, turnOf, type AnswerInput, type AnswerRow, type SetInput, type State, type WorkRecord } from '../shared/work.ts';
+import {
+  APPROVAL_CHOICES, Refused, applySet, checkAnswer, itemKey, turnOf, type AnswerInput, type AnswerRow, type Found, type RecordFields, type State,
+  type StatusInput, type WorkRecord,
+} from '../shared/work.ts';
 
 /** The part of D1Database the store uses. */
 export interface Db {
@@ -21,7 +24,7 @@ export interface ItemRef {
   repo: string;
   n: number;
 }
-export type Actor = 'status' | 'answer' | 'claim' | 'service' | 'switch-over';
+type Actor = 'status' | 'answer' | 'claim' | 'service' | 'switch-over';
 
 interface WorkRow {
   id: number;
@@ -67,7 +70,6 @@ interface AnswerDbRow {
 }
 
 type Written = { results: { id: number }[] };
-type RecordFields = Omit<WorkRecord, 'id' | 'repo' | 'issue' | 'pr' | 'endedAt' | 'endedHow' | 'confirmedAt' | 'startedAt'>;
 
 function toRecord(r: WorkRow): WorkRecord {
   return {
@@ -92,16 +94,20 @@ async function recordById(db: Db, id: number): Promise<WorkRecord> {
   return toRecord(row);
 }
 
+/** "?,?,?": one SQL placeholder for each of n values. */
+function placeholders(n: number): string {
+  return Array<string>(n).fill('?').join(',');
+}
+
 async function answersByIds(db: Db, ids: number[]): Promise<AnswerRow[]> {
   if (ids.length === 0) return [];
-  const marks = ids.map(() => '?').join(',');
-  const { results } = await db.prepare(`SELECT * FROM answer WHERE id IN (${marks}) ORDER BY id`).bind(...ids).all<AnswerDbRow>();
+  const { results } = await db.prepare(`SELECT * FROM answer WHERE id IN (${placeholders(ids.length)}) ORDER BY id`).bind(...ids).all<AnswerDbRow>();
   return results.map(toAnswer);
 }
 
 /** Pairs each answer with its record, for the answers of open work only. */
-async function withRecords(db: Db, answers: AnswerRow[]): Promise<{ record: WorkRecord; answers: AnswerRow[] }[]> {
-  const out: { record: WorkRecord; answers: AnswerRow[] }[] = [];
+async function withRecords(db: Db, answers: AnswerRow[]): Promise<Found[]> {
+  const out: Found[] = [];
   for (const workId of [...new Set(answers.map((a) => a.workId))]) {
     out.push({ record: await recordById(db, workId), answers: answers.filter((a) => a.workId === workId) });
   }
@@ -169,7 +175,7 @@ const summary = (r: Pick<WorkRecord, 'gate' | 'state' | 'version'>) => ({ gate: 
 export async function setStatus(
   db: Db,
   ref: ItemRef,
-  input: SetInput & { issue: number | null; replaces: number | null },
+  input: StatusInput,
   now: string,
 ): Promise<{ record: WorkRecord; handedOver: boolean }> {
   const prev =
@@ -220,7 +226,7 @@ export async function setStatus(
 /** Records that Claude looked at the item and the status is still right. */
 export async function confirm(db: Db, ref: ItemRef, now: string): Promise<WorkRecord> {
   const r = await findWork(db, ref);
-  if (!r) throw new Refused(`${ref.repo}#${ref.n} has no status on the board. Run pr-status set first.`);
+  if (!r) throw new Refused(`${itemKey(ref.repo, ref.n)} has no status on the board. Run pr-status set first.`);
   await db.batch([
     db.prepare('UPDATE work SET confirmed_at = ? WHERE id = ? AND ended_at IS NULL').bind(now, r.id),
     logStmt(db, r.id, now, 'status', { confirmed: true, version: r.version }, STILL_OPEN_AT, [r.id, r.version]),
@@ -235,7 +241,7 @@ export async function confirm(db: Db, ref: ItemRef, now: string): Promise<WorkRe
  */
 export async function addAnswer(db: Db, ref: ItemRef, a: AnswerInput, now: string): Promise<AnswerRow> {
   const r = await findWork(db, ref);
-  if (!r) throw new Refused(`${ref.repo}#${ref.n} is not open on the board`);
+  if (!r) throw new Refused(`${itemKey(ref.repo, ref.n)} is not open on the board`);
   const refusal = checkAnswer(r, a);
   if (refusal) throw new Refused(refusal);
 
@@ -288,8 +294,8 @@ async function waiting(db: Db, r: WorkRecord): Promise<AnswerRow[]> {
   return results.map(toAnswer);
 }
 
-export async function unclaimedAnswers(db: Db, refs: ItemRef[]): Promise<{ record: WorkRecord; answers: AnswerRow[] }[]> {
-  const out: { record: WorkRecord; answers: AnswerRow[] }[] = [];
+export async function unclaimedAnswers(db: Db, refs: ItemRef[]): Promise<Found[]> {
+  const out: Found[] = [];
   const seen = new Set<number>();
   for (const ref of refs) {
     const record = await findWork(db, ref);
@@ -305,7 +311,7 @@ export async function unclaimedAnswers(db: Db, refs: ItemRef[]): Promise<{ recor
  * For the Mac service. Records in the working state are left out, whether a claim set it or a session wrote it, so the
  * service never starts a second session beside one that is working. A note to such a record waits for that session's watcher.
  */
-export async function unclaimedOlderThan(db: Db, before: string): Promise<{ record: WorkRecord; answers: AnswerRow[] }[]> {
+export async function unclaimedOlderThan(db: Db, before: string): Promise<Found[]> {
   const { results } = await db
     .prepare(
       `SELECT a.* FROM answer a JOIN work w ON w.id = a.work_id
@@ -324,9 +330,9 @@ export async function unclaimedOlderThan(db: Db, before: string): Promise<{ reco
  * A claim that lands on a record already working (a late note) marks the answers and leaves the record as it is;
  * its "before" values come from the record's live claim if there is one, since that claim saw the record first.
  */
-export async function claim(db: Db, ref: ItemRef, by: 'session' | 'service', now: string): Promise<{ record: WorkRecord; answers: AnswerRow[] }> {
+export async function claim(db: Db, ref: ItemRef, by: 'session' | 'service', now: string): Promise<Found> {
   const r = await findWork(db, ref);
-  if (!r) throw new Refused(`${ref.repo}#${ref.n} is not open on the board`);
+  if (!r) throw new Refused(`${itemKey(ref.repo, ref.n)} is not open on the board`);
   const mine = 'EXISTS (SELECT 1 FROM answer WHERE work_id = ? AND claimed_at = ? AND claimed_by = ?)';
   const liveClaim = (column: string) =>
     `(SELECT l.${column} FROM answer l WHERE l.work_id = ? AND l.claimed_at_version = (SELECT version FROM work WHERE id = ?)
@@ -352,32 +358,38 @@ export async function claim(db: Db, ref: ItemRef, by: 'session' | 'service', now
 /** What a set of claimed answers was claimed from. The earliest claim saw the record as it was before any claim. */
 async function claimedFrom(db: Db, answerIds: number[]): Promise<AnswerDbRow | null> {
   if (answerIds.length === 0) return null;
-  const marks = answerIds.map(() => '?').join(',');
   return db
-    .prepare(`SELECT * FROM answer WHERE id IN (${marks}) AND claimed_at IS NOT NULL AND gave_up_at IS NULL ORDER BY claimed_at, id LIMIT 1`)
+    .prepare(`SELECT * FROM answer WHERE id IN (${placeholders(answerIds.length)}) AND claimed_at IS NOT NULL AND gave_up_at IS NULL ORDER BY claimed_at, id LIMIT 1`)
     .bind(...answerIds)
     .first<AnswerDbRow>();
+}
+
+/**
+ * Puts the record back as it was before the claim, or hands it to the owner: it sets the state, the ask and the turn time,
+ * but only while no claim other than these answers is still live, so a late note's claim leaves the first claim's work alone.
+ */
+function putRecordBack(db: Db, first: AnswerDbRow, answerIds: number[], state: State, ask: string, turnSince: string | null): Stmt {
+  const claimedVersion = first.claimed_at_version ?? first.version;
+  return db
+    .prepare(
+      `UPDATE work SET state = ?, ask = ?, turn_since = ?
+       WHERE id = ? AND version = ? AND state = 'working' AND ended_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM answer WHERE work_id = ? AND claimed_at_version = ? AND claimed_at IS NOT NULL AND gave_up_at IS NULL
+           AND id NOT IN (${placeholders(answerIds.length)}))`,
+    )
+    .bind(state, ask, turnSince, first.work_id, claimedVersion, first.work_id, claimedVersion, ...answerIds);
 }
 
 /** The session failed to start: the answers go back to waiting, and the record to what it was before the claim. */
 export async function unclaim(db: Db, answerIds: number[]): Promise<void> {
   const first = await claimedFrom(db, answerIds);
   if (!first || first.state_before === null || first.ask_before === null) return;
-  const marks = answerIds.map(() => '?').join(',');
-  const claimedVersion = first.claimed_at_version ?? first.version;
   await db.batch([
-    // The record goes back only when no other claim is still live; a late note's claim leaves the first claim's work alone.
-    db
-      .prepare(
-        `UPDATE work SET state = ?, ask = ?, turn_since = ?
-         WHERE id = ? AND version = ? AND state = 'working' AND ended_at IS NULL
-           AND NOT EXISTS (SELECT 1 FROM answer WHERE work_id = ? AND claimed_at_version = ? AND claimed_at IS NOT NULL AND gave_up_at IS NULL AND id NOT IN (${marks}))`,
-      )
-      .bind(first.state_before, first.ask_before, first.turn_since_before, first.work_id, claimedVersion, first.work_id, claimedVersion, ...answerIds),
+    putRecordBack(db, first, answerIds, first.state_before, first.ask_before, first.turn_since_before),
     db
       .prepare(
         `UPDATE answer SET claimed_at = NULL, claimed_by = NULL, claimed_at_version = NULL, state_before = NULL, ask_before = NULL, turn_since_before = NULL
-         WHERE id IN (${marks}) AND claimed_at IS NOT NULL AND gave_up_at IS NULL`,
+         WHERE id IN (${placeholders(answerIds.length)}) AND claimed_at IS NOT NULL AND gave_up_at IS NULL`,
       )
       .bind(...answerIds),
     // Putting answers back has no time of its own to pass in, so the log takes the database's clock.
@@ -394,28 +406,20 @@ export async function unclaim(db: Db, answerIds: number[]): Promise<void> {
 export async function giveUp(db: Db, answerIds: number[], hint: string, now: string): Promise<void> {
   const first = await claimedFrom(db, answerIds);
   if (!first || first.state_before === null) return;
-  const marks = answerIds.map(() => '?').join(',');
-  const claimedVersion = first.claimed_at_version ?? first.version;
   const gaveUp = 'EXISTS (SELECT 1 FROM answer WHERE id = ? AND gave_up_at = ?)';
   // Giving up hands the item back to the owner, so it never writes "working" next to the gave-up ask.
   const handBackTo = first.state_before === 'paused' || first.state_before === 'complete' ? first.state_before : 'paused';
   await db.batch([
+    putRecordBack(db, first, answerIds, handBackTo, GAVE_UP_ASK, now),
     db
-      .prepare(
-        `UPDATE work SET state = ?, ask = ?, turn_since = ?
-         WHERE id = ? AND version = ? AND state = 'working' AND ended_at IS NULL
-           AND NOT EXISTS (SELECT 1 FROM answer WHERE work_id = ? AND claimed_at_version = ? AND claimed_at IS NOT NULL AND gave_up_at IS NULL AND id NOT IN (${marks}))`,
-      )
-      .bind(handBackTo, GAVE_UP_ASK, now, first.work_id, claimedVersion, first.work_id, claimedVersion, ...answerIds),
-    db
-      .prepare(`UPDATE answer SET gave_up_at = ?, give_up_hint = ? WHERE id IN (${marks}) AND claimed_at IS NOT NULL AND gave_up_at IS NULL`)
+      .prepare(`UPDATE answer SET gave_up_at = ?, give_up_hint = ? WHERE id IN (${placeholders(answerIds.length)}) AND claimed_at IS NOT NULL AND gave_up_at IS NULL`)
       .bind(now, hint, ...answerIds),
     logStmt(db, first.work_id, now, 'service', { gaveUp: answerIds, hint }, gaveUp, [first.id, now]),
   ]);
 }
 
 /** Answers claimed by the service that it hasn't given up on, while the record is still at the version it had when they were claimed. */
-export async function serviceClaims(db: Db): Promise<{ record: WorkRecord; answers: AnswerRow[] }[]> {
+export async function serviceClaims(db: Db): Promise<Found[]> {
   const { results } = await db
     .prepare(
       `SELECT a.* FROM answer a JOIN work w ON w.id = a.work_id
@@ -425,18 +429,22 @@ export async function serviceClaims(db: Db): Promise<{ record: WorkRecord; answe
   return withRecords(db, results.map(toAnswer));
 }
 
-/** Every open record, every answer to its current version, and the newest answer a session gave up on. */
+/** The answers the board shows for open work: every answer to the record's current version, and the newest one a session gave up on. */
+const SHOWN_ANSWERS = `SELECT a.* FROM answer a JOIN work w ON w.id = a.work_id
+  WHERE w.ended_at IS NULL AND (a.version = w.version OR a.id = (
+    SELECT g.id FROM answer g WHERE g.work_id = a.work_id AND g.gave_up_at IS NOT NULL ORDER BY g.gave_up_at DESC, g.id DESC LIMIT 1))`;
+
+/** Every open record and the answers the board shows for it. */
 export async function openWork(db: Db): Promise<{ records: WorkRecord[]; answers: AnswerRow[] }> {
   const records = (await db.prepare('SELECT * FROM work WHERE ended_at IS NULL ORDER BY id').all<WorkRow>()).results.map(toRecord);
-  const { results } = await db
-    .prepare(
-      `SELECT a.* FROM answer a JOIN work w ON w.id = a.work_id
-       WHERE w.ended_at IS NULL AND (a.version = w.version OR a.id = (
-         SELECT g.id FROM answer g WHERE g.work_id = a.work_id AND g.gave_up_at IS NOT NULL ORDER BY g.gave_up_at DESC, g.id DESC LIMIT 1))
-       ORDER BY a.id`,
-    )
-    .all<AnswerDbRow>();
+  const { results } = await db.prepare(`${SHOWN_ANSWERS} ORDER BY a.id`).all<AnswerDbRow>();
   return { records, answers: results.map(toAnswer) };
+}
+
+/** The answers the board shows for one open record. */
+export async function answersFor(db: Db, workId: number): Promise<AnswerRow[]> {
+  const { results } = await db.prepare(`${SHOWN_ANSWERS} AND a.work_id = ? ORDER BY a.id`).bind(workId).all<AnswerDbRow>();
+  return results.map(toAnswer);
 }
 
 /** Closes a record. The log says which gate it was in. */
@@ -459,7 +467,7 @@ export async function importWork(
   r: Omit<WorkRecord, 'id' | 'repo' | 'version' | 'endedAt' | 'endedHow' | 'confirmedAt'>,
   now: string,
 ): Promise<WorkRecord> {
-  if (await findWork(db, ref)) throw new Refused(`${ref.repo}#${ref.n} already has a record on the board`);
+  if (await findWork(db, ref)) throw new Refused(`${itemKey(ref.repo, ref.n)} already has a record on the board`);
   const results = (await db.batch([
     insertRecord(db, ref.repo, r.issue, r.pr, { ...r, version: 1 }, r.startedAt),
     logStmt(db, 'last', now, 'switch-over', { imported: summary({ ...r, version: 1 }), ask: r.ask }, '1', []),

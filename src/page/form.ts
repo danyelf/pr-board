@@ -1,6 +1,6 @@
 // A card's answer form, as data: what it starts with, whether it can be sent, and the answer it sends.
 import type { CardView } from '../shared/view.ts';
-import type { AnswerInput } from '../shared/work.ts';
+import { NEEDS_A_NOTE, NEEDS_CHANGES, type AnswerInput } from '../shared/work.ts';
 
 export interface FormState {
   /** The chosen answer for each question, keyed by the question's number. */
@@ -10,8 +10,6 @@ export interface FormState {
   /** True once the owner has changed a choice or typed in the note, so a refresh must not replace the card. */
   touched: boolean;
 }
-
-const NEEDS_CHANGES = 'needs changes';
 
 /**
  * Whether the card offers its questions and approval. Once the owner has answered this version they are
@@ -44,7 +42,7 @@ export function afterRefusal(fresh: CardView, typedNote: string): FormState {
 /** Why the form can't be sent as it stands, in words for the owner; null when it can. */
 export function formProblem(c: CardView, s: FormState): string | null {
   const offered = offersQuestions(c) && (c.questions.length > 0 || c.approval !== null);
-  if (offered && s.approval === NEEDS_CHANGES && s.note.trim() === '') return 'Say what needs changing: "needs changes" must come with a note.';
+  if (offered && s.approval === NEEDS_CHANGES && s.note.trim() === '') return `${NEEDS_A_NOTE}.`;
   if (!offered && s.note.trim() === '') return `Type a note to send.`;
   return null;
 }

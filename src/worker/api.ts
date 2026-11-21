@@ -2,10 +2,10 @@
 // (the service token) write statuses and handle claims. Everything is JSON.
 import type { Facts } from '../shared/facts.ts';
 import { buildView, type BoardView, type CardView } from '../shared/view.ts';
-import { GATES, STATES, Refused, type AnswerInput, type SetInput, type WorkRecord } from '../shared/work.ts';
+import { GATES, STATES, Refused, itemKey, recordNumber, type AnswerInput, type SetInput, type StatusInput, type WorkRecord } from '../shared/work.ts';
 import type { Caller, Env } from './access.ts';
 import type { setLabels } from './github.ts';
-import { addAnswer, claim, confirm, endWork, findWork, giveUp, importWork, openWork, serviceClaims, setStatus, unclaim, unclaimedAnswers, unclaimedOlderThan, type ItemRef } from './store.ts';
+import { addAnswer, answersFor, claim, confirm, endWork, findWork, giveUp, importWork, openWork, serviceClaims, setStatus, unclaim, unclaimedAnswers, unclaimedOlderThan, type ItemRef } from './store.ts';
 
 export interface FactsResult {
   facts: Facts[];
@@ -75,7 +75,7 @@ async function readBody(req: Request): Promise<Record<string, unknown>> {
 
 class TooLarge extends Error {}
 
-const keyOf = (f: Facts) => `${f.repo}#${f.number}`;
+const keyOf = (f: Facts) => itemKey(f.repo, f.number);
 
 /** Queues the label changes each card needs; the facts say what each item has now. */
 function queueLabels(env: Env, deps: ApiDeps, cards: CardView[], facts: Facts[]): void {
@@ -88,28 +88,31 @@ function queueLabels(env: Env, deps: ApiDeps, cards: CardView[], facts: Facts[])
   }
 }
 
-async function cardFor(env: Env, deps: ApiDeps, ref: ItemRef): Promise<CardView | null> {
-  const record = await findWork(env.DB, ref);
-  if (!record) return null;
+/**
+ * The board built from every open record and its answers. Without facts given, it reads them for those records,
+ * from the cache when it can.
+ */
+async function currentView(env: Env, deps: ApiDeps, given?: FactsResult): Promise<{ view: BoardView; records: WorkRecord[]; got: FactsResult }> {
   const { records, answers } = await openWork(env.DB);
-  const got = await deps.facts(env, records, false, []);
-  const view = buildView(records, answers, got.facts, got.errors, deps.now());
-  return view.everything.find((c) => c.key === `${record.repo}#${record.pr ?? record.issue}`) ?? null;
+  const got = given ?? (await deps.facts(env, records, false, []));
+  return { view: buildView(records, answers, got.facts, got.errors, deps.now()), records, got };
+}
+
+async function cardFor(env: Env, deps: ApiDeps, ref: ItemRef): Promise<CardView | null> {
+  const { view, records } = await currentView(env, deps);
+  const record = records.find((r) => r.repo === ref.repo && (r.pr === ref.n || r.issue === ref.n));
+  return record ? (view.everything.find((c) => c.key === itemKey(record.repo, recordNumber(record))) ?? null) : null;
 }
 
 async function board(env: Env, deps: ApiDeps): Promise<BoardView> {
-  const { records, answers } = await openWork(env.DB);
-  const got = await deps.facts(env, records, false, []);
-  const now = deps.now();
+  // The view already leaves out an item GitHub says has closed; its record is ended here too.
+  const { view, records, got } = await currentView(env, deps);
   const byKey = new Map(got.facts.map((f) => [keyOf(f), f]));
-  const open: WorkRecord[] = [];
   for (const r of records) {
-    const f = byKey.get(`${r.repo}#${r.pr ?? r.issue}`);
+    const f = byKey.get(itemKey(r.repo, recordNumber(r)));
     // Only an item whose facts were read can be said to have closed.
-    if (f && (f.merged || f.closedAt !== null)) await endWork(env.DB, r.id, f.merged ? 'merged' : 'closed', now.toISOString());
-    else open.push(r);
+    if (f && (f.merged || f.closedAt !== null)) await endWork(env.DB, r.id, f.merged ? 'merged' : 'closed', deps.now().toISOString());
   }
-  const view = buildView(open, answers, got.facts, got.errors, now);
   if (!got.fromCache) queueLabels(env, deps, view.everything, got.facts);
   return view;
 }
@@ -154,7 +157,7 @@ async function status(env: Env, deps: ApiDeps, b: Record<string, unknown>): Prom
     issue = lf?.kind === 'issue' ? linked : null;
   }
 
-  const input: SetInput & { issue: number | null; replaces: number | null } = {
+  const input: StatusInput = {
     gate: b.gate as SetInput['gate'], state: b.state as SetInput['state'], ask: b.ask, questions: questions as string[],
     toTest: strOrNull(b, 'toTest'), reason: strOrNull(b, 'reason'), noDesign,
     // The head and the kind come from GitHub, whatever the client says.
@@ -163,8 +166,7 @@ async function status(env: Env, deps: ApiDeps, b: Record<string, unknown>): Prom
   };
   const result = await setStatus(env.DB, ref, input, deps.now().toISOString());
 
-  const { records, answers } = await openWork(env.DB);
-  const view = buildView(records, answers, got.facts, got.errors, deps.now());
+  const { view } = await currentView(env, deps, got);
   queueLabels(env, deps, view.everything, got.facts);
   return json(result);
 }
@@ -251,8 +253,7 @@ export async function handleApi(req: Request, env: Env, who: Caller, deps: ApiDe
       if (!repo || !Number.isInteger(n) || n < 1) throw new BadRequest('Give ?repo= and ?number=');
       const record = await findWork(env.DB, { repo, n });
       if (!record) return json({ error: `${repo}#${n} is not open on the board` }, 404);
-      const { answers } = await openWork(env.DB);
-      return json({ record, answers: answers.filter((a) => a.workId === record.id) });
+      return json({ record, answers: await answersFor(env.DB, record.id) });
     }
     if (path === '/api/service-claims') return json(await serviceClaims(env.DB));
 
@@ -299,7 +300,7 @@ export async function handleApi(req: Request, env: Env, who: Caller, deps: ApiDe
     return json({ error: 'Not found' }, 404);
   } catch (e) {
     if (e instanceof BadRequest) return json({ error: e.message }, 400);
-    if (e instanceof TooLarge) return json({ error: 'The body is larger than 64 KB' }, 413);
+    if (e instanceof TooLarge) return json({ error: `The body is larger than ${MAX_BODY_BYTES / 1024} KB` }, 413);
     if (e instanceof Refused) return json({ error: e.message }, 409);
     throw e;
   }

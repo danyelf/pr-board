@@ -179,6 +179,19 @@ describe('the answer form', () => {
     expect(walk(node).filter((e) => e.attrs['data-role'] === 'gave-up-hint').map(textOf)).toEqual(['Its output is the newest o-r-5-*.log']);
   });
 
+  it('draws each box as the card says, with the reason for the move back in the current box, and the tag in the card\'s turn', () => {
+    const box = (gate: 'design' | 'implementation' | 'prep', look: 'working' | 'on-hold' | 'todo' | 'attention', current: boolean) =>
+      ({ gate, look, text: look, round: null, badge: null, current });
+    const c = card({ turn: 'claude', backReason: 'too slow', boxes: [box('design', 'on-hold', false), box('implementation', 'attention', true), box('prep', 'todo', false)] });
+    const { doc } = fakeDoc();
+    const node = drawCard(doc, c, initialForm(c), { send: () => {}, changed: () => {}, reload: () => {} }, new Date('2026-11-20T12:00:00.000Z')) as unknown as FakeElement;
+    const boxes = walk(node).filter((e) => (e.attrs.class ?? '').startsWith('box '));
+    expect(boxes.map((b) => b.attrs.class)).toEqual(['box look-on-hold', 'box look-attention', 'box look-todo']);
+    expect(boxes.map((b) => textOf(b).includes('reopened: "too slow"'))).toEqual([false, true, false]);
+    expect(walk(node).find((e) => (e.attrs.class ?? '').startsWith('tag '))?.attrs.class).toBe('tag turn-claude');
+    expect(node.attrs.class).toBe('card');
+  });
+
   it('asks for a note with "needs changes"', () => {
     const c = card({ approval: { choices: ['approve, build it', 'needs changes'], defaultChoice: 'approve, build it' } });
     expect(formProblem(c, { ...initialForm(c), approval: 'needs changes' })).toMatch(/note/);

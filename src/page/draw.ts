@@ -1,6 +1,8 @@
 // Cards, gate strips and sections, drawn from the board's JSON. Every element comes from `el`, so text
 // from GitHub or from Claude is always shown as text.
-import type { AnswerState, CardView, GateBox } from '../shared/view.ts';
+import { NOTE_MAX } from '../shared/names.ts';
+import type { CardView } from '../shared/view.ts';
+import { GATE_NAMES, NEEDS_CHANGES } from '../shared/work.ts';
 import { el } from './el.ts';
 import { canAnswer, offersQuestions, type FormState } from './form.ts';
 
@@ -11,11 +13,6 @@ export interface CardHandlers {
   /** Throws away what the owner had started and draws the card's latest state. */
   reload(key: string): void;
 }
-
-const GATE_NAME: Record<GateBox['gate'], string> = { design: 'Design', implementation: 'Implementation', prep: 'Prep for merge' };
-
-/** The answer states that put a card back in front of the owner; their gate line is coloured as needing the owner. */
-const BACK_WITH_OWNER: ReadonlySet<AnswerState> = new Set(['not-picked-up', 'stalled', 'gave-up']);
 
 /** "HH:MM" in the viewer's own time. */
 export function clock(d: Date): string {
@@ -40,29 +37,19 @@ function link(doc: Document, href: string, text: string, cls?: string): HTMLElem
   }
 }
 
-function boxLook(c: CardView, b: GateBox): string {
-  // The box after an approved gate carries where the answer has got to; colour it by that.
-  if (b.look === 'working' && c.answerState !== null && BACK_WITH_OWNER.has(c.answerState)) return 'attention';
-  return b.look;
-}
-
 function strip(doc: Document, c: CardView): HTMLElement {
-  // The reason for the last move back goes in the box of the gate Claude is in now.
-  const current = c.boxes.findIndex((b) => b.look !== 'approved' && b.look !== 'on-hold' && b.look !== 'todo');
-  return el(doc, 'div', { class: 'strip' }, ...c.boxes.map((b, i) => el(doc, 'div', { class: `box look-${boxLook(c, b)}` },
-    el(doc, 'div', { class: 'gate' }, GATE_NAME[b.gate]),
+  return el(doc, 'div', { class: 'strip' }, ...c.boxes.map((b) => el(doc, 'div', { class: `box look-${b.look}` },
+    el(doc, 'div', { class: 'gate' }, GATE_NAMES[b.gate]),
     el(doc, 'div', { class: 'state' }, b.text === '' ? '·' : b.text, b.badge ? el(doc, 'span', { class: 'badge' }, b.badge) : null),
     b.round !== null ? el(doc, 'div', { class: 'round' }, `round ${b.round}`) : null,
-    i === current && c.backReason ? el(doc, 'div', { class: 'reason' }, `reopened: "${c.backReason}"`) : null,
+    b.current && c.backReason ? el(doc, 'div', { class: 'reason' }, `reopened: "${c.backReason}"`) : null,
   )));
 }
 
 function header(doc: Document, c: CardView, now: Date): HTMLElement {
-  // Once answered, the card is with Claude until the answer comes back to the owner, whatever the record's state says.
-  const turn = c.answerState === null ? c.turn : BACK_WITH_OWNER.has(c.answerState) ? 'owner' : 'claude';
   return el(doc, 'header', { class: 'card-head' },
     el(doc, 'span', { class: 'title' }, link(doc, c.url, `#${c.number} ${c.title}`), ' ', el(doc, 'span', { class: 'repo' }, c.repo)),
-    el(doc, 'span', { class: `tag turn-${turn}` }, c.tag, c.waitingSince ? ` · ${age(c.waitingSince, now)}` : ''),
+    el(doc, 'span', { class: `tag turn-${c.turn}` }, c.tag, c.waitingSince ? ` · ${age(c.waitingSince, now)}` : ''),
   );
 }
 
@@ -137,11 +124,11 @@ function form(doc: Document, c: CardView, s: FormState, h: CardHandlers): HTMLEl
       }));
     }
   }
-  const noteRequired = el(doc, 'span', { class: 'required', hidden: '' }, ' (required with "needs changes")');
-  const note = el(doc, 'textarea', { rows: '2', maxlength: '2000', 'data-role': 'note' }) as HTMLTextAreaElement;
+  const noteRequired = el(doc, 'span', { class: 'required', hidden: '' }, ` (required with "${NEEDS_CHANGES}")`);
+  const note = el(doc, 'textarea', { rows: '2', maxlength: String(NOTE_MAX), 'data-role': 'note' }) as HTMLTextAreaElement;
   note.value = s.note;
   const showRequired = () => {
-    const needed = offered && c.approval !== null && s.approval === 'needs changes';
+    const needed = offered && c.approval !== null && s.approval === NEEDS_CHANGES;
     noteRequired.hidden = !needed;
     note.required = needed;
   };
@@ -175,7 +162,7 @@ export function drawCard(doc: Document, c: CardView, s: FormState, h: CardHandle
   changed.appendChild(reload);
   changed.appendChild(doc.createTextNode(' (what you typed here will be lost)'));
 
-  const node = el(doc, 'article', { class: `card turn-${c.turn}`, 'data-key': c.key },
+  const node = el(doc, 'article', { class: 'card', 'data-key': c.key },
     header(doc, c, now),
     changed,
     c.boxes.length > 0 ? strip(doc, c) : null,

@@ -4,6 +4,8 @@ import { caller, type Env } from './access.ts';
 import { handleApi, type ApiDeps, type FactsResult } from './api.ts';
 import { fetchFacts, setLabels } from './github.ts';
 import type { ItemRef } from './store.ts';
+import { message } from '../shared/helpers.ts';
+import { recordNumber, type WorkRecord } from '../shared/work.ts';
 
 export type { Env } from './access.ts';
 
@@ -52,13 +54,10 @@ interface FactsDeps {
 }
 
 /** What to read from GitHub: for each repo, the numbers of the records' items and of the extra items. */
-function wanted(records: { repo: string; pr: number | null; issue: number | null }[], extra: ItemRef[]): { repo: string; numbers: number[] }[] {
+function wanted(records: Pick<WorkRecord, 'repo' | 'pr' | 'issue'>[], extra: ItemRef[]): { repo: string; numbers: number[] }[] {
   const byRepo = new Map<string, Set<number>>();
   const add = (repo: string, n: number) => byRepo.set(repo, (byRepo.get(repo) ?? new Set<number>()).add(n));
-  for (const r of records) {
-    const n = r.pr ?? r.issue;
-    if (n !== null) add(r.repo, n);
-  }
+  for (const r of records) add(r.repo, recordNumber(r));
   for (const e of extra) add(e.repo, e.n);
   return [...byRepo].map(([repo, set]) => ({ repo, numbers: [...set].sort((a, b) => a - b) }));
 }
@@ -91,7 +90,7 @@ export function makeFactsLoader(deps: FactsDeps): ApiDeps['facts'] {
       result = await deps.fetchFacts(env.GITHUB_TOKEN, want, deps.now());
     } catch (e) {
       // A failure to reach GitHub at all is not kept, so the next request tries again.
-      return { facts: [], errors: [`Couldn't read GitHub: ${e instanceof Error ? e.message : String(e)}`], fromCache: false };
+      return { facts: [], errors: [`Couldn't read GitHub: ${message(e)}`], fromCache: false };
     }
     // A read with error lines is kept too, so a partly failing GitHub isn't hit on every refresh.
     await deps.cache?.put(key, new Response(JSON.stringify(result), { headers: { 'Cache-Control': `max-age=${CACHE_SECONDS}` } }));

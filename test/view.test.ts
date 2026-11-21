@@ -155,7 +155,23 @@ describe('boxes', () => {
     const c = only([r], [a], [facts()]);
     expect(looks(c)).toEqual(['approved', 'approved', 'working']);
     expect(c.boxes[2]!.text).toBe('Answered, waiting for Claude to pick it up');
+    expect(c.boxes.map((b) => b.current)).toEqual([false, false, true]);
     expect(c.approval).toBeNull();
+    expect(c.turn).toBe('claude');
+  });
+
+  it('colours the box after an approved gate as needing the owner, and gives the turn back, once the answer is not picked up', () => {
+    const r = record({ gate: 'implementation', state: 'complete', toTest: 'try it', approved: { design: ago(900), implementation: ago(20) }, rounds: { design: 1, implementation: 1, prep: 0 } });
+    const c = only([r], [answer({ approval: 'looks good, prep for merge', at: ago(20) })], [facts()]);
+    expect(c.answerState).toBe('not-picked-up');
+    expect(looks(c)).toEqual(['approved', 'approved', 'attention']);
+    expect(c.turn).toBe('owner');
+  });
+
+  it('marks the box of the gate Claude is in now as current, and none when nothing is in progress', () => {
+    expect(only([layout.record], [], [layout.facts]).boxes.map((b) => b.current)).toEqual([true, false, false]);
+    const approved = record({ gate: 'implementation', state: 'complete', toTest: 'x', approved: { design: ago(900), implementation: ago(1) } });
+    expect(only([approved], [], [facts()]).boxes.map((b) => b.current)).toEqual([false, false, false]);
   });
 
   it('shows the round only from 2', () => {

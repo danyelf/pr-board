@@ -1,5 +1,7 @@
 import { DAY_MS, REPO_WINDOW_DAYS, WRITTEN_ELSEWHERE } from '../shared/names.ts';
-import type { Facts } from '../shared/facts.ts';
+import { CHECK_STATES, type Facts } from '../shared/facts.ts';
+import { message, newest } from '../shared/helpers.ts';
+import { itemKey } from '../shared/work.ts';
 
 const GRAPHQL_URL = 'https://api.github.com/graphql';
 const REPOS_PER_QUERY = 5;
@@ -68,10 +70,6 @@ function graphqlWith(token: string, fetchFn: typeof fetch) {
   };
 }
 
-function latest(times: string[]): string {
-  return times.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
-}
-
 function screenshotsIn(body: string): string[] {
   const urls: string[] = [];
   for (const m of body.matchAll(/!\[[^\]]*\]\(\s*<?([^\s)>]+)/g)) urls.push(m[1]);
@@ -123,17 +121,15 @@ interface FactNode {
 
 interface FactsPending { facts: Facts; base: string; fromFork: boolean }
 
-const CHECK_STATES: readonly string[] = ['SUCCESS', 'FAILURE', 'PENDING', 'ERROR', 'EXPECTED'];
-
 /** One PR or issue as the board's facts. Throws if a list GitHub should have sent is missing. */
 function factsFrom(repo: string, node: FactNode, isPr: boolean, report: Report): Facts {
-  const where = `${repo}#${node.number}`;
+  const where = itemKey(repo, node.number);
   const labels = listOfItem(node.labels, 'labels', FACT_LABELS, where, 'a board label may be missing', report).map((l) => l.name);
   const body = node.body ?? '';
   const base = {
     repo, number: node.number, title: node.title, url: node.url, labels,
     createdAt: node.createdAt, closedAt: node.closedAt,
-    lastActivityAt: latest([node.createdAt, node.updatedAt, ...(node.closedAt ? [node.closedAt] : [])]),
+    lastActivityAt: newest([node.createdAt, node.updatedAt, ...(node.closedAt ? [node.closedAt] : [])]),
     screenshots: screenshotsIn(body),
   };
   if (!isPr) {
@@ -158,7 +154,7 @@ function factsFrom(repo: string, node: FactNode, isPr: boolean, report: Report):
     ...base, kind: 'pr', merged: node.merged ?? false, isDraft: node.isDraft ?? false,
     headSha: node.headRefOid ?? null, headRef: node.headRefName ?? null,
     mergeState: node.mergeStateStatus ?? null, reviewDecision: node.reviewDecision ?? null,
-    checks: rollup !== null && CHECK_STATES.includes(rollup) ? (rollup as Facts['checks']) : null,
+    checks: rollup !== null && (CHECK_STATES as readonly string[]).includes(rollup) ? (rollup as Facts['checks']) : null,
     behindBase: false,
     linkedIssue: closing ?? (refs ? Number(refs[1]) : null),
     stackedOn: stacked ? Number(stacked[1]) : null, stackedOnOpen: false,
@@ -248,12 +244,12 @@ ${listed.join('\n')}
           }
           openByRepo.set(name, open);
           for (const p of found) {
-            const key = `${name}#${p.facts.number}`;
+            const key = itemKey(name, p.facts.number);
             if (!pending.has(key)) pending.set(key, p);
           }
           errors.push(...repoErrors);
         } catch (e) {
-          errors.push(`Couldn't read ${name}: ${e instanceof Error ? e.message : String(e)}`);
+          errors.push(`Couldn't read ${name}: ${message(e)}`);
         }
       });
     }

@@ -79,15 +79,40 @@ export interface AnswerRow {
   giveUpHint: string | null;
 }
 
+/** The fields of a record a new status works out; the rest come from the item and from the record's start and end. */
+export type RecordFields = Omit<WorkRecord, 'id' | 'repo' | 'issue' | 'pr' | 'startedAt' | 'endedAt' | 'endedHow' | 'confirmedAt'>;
+
+/** A new status as the board takes it: the status itself, the issue it belongs to, and the PR it replaces. */
+export type StatusInput = SetInput & { issue: number | null; replaces: number | null };
+
+/** A record on the board and some of its answers, as the board's routes return them. */
+export interface Found { record: WorkRecord; answers: AnswerRow[] }
+
 /** A status or an answer the board will not accept. The message says why, in words for whoever sent it. */
 export class Refused extends Error {}
 
+/** The choice that sends a gate back to Claude; it must come with a note saying what to change. */
+export const NEEDS_CHANGES = 'needs changes';
+
+/** What the board says when "needs changes" comes without a note. */
+export const NEEDS_A_NOTE = `Say what needs changing: "${NEEDS_CHANGES}" must come with a note`;
+
 export const APPROVAL_CHOICES: Record<'design' | 'implementation', readonly [string, string]> = {
-  design: ['approve, build it', 'needs changes'],
-  implementation: ['looks good, prep for merge', 'needs changes'],
+  design: ['approve, build it', NEEDS_CHANGES],
+  implementation: ['looks good, prep for merge', NEEDS_CHANGES],
 };
 
-const NEEDS_CHANGES = 'needs changes';
+export const GATE_NAMES: Record<Gate, string> = { design: 'Design', implementation: 'Implementation', prep: 'Prep for merge' };
+
+/** The item a record is known by: its PR when it has one, otherwise its issue. */
+export function recordNumber(r: Pick<WorkRecord, 'pr' | 'issue'>): number {
+  return r.pr ?? r.issue!;
+}
+
+/** The "owner/repo#N" key an item goes by on the board. */
+export function itemKey(repo: string, n: number): string {
+  return `${repo}#${n}`;
+}
 
 export function turnOf(state: State): 'owner' | 'claude' | 'nobody' {
   if (state === 'paused' || state === 'complete') return 'owner';
@@ -112,8 +137,6 @@ export function parseQuestion(text: string, n: number): Question {
   return { n, text: (match[1] ?? '').trim(), choices, defaultChoice };
 }
 
-const NAME: Record<Gate, string> = { design: 'Design', implementation: 'Implementation', prep: 'Prep for merge' };
-
 function noLineBreak(label: string, value: string | null): void {
   if (value !== null && /[\r\n]/.test(value)) throw new Refused(`${label} must be one line`);
 }
@@ -122,7 +145,7 @@ export function applySet(
   prev: WorkRecord | null,
   input: SetInput,
   now: string,
-): Omit<WorkRecord, 'id' | 'repo' | 'issue' | 'pr' | 'startedAt' | 'endedAt' | 'endedHow' | 'confirmedAt'> {
+): RecordFields {
   noLineBreak('The ask', input.ask);
   noLineBreak('The how-to-test', input.toTest);
   noLineBreak('The reason', input.reason);
@@ -148,13 +171,13 @@ export function applySet(
   let backReason = prev?.backReason ?? null;
 
   if (prev && target < GATES.indexOf(prev.gate)) {
-    if (!input.reason?.trim()) throw new Refused(`Going back to ${NAME[input.gate]} needs a reason`);
+    if (!input.reason?.trim()) throw new Refused(`Going back to ${GATE_NAMES[input.gate]} needs a reason`);
     for (const g of ['design', 'implementation'] as const) if (GATES.indexOf(g) >= target) delete approved[g];
     backReason = input.reason;
   } else {
     for (const g of gatesOf({ hasDesign })) {
       if (g === 'prep' || GATES.indexOf(g) >= target) continue;
-      if (!approved[g]) throw new Refused(`${NAME[g]} hasn't been approved, so work can't move on to ${NAME[input.gate]}`);
+      if (!approved[g]) throw new Refused(`${GATE_NAMES[g]} hasn't been approved, so work can't move on to ${GATE_NAMES[input.gate]}`);
     }
   }
 
@@ -198,8 +221,8 @@ export function checkAnswer(r: WorkRecord, a: AnswerInput): string | null {
   if (a.note.length > NOTE_MAX) return `The note is longer than ${NOTE_MAX} characters`;
   if (a.approval !== null) {
     if (r.state !== 'complete' || r.gate === 'prep') return 'There is nothing to approve here';
-    if (!APPROVAL_CHOICES[r.gate].includes(a.approval)) return `"${a.approval}" isn't one of the choices for ${NAME[r.gate]}`;
-    if (a.approval === NEEDS_CHANGES && a.note.trim() === '') return 'Say what needs changing: "needs changes" must come with a note';
+    if (!APPROVAL_CHOICES[r.gate].includes(a.approval)) return `"${a.approval}" isn't one of the choices for ${GATE_NAMES[r.gate]}`;
+    if (a.approval === NEEDS_CHANGES && a.note.trim() === '') return NEEDS_A_NOTE;
   }
   return null;
 }

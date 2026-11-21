@@ -1,11 +1,13 @@
 // The board the page draws, worked out from the board's own records and answers and from what GitHub says.
 // Nothing here writes anything: the label changes it lists are for the Worker to make.
 import type { Facts } from './facts.ts';
+import { newest } from './helpers.ts';
 import { DAY_MS, FILE_AN_ISSUE, PICKUP_GRACE_MS, WORKING_STALLS_MS } from './names.ts';
-import { APPROVAL_CHOICES, GATES, gatesOf, turnOf, type AnswerRow, type Gate, type WorkRecord } from './work.ts';
+import { APPROVAL_CHOICES, GATES, NEEDS_CHANGES, gatesOf, itemKey, recordNumber, turnOf, type AnswerRow, type Gate, type WorkRecord } from './work.ts';
 import { labelChanges, wantedLabels } from './labels.ts';
 
-export type BoxLook = 'approved' | 'working' | 'paused' | 'complete' | 'ready' | 'blocked' | 'parked' | 'on-hold' | 'todo';
+/** How a gate's box is coloured. 'attention' is the box after an approved gate when the owner's answer has come back to them. */
+export type BoxLook = 'approved' | 'working' | 'paused' | 'complete' | 'ready' | 'blocked' | 'parked' | 'on-hold' | 'todo' | 'attention';
 
 export interface GateBox {
   gate: Gate;
@@ -15,6 +17,8 @@ export interface GateBox {
   round: number | null;
   /** For example "1 question". */
   badge: string | null;
+  /** The box of the gate Claude is in now, which carries the reason for the last move back. */
+  current: boolean;
 }
 
 /**
@@ -39,6 +43,7 @@ export interface CardView {
   version: number | null;
   boxes: GateBox[];
   tag: string;
+  /** Whose turn the card shows. Once the owner has answered, it is Claude's until the answer comes back to the owner. */
   turn: 'owner' | 'claude' | 'nobody';
   waitingSince: string | null;
   startedAt: string;
@@ -109,10 +114,6 @@ function time(iso: string): number {
   return Date.parse(iso);
 }
 
-function newest(times: string[]): string {
-  return times.reduce((a, b) => (time(b) > time(a) ? b : a));
-}
-
 function isOpen(f: Facts): boolean {
   return !f.merged && f.closedAt === null;
 }
@@ -154,7 +155,8 @@ function boxesOf(r: WorkRecord, ready: ReturnType<typeof readyToMerge> | null, a
   const approvedHere = r.gate !== 'prep' && r.approved[r.gate] !== undefined;
   const gates = gatesOf(r);
   const box = (gate: Gate, look: BoxLook, text: string, round: number | null = null, badge: string | null = null): GateBox =>
-    ({ gate, look, text, round: round !== null && round >= 2 ? round : null, badge });
+    ({ gate, look, text, round: round !== null && round >= 2 ? round : null, badge, current: false });
+  const here = (b: GateBox): GateBox => ({ ...b, current: true });
 
   return gates.map((gate, i) => {
     const at = GATES.indexOf(gate);
@@ -163,17 +165,20 @@ function boxesOf(r: WorkRecord, ready: ReturnType<typeof readyToMerge> | null, a
       if (approvedHere) return box(gate, 'approved', '✓ approved');
       const handed = r.rounds[gate];
       if (r.state === 'complete') {
-        if (gate === 'prep') return ready?.ready ? box(gate, 'ready', 'ready for merge', handed) : box(gate, 'blocked', ready?.reason ?? 'no PR', handed);
-        return box(gate, 'complete', 'complete: your approval', handed);
+        if (gate === 'prep') return here(ready?.ready ? box(gate, 'ready', 'ready for merge', handed) : box(gate, 'blocked', ready?.reason ?? 'no PR', handed));
+        return here(box(gate, 'complete', 'complete: your approval', handed));
       }
       // A gate that isn't complete is in its next round.
-      if (r.state === 'working') return box(gate, 'working', 'Claude working', handed + 1);
+      if (r.state === 'working') return here(box(gate, 'working', 'Claude working', handed + 1));
       // A give-up from working hands the record back paused with no questions; it then has no badge.
-      if (r.state === 'paused') return box(gate, 'paused', 'Claude paused', handed + 1, r.questions.length > 0 ? plural(r.questions.length, 'question') : null);
-      return box(gate, 'parked', 'parked', handed + 1);
+      if (r.state === 'paused') return here(box(gate, 'paused', 'Claude paused', handed + 1, r.questions.length > 0 ? plural(r.questions.length, 'question') : null));
+      return here(box(gate, 'parked', 'parked', handed + 1));
     }
-    // Once the owner has approved the current gate, the next one carries the line saying where the answer is.
-    if (approvedHere && answerState !== null && gates[i - 1] === r.gate) return box(gate, 'working', ANSWER_TAG[answerState]);
+    // Once the owner has approved the current gate, the next one carries the line saying where the answer is,
+    // coloured as needing the owner when the answer has come back to them.
+    if (approvedHere && answerState !== null && gates[i - 1] === r.gate) {
+      return here(box(gate, BACK_WITH_OWNER.has(answerState) ? 'attention' : 'working', ANSWER_TAG[answerState]));
+    }
     if (at <= reached) return box(gate, 'on-hold', 'on hold');
     return box(gate, 'todo', '');
   });
@@ -199,7 +204,7 @@ function issueUrl(repo: string, n: number): string {
 interface Placed { card: CardView; section: 'waiting' | 'onClaude' | 'quiet'; activity: string }
 
 function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | null) => Facts | undefined, now: Date): Placed | null {
-  const number = r.pr ?? r.issue!;
+  const number = recordNumber(r);
   const kind = r.pr !== null ? 'pr' : 'issue';
   const main = factsOf(number);
   if (main && !isOpen(main)) return null;
@@ -212,20 +217,23 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
   const found = answerStateOf(r, answers, now);
   const answerState = found?.state ?? null;
   const turn = turnOf(r.state);
-  const askingApproval = r.state === 'complete' && r.gate !== 'prep' && r.approved[r.gate] === undefined;
+  // Once answered, the card is with Claude until the answer comes back to the owner, whatever the record's state says.
+  const shownTurn = answerState === null ? turn : BACK_WITH_OWNER.has(answerState) ? 'owner' : 'claude';
+  const gate = r.gate;
+  const approvalGate = gate !== 'prep' && r.state === 'complete' && r.approved[gate] === undefined ? gate : null;
   const url = main?.url ?? (kind === 'pr' ? `https://github.com/${r.repo}/pull/${number}` : issueUrl(r.repo, number));
 
   const card: CardView = {
-    key: `${r.repo}#${number}`,
+    key: itemKey(r.repo, number),
     repo: r.repo,
     number,
-    title: main?.title ?? `${r.repo}#${number}`,
+    title: main?.title ?? itemKey(r.repo, number),
     url,
     kind,
     version: r.version,
     boxes: boxesOf(r, ready, answerState),
     tag: tagOf(r, ready, answerState),
-    turn,
+    turn: shownTurn,
     waitingSince: found?.since ?? r.turnSince,
     startedAt: r.startedAt,
     ask: r.ask,
@@ -236,10 +244,8 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
     questions: r.state === 'paused' || r.state === 'complete'
       ? r.questions.map((q) => ({ ...q, choices: [...q.choices.filter((c) => c !== FILE_AN_ISSUE), FILE_AN_ISSUE] }))
       : [],
-    approval: askingApproval && r.gate !== 'prep'
-      ? { choices: [...APPROVAL_CHOICES[r.gate]], defaultChoice: APPROVAL_CHOICES[r.gate][0] }
-      : null,
-    noteLabel: prepDone ? 'needs changes' : 'Note',
+    approval: approvalGate !== null ? { choices: [...APPROVAL_CHOICES[approvalGate]], defaultChoice: APPROVAL_CHOICES[approvalGate][0] } : null,
+    noteLabel: prepDone ? NEEDS_CHANGES : 'Note',
     answerState,
     lastAnswer: found ? { at: found.answer.at, note: found.answer.note, choices: found.answer.choices } : null,
     gaveUpHint: found?.state === 'gave-up' ? found.answer.giveUpHint : null,
@@ -256,7 +262,7 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
   const activity = newest([main?.lastActivityAt, r.writtenAt, r.confirmedAt].filter((t): t is string => t != null));
   const stale = now.getTime() - time(activity) > QUIET_AFTER;
   let section: Placed['section'];
-  if (answerState !== null) section = BACK_WITH_OWNER.has(answerState) ? 'waiting' : 'onClaude';
+  if (answerState !== null) section = shownTurn === 'owner' ? 'waiting' : 'onClaude';
   else if (turn === 'owner') section = 'waiting';
   else if (turn === 'nobody' || stale) section = 'quiet';
   else section = 'onClaude';
@@ -266,7 +272,7 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
 function noRecordCard(f: Facts): Placed {
   return {
     card: {
-      key: `${f.repo}#${f.number}`, repo: f.repo, number: f.number, title: f.title, url: f.url, kind: f.kind,
+      key: itemKey(f.repo, f.number), repo: f.repo, number: f.number, title: f.title, url: f.url, kind: f.kind,
       version: null, boxes: [], tag: NO_STATUS_TAG, turn: 'owner', waitingSince: null, startedAt: f.createdAt,
       ask: '', toTest: null, backReason: null, questions: [], approval: null, noteLabel: 'Note',
       answerState: null, lastAnswer: null, gaveUpHint: null,
@@ -281,18 +287,18 @@ function noRecordCard(f: Facts): Placed {
 }
 
 export function buildView(records: WorkRecord[], answers: AnswerRow[], facts: Facts[], errors: string[], now: Date): BoardView {
-  const byKey = new Map(facts.map((f) => [`${f.repo}#${f.number}`, f]));
+  const byKey = new Map(facts.map((f) => [itemKey(f.repo, f.number), f]));
   const covered = new Set<string>();
   const placed: Placed[] = [];
 
   for (const r of records) {
-    if (r.pr !== null) covered.add(`${r.repo}#${r.pr}`);
+    if (r.pr !== null) covered.add(itemKey(r.repo, r.pr));
     const mine = answers.filter((a) => a.workId === r.id);
-    const p = recordCard(r, mine, (n) => (n === null ? undefined : byKey.get(`${r.repo}#${n}`)), now);
+    const p = recordCard(r, mine, (n) => (n === null ? undefined : byKey.get(itemKey(r.repo, n))), now);
     if (p) placed.push(p);
   }
   for (const f of facts) {
-    if (f.kind === 'pr' && isOpen(f) && !covered.has(`${f.repo}#${f.number}`)) placed.push(noRecordCard(f));
+    if (f.kind === 'pr' && isOpen(f) && !covered.has(itemKey(f.repo, f.number))) placed.push(noRecordCard(f));
   }
 
   const byActivity = (a: Placed, b: Placed) => time(b.activity) - time(a.activity) || a.card.key.localeCompare(b.card.key);

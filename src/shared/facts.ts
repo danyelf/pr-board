@@ -1,3 +1,6 @@
+/** The combined states GitHub gives the checks on a commit. */
+export const CHECK_STATES = ['SUCCESS', 'FAILURE', 'PENDING', 'ERROR', 'EXPECTED'] as const;
+
 /** What GitHub says about a pull request or issue: the things the board does not keep itself. */
 export interface Facts {
   repo: string;
@@ -17,7 +20,7 @@ export interface Facts {
   mergeState: string | null;
   reviewDecision: string | null;
   /** The combined state of the checks on the head commit; null when there are none. */
-  checks: 'SUCCESS' | 'FAILURE' | 'PENDING' | 'ERROR' | 'EXPECTED' | null;
+  checks: (typeof CHECK_STATES)[number] | null;
   behindBase: boolean;
   linkedIssue: number | null;
   stackedOn: number | null;
