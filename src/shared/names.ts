@@ -4,6 +4,16 @@ import { OWNER_NAME } from './config.ts';
 export const LABEL_ON_OWNER = `on ${OWNER_NAME.toLowerCase()}`;
 export const LABEL_PARKED = 'parked';
 export const LABEL_IN_PROGRESS = 'in-progress';
+export const LABEL_GATE_DESIGN = 'gate: design';
+export const LABEL_GATE_IMPLEMENTATION = 'gate: implementation';
+export const LABEL_GATE_PREP = 'gate: prep';
+export const LABEL_READY_TO_MERGE = 'ready to merge';
+
+/** Means: go with the default, and file the question as a new issue to decide later. */
+export const FILE_AN_ISSUE = 'file an issue';
+
+/** The longest note an answer may carry. */
+export const NOTE_MAX = 2000;
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 

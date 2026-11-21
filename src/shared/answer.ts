@@ -5,8 +5,8 @@ import { FINGERPRINT_RE } from './fingerprint.ts';
 import { STATUS_CLOSE, STATUS_OPEN, hasStatusSection, jsonForComment } from './status.ts';
 import type { ItemFacts, Question, Status, Turn } from './types.ts';
 
-/** Means: go with the default, and file the question as a new issue to decide later. */
-export const FILE_AN_ISSUE = 'file an issue';
+import { FILE_AN_ISSUE, NOTE_MAX } from './names.ts';
+export { FILE_AN_ISSUE, NOTE_MAX };
 
 /** Asked on every PR at the owner's look, after any questions Claude wrote. */
 export const LOOK_QUESTION = 'How does it look?';
@@ -14,8 +14,6 @@ export const LOOK_CHOICES = ['looks good, prep for merge', 'needs changes', FILE
 export const LOOK_DEFAULT = LOOK_CHOICES[0];
 /** The key the look answer has among the answers; the questions are keyed by their numbers. */
 export const LOOK_KEY = 'look';
-
-export const NOTE_MAX = 2000;
 
 /** The names of the answer form's fields, besides one per question (see questionField). */
 export const FORM_FIELD = { repo: 'repo', number: 'number', fingerprint: 'fingerprint', note: 'note', look: LOOK_KEY } as const;
