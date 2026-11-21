@@ -1,103 +1,79 @@
-import { appendFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { OWNER_LOGIN } from '../src/shared/config.ts';
-import { LABEL_ON_OWNER, LABEL_PARKED, WAITING_ON, type WaitingOn } from '../src/shared/names.ts';
-import { STATUS_CLOSE, STATUS_OPEN, parseStatus, pickStatusComment, renderStatus, replaceStatus, statusValueProblem } from '../src/shared/status.ts';
-import type { Question, Status } from '../src/shared/types.ts';
-import { gh, isNotFound, issueComments, parseRef, readStatusText, refString } from './gh.ts';
+import { GATES, STATES, Refused, parseQuestion } from '../src/shared/work.ts';
+import { BoardError, boardCall, type BoardDeps } from './board.ts';
+import { gh, parseRef, refString } from './gh.ts';
 import type { Deps as BaseDeps, Gh, Ref } from './gh.ts';
 
 export interface Deps extends BaseDeps {
-  now: () => Date;
-  /** The home folder, where the list of "status is still right" notes is kept. */
-  home: string;
+  board: BoardDeps;
 }
 
+const USAGE = 'Usage: pr-status set <owner/repo#N | #N> --gate design|implementation|prep --state working|paused|complete|parked [--ask <text>] [--question "Q? (**default** | other)"]… [--to-test <text>] [--reason <text>] [--no-design] [--replaces <N>] [--issue <N>]';
+const OTHER_USAGE = 'Usage: pr-status ok|show <owner/repo#N | #N>   or   pr-status import <owner/repo#N | #N> --json <file>';
+
 interface SetOptions {
-  waiting: WaitingOn;
+  gate: string;
+  state: string;
   ask: string;
   questions: string[];
   toTest: string | null;
+  reason: string | null;
+  noDesign: boolean;
+  replaces: number | null;
+  issue: number | null;
 }
 
 function parseSetArgs(args: string[]): SetOptions {
-  const opts: SetOptions = { waiting: 'nobody', ask: '', questions: [], toTest: null };
-  let waiting: string | null = null;
+  const opts: SetOptions = { gate: '', state: '', ask: '', questions: [], toTest: null, reason: null, noDesign: false, replaces: null, issue: null };
   for (let i = 0; i < args.length; i++) {
     const flag = args[i]!;
+    if (flag === '--no-design') {
+      opts.noDesign = true;
+      continue;
+    }
     const value = args[i + 1];
-    const need = (): string => {
-      if (value === undefined) throw new Error(`${flag} needs a value`);
-      i++;
-      // The status section keeps each field on one line; anything more would be cut off or misread.
-      const problem = statusValueProblem(value);
-      if (problem === 'line break') {
-        throw new Error(`${flag} must be one line; join the steps with "; " or "1) … 2) …" instead of line breaks`);
-      }
-      if (problem === 'status marker') throw new Error(`${flag} can't contain a status marker`);
-      return value;
-    };
-    if (flag === '--waiting') waiting = need();
-    else if (flag === '--ask') opts.ask = need();
-    else if (flag === '--question') opts.questions.push(need());
-    else if (flag === '--to-test') opts.toTest = need();
-    else throw new Error(`Unknown option ${flag}`);
+    if (!flag.startsWith('--')) throw new Error(`Unexpected "${flag}"`);
+    if (!['--gate', '--state', '--ask', '--question', '--to-test', '--reason', '--replaces', '--issue'].includes(flag)) throw new Error(`Unknown option ${flag}`);
+    if (value === undefined) throw new Error(`${flag} needs a value`);
+    i++;
+    if (flag !== '--gate' && flag !== '--state' && /[\r\n]/.test(value)) {
+      throw new Error(`${flag} must be one line; join the steps with "; " or "1) … 2) …" instead of line breaks`);
+    }
+    if (flag === '--gate') opts.gate = value;
+    else if (flag === '--state') opts.state = value;
+    else if (flag === '--ask') opts.ask = value;
+    else if (flag === '--question') opts.questions.push(value);
+    else if (flag === '--to-test') opts.toTest = value;
+    else if (flag === '--reason') opts.reason = value;
+    else {
+      if (!/^\d+$/.test(value)) throw new Error(`${flag} must be a number`);
+      if (flag === '--replaces') opts.replaces = Number(value);
+      else opts.issue = Number(value);
+    }
   }
-  const roles: readonly string[] = WAITING_ON.map((w) => w.role);
-  if (waiting === null || !roles.includes(waiting)) {
-    throw new Error(`--waiting must be ${roles.slice(0, -1).join(', ')} or ${roles.at(-1)}`);
-  }
-  opts.waiting = waiting as WaitingOn;
+  if (!opts.gate || !opts.state) throw new Error(USAGE);
+  if (!(GATES as readonly string[]).includes(opts.gate)) throw new Error(`--gate must be ${GATES.slice(0, -1).join(', ')} or ${GATES.at(-1)}`);
+  if (!(STATES as readonly string[]).includes(opts.state)) throw new Error(`--state must be ${STATES.slice(0, -1).join(', ')} or ${STATES.at(-1)}`);
+  // Check the questions here so a mistake is caught before anything is sent.
+  opts.questions.forEach((q, i) => parseQuestion(q, i + 1));
   return opts;
 }
 
-/** Parses "text (**a** | b)" through the shared status parser so the format has one definition. */
-function buildQuestions(texts: string[]): Question[] {
-  const section = [STATUS_OPEN, '**Waiting on:** nobody', '**Questions:**', ...texts.map((t, i) => `${i + 1}. ${t}`), STATUS_CLOSE].join('\n');
-  const parsed = parseStatus(section);
-  const questions = parsed?.questions ?? [];
-  for (const q of questions) {
-    if (q.defaultChoice === null) {
-      throw new Error(`Question ${q.n} has no bold default. Give every question choices with one in bold, like "Colour? (**red** | green)".`);
-    }
-  }
-  return questions;
-}
+interface Item { isPr: boolean; body: string; author: string | null }
 
-function nextStatus(opts: SetOptions, questions: Question[], previous: Status | null, now: Date): Status {
-  const since = previous && previous.waitingOn === opts.waiting && previous.since ? previous.since : now.toISOString();
-  return { waitingOn: opts.waiting, since, ask: opts.ask, questions, toTest: opts.toTest, writtenAt: now.toISOString() };
-}
-
-/** A PR that has just been handed to the owner, and who opened it; null otherwise. */
-type HandedOver = { author: string | null } | null;
-
-async function writeStatus(gh: Gh, ref: Ref, opts: SetOptions, questions: Question[], now: Date): Promise<HandedOver> {
-  const base = `repos/${ref.owner}/${ref.repo}`;
-  const item = JSON.parse(await gh(['api', `${base}/issues/${ref.n}`])) as {
-    pull_request?: unknown;
-    body?: string | null;
-    user?: { login: string } | null;
+async function readItem(gh: Gh, ref: Ref): Promise<Item> {
+  const item = JSON.parse(await gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}`])) as {
+    pull_request?: unknown; body?: string | null; user?: { login: string } | null;
   };
-  if (item.pull_request) {
-    const body = item.body ?? '';
-    const previous = parseStatus(body);
-    const status = nextStatus(opts, questions, previous, now);
-    await gh(['api', '-X', 'PATCH', `${base}/pulls/${ref.n}`, '-f', `body=${replaceStatus(body, status)}`]);
-    const handedOver = opts.waiting === 'owner' && previous?.waitingOn !== status.waitingOn;
-    return handedOver ? { author: item.user?.login ?? null } : null;
-  }
-  const login = (await gh(['api', 'user', '-q', '.login'])).trim();
-  const comments = await issueComments<{ id: number; body: string; user: { login: string } | null }>(gh, ref);
-  // The board reads the last status comment. Edit it if it is ours; otherwise a new one becomes the last.
-  const current = pickStatusComment(comments);
-  const status = nextStatus(opts, questions, current ? parseStatus(current.body) : null, now);
-  if (current && current.user?.login === login) {
-    await gh(['api', '-X', 'PATCH', `${base}/issues/comments/${current.id}`, '-f', `body=${replaceStatus(current.body, status)}`]);
-  } else {
-    await gh(['api', '-X', 'POST', `${base}/issues/${ref.n}/comments`, '-f', `body=${renderStatus(status)}`]);
-  }
-  return null;
+  return { isPr: Boolean(item.pull_request), body: item.body ?? '', author: item.user?.login ?? null };
+}
+
+/** The issue a PR says it closes or refers to, if its description names one. */
+function issueNamedBy(body: string): number | null {
+  const match = /\b(?:closes|refs)\s+#(\d+)/i.exec(body);
+  return match ? Number(match[1]) : null;
 }
 
 /** Asks the board's owner to review, so GitHub notifies them. Returns what went wrong, or null. */
@@ -111,45 +87,23 @@ async function requestReview(gh: Gh, ref: Ref, author: string | null): Promise<s
   }
 }
 
-/** Returns the names of labels that were wanted but don't exist in the repo. */
-async function syncLabels(gh: Gh, ref: Ref, waiting: SetOptions['waiting']): Promise<string[]> {
-  const base = `repos/${ref.owner}/${ref.repo}`;
-  const add = waiting === 'owner' ? [LABEL_ON_OWNER] : waiting === 'nobody' ? [LABEL_PARKED] : [];
-  const remove = waiting === 'owner' ? [LABEL_PARKED] : waiting === 'nobody' ? [LABEL_ON_OWNER] : [LABEL_ON_OWNER, LABEL_PARKED];
-  const missing: string[] = [];
-  for (const name of add) {
-    try {
-      await gh(['api', `${base}/labels/${encodeURIComponent(name)}`]);
-    } catch (e) {
-      if (!isNotFound(e)) throw e;
-      missing.push(name);
-      continue;
-    }
-    await gh(['api', '-X', 'POST', `${base}/issues/${ref.n}/labels`, '-f', `labels[]=${name}`]);
+async function setStatus(deps: Deps, ref: Ref, opts: SetOptions, out: (l: string) => void): Promise<string[]> {
+  let item: Item | null = null;
+  let issue = opts.issue;
+  if (issue === null) {
+    item = await readItem(deps.gh, ref);
+    if (item.isPr) issue = issueNamedBy(item.body);
   }
-  for (const name of remove) {
-    try {
-      await gh(['api', '-X', 'DELETE', `${base}/issues/${ref.n}/labels/${encodeURIComponent(name)}`]);
-    } catch (e) {
-      if (!isNotFound(e)) throw e;
-    }
-  }
-  return missing;
-}
-
-/**
- * Writes the item's status and its turn labels, and asks the owner to review a PR just handed to
- * them. Returns what went wrong that didn't stop the status being written (a missing label, a
- * failed review request); throws when the status itself couldn't be written.
- */
-export async function setStatus(gh: Gh, ref: Ref, opts: SetOptions, now: Date): Promise<string[]> {
-  const questions = buildQuestions(opts.questions);
-  const handedOver = await writeStatus(gh, ref, opts, questions, now);
-  const problems = (await syncLabels(gh, ref, opts.waiting))
-    .map((name) => `Label "${name}" doesn't exist in ${ref.owner}/${ref.repo}; run cli/setup-labels.ts`);
-  const reviewProblem = handedOver ? await requestReview(gh, ref, handedOver.author) : null;
-  if (reviewProblem) problems.push(reviewProblem);
-  return problems;
+  const sent = await boardCall<{ record: { version: number }; handedOver: boolean }>(deps.board, 'POST', '/api/status', {
+    repo: `${ref.owner}/${ref.repo}`, number: ref.n, gate: opts.gate, state: opts.state, ask: opts.ask, questions: opts.questions,
+    toTest: opts.toTest, reason: opts.reason, noDesign: opts.noDesign, issue, replaces: opts.replaces,
+  });
+  out(`Recorded ${refString(ref)} at ${opts.gate}, ${opts.state} (version ${sent.record.version})`);
+  if (!sent.handedOver) return [];
+  item ??= await readItem(deps.gh, ref);
+  if (!item.isPr) return [];
+  const problem = await requestReview(deps.gh, ref, item.author);
+  return problem ? [problem] : [];
 }
 
 export async function main(argv: string[], deps: Deps): Promise<number> {
@@ -157,27 +111,52 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
   const err = deps.err ?? ((l) => console.error(l));
   try {
     const [command, refText, ...rest] = argv;
-    if (!command || !refText || !['set', 'ok', 'show'].includes(command)) {
-      err('Usage: pr-status set|ok|show <owner/repo#N | #N> [options]');
+    if (!command || !refText || !['set', 'ok', 'show', 'import'].includes(command)) {
+      err(`${USAGE}\n${OTHER_USAGE}`);
       return 1;
     }
+    const opts = command === 'set' ? parseSetArgs(rest) : null;
     const ref = await parseRef(refText, deps.gh);
+    const where = { repo: `${ref.owner}/${ref.repo}`, number: ref.n };
 
-    if (command === 'show') {
-      out(JSON.stringify(parseStatus(await readStatusText(deps.gh, ref)), null, 2));
-      return 0;
+    if (opts) {
+      const problems = await setStatus(deps, ref, opts, out);
+      for (const p of problems) err(p);
+      return problems.length > 0 ? 1 : 0;
     }
 
     if (command === 'ok') {
-      const dir = join(deps.home, '.pr-board');
-      await mkdir(dir, { recursive: true });
-      await appendFile(join(dir, 'checked.jsonl'), `${JSON.stringify({ ref: refString(ref), at: deps.now().toISOString() })}\n`);
+      await boardCall(deps.board, 'POST', '/api/ok', where);
       return 0;
     }
 
-    const problems = await setStatus(deps.gh, ref, parseSetArgs(rest), deps.now());
-    for (const p of problems) err(p);
-    return problems.length > 0 ? 1 : 0;
+    if (command === 'show') {
+      try {
+        const work = await boardCall(deps.board, 'GET', `/api/work?repo=${encodeURIComponent(where.repo)}&number=${where.number}`);
+        out(JSON.stringify(work, null, 2));
+        return 0;
+      } catch (e) {
+        if (e instanceof BoardError && e.status === 404) {
+          err(`${refString(ref)} has no record on the board`);
+          return 1;
+        }
+        throw e;
+      }
+    }
+
+    // import: for the switch-over only.
+    const at = rest.indexOf('--json');
+    const file = at === -1 ? undefined : rest[at + 1];
+    if (!file) throw new Error('import needs --json <file>: the record to load, as JSON');
+    let record: unknown;
+    try {
+      record = JSON.parse(deps.board.readFile(file));
+    } catch (e) {
+      throw new Error(`Couldn't read a JSON record from ${file}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    await boardCall(deps.board, 'POST', '/api/import', { ...where, record });
+    out(`Imported ${refString(ref)}`);
+    return 0;
   } catch (e) {
     err(e instanceof Error ? e.message : String(e));
     return 1;
@@ -185,6 +164,8 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
 }
 
 if (import.meta.main) {
-  const { homedir } = await import('node:os');
-  process.exitCode = await main(process.argv.slice(2), { gh, now: () => new Date(), home: homedir() });
+  process.exitCode = await main(process.argv.slice(2), {
+    gh,
+    board: { fetch, readFile: (p) => readFileSync(p, 'utf8'), env: process.env, home: homedir() },
+  });
 }

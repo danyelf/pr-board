@@ -1,4 +1,5 @@
 {
   "ownerName": "Sam",
-  "ownerLogin": "sam-gh"
+  "ownerLogin": "sam-gh",
+  "boardUrl": "https://board.example.test"
 }
