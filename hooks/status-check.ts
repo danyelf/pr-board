@@ -204,12 +204,18 @@ async function touchedBy(use: ToolUse, entries: Entry[], deps: HookDeps, cache: 
       const positional = rest.slice(1).filter((x) => !x.startsWith('-'));
       const refspec = positional[1];
       let branch = refspec ? (refspec.includes(':') ? refspec.split(':')[1]! : refspec) : '';
-      if (!branch || branch === 'HEAD') {
-        branch = (await deps.git(['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+      // A push names no PR. If its repo or branch can't be looked up (a remote that isn't GitHub, or a repo gh can't see),
+      // it is taken as touching nothing, or every push there would stop the turn.
+      try {
+        if (!branch || branch === 'HEAD') {
+          branch = (await deps.git(['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+        }
+        const { owner, repo } = await repoOf(deps, dir, cache);
+        const prs = JSON.parse(await deps.gh(['pr', 'list', '--head', branch, '--json', 'number'], { cwd: dir })) as { number: number }[];
+        for (const pr of prs) found.push({ owner, repo, n: pr.number, kind: 'pr' });
+      } catch {
+        continue;
       }
-      const { owner, repo } = await repoOf(deps, dir, cache);
-      const prs = JSON.parse(await deps.gh(['pr', 'list', '--head', branch, '--json', 'number'], { cwd: dir })) as { number: number }[];
-      for (const pr of prs) found.push({ owner, repo, n: pr.number, kind: 'pr' });
     }
   }
   return found;
@@ -248,7 +254,14 @@ export async function main(deps: HookDeps): Promise<number> {
     const entries = (await readFile(input.transcript_path, 'utf8'))
       .split('\n')
       .filter(Boolean)
-      .map((l) => JSON.parse(l) as Entry);
+      .flatMap((l) => {
+        // A line that isn't JSON (one cut short, say) would fail every later turn of the session, so it is skipped.
+        try {
+          return [JSON.parse(l) as Entry];
+        } catch {
+          return [];
+        }
+      });
 
     let turnStart: number | null = null;
     for (const e of entries) {

@@ -110,6 +110,19 @@ describe('status-check hook', () => {
     expect(again.out).toEqual([]);
   });
 
+  it('skips a transcript line that is not JSON, and does not block a turn that touched nothing', async () => {
+    const r = await run('cut-short.jsonl');
+    expect(r.out).toEqual([]);
+    expect(r.errors).toEqual([]);
+  });
+
+  it('takes a push whose repo cannot be looked up as touching nothing', async () => {
+    const r = await run('push.jsonl', { throwOn: 'repo view', headPrs: [31] });
+    expect(r.out).toEqual([]);
+    const list = await run('push.jsonl', { throwOn: 'pr list' });
+    expect(list.out).toEqual([]);
+  });
+
   it('takes the number of a created PR from the tool result URL', async () => {
     const r = await run('pr-create.jsonl');
     expect(r.block?.reason).toContain('danyelf/torahmap#580');
