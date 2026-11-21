@@ -1,123 +1,140 @@
 import type { JWTVerifyGetKey } from 'jose';
-import type { ItemFacts } from '../shared/types.ts';
-import { checkAccess, type Env } from './access.ts';
-import { buildBoard } from './board.ts';
-import { fetchItem, fetchItems, postComment } from './github.ts';
-import { ITEM_REF, postAnswer } from './post-answer.ts';
-import { PAGE_SCRIPTS, renderBoard, renderMessage } from './render.ts';
+import type { Facts } from '../shared/facts.ts';
+import { caller, type Env } from './access.ts';
+import { handleApi, type ApiDeps, type FactsResult } from './api.ts';
+import { fetchFacts, setLabels } from './github.ts';
+import type { ItemRef } from './store.ts';
 
 export type { Env } from './access.ts';
 
+const CACHE_SECONDS = 60;
+
+// Scripts and styles only from the Worker's own address, requests only back to it, images from the web (screenshots), nothing framed.
+const POLICY = "default-src 'none'; script-src 'self'; connect-src 'self'; img-src https:; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+const SHELL = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR Board</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<main id="board">Loading…</main>
+</body>
+</html>
+`;
+
+function withHeaders(res: Response, contentType?: string): Response {
+  const headers = new Headers(res.headers);
+  if (contentType) headers.set('Content-Type', contentType);
+  headers.set('Content-Security-Policy', POLICY);
+  headers.set('Cache-Control', 'no-store');
+  headers.set('Referrer-Policy', 'same-origin');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  return new Response(res.body, { status: res.status, headers });
+}
+
+// The part of the Workers execution context this Worker uses.
+interface Context { waitUntil(p: Promise<unknown>): void }
+
+// The part of Cloudflare's ExportedHandler this Worker uses, so the tests can type-check without the Workers type definitions.
+export interface Handler {
+  fetch(req: Request, env: Env, ctx?: Context): Promise<Response>;
+}
+
+interface FactsDeps {
+  fetchFacts: typeof fetchFacts;
+  cache?: Cache;
+  now: () => Date;
+}
+
+/** What to read from GitHub: for each repo, the numbers of the records' items and of the extra items. */
+function wanted(records: { repo: string; pr: number | null; issue: number | null }[], extra: ItemRef[]): { repo: string; numbers: number[] }[] {
+  const byRepo = new Map<string, Set<number>>();
+  const add = (repo: string, n: number) => byRepo.set(repo, (byRepo.get(repo) ?? new Set<number>()).add(n));
+  for (const r of records) {
+    const n = r.pr ?? r.issue;
+    if (n !== null) add(r.repo, n);
+  }
+  for (const e of extra) add(e.repo, e.n);
+  return [...byRepo].map(([repo, set]) => ({ repo, numbers: [...set].sort((a, b) => a - b) }));
+}
+
+/** One cached read per CACHE_SECONDS for each set of numbers asked for. */
+function cacheKey(want: { repo: string; numbers: number[] }[], at: Date): Request {
+  const slot = Math.floor(at.getTime() / (CACHE_SECONDS * 1000));
+  const asked = want.map((w) => `${w.repo}#${w.numbers.join(',')}`).sort().join(' ');
+  return new Request(`https://pr-board.internal/facts?slot=${slot}&asked=${encodeURIComponent(asked)}`);
+}
+
+/** Reads the facts from GitHub, keeping the answer for CACHE_SECONDS unless a fresh read is asked for. */
+export function makeFactsLoader(deps: FactsDeps): ApiDeps['facts'] {
+  return async (env, records, fresh, extra): Promise<FactsResult> => {
+    const want = wanted(records, extra);
+    const key = cacheKey(want, deps.now());
+    const hit = fresh ? undefined : await deps.cache?.match(key);
+    if (hit) {
+      try {
+        const cached = (await hit.json()) as { facts?: unknown; errors?: unknown };
+        if (Array.isArray(cached.facts) && Array.isArray(cached.errors)) {
+          return { facts: cached.facts as Facts[], errors: cached.errors as string[], fromCache: true };
+        }
+      } catch {
+        // An entry we can't read is as good as none; read fresh.
+      }
+    }
+    let result: { facts: Facts[]; errors: string[] };
+    try {
+      result = await deps.fetchFacts(env.GITHUB_TOKEN, want, deps.now());
+    } catch (e) {
+      // A failure to reach GitHub at all is not kept, so the next request tries again.
+      return { facts: [], errors: [`Couldn't read GitHub: ${e instanceof Error ? e.message : String(e)}`], fromCache: false };
+    }
+    // A read with error lines is kept too, so a partly failing GitHub isn't hit on every refresh.
+    await deps.cache?.put(key, new Response(JSON.stringify(result), { headers: { 'Cache-Control': `max-age=${CACHE_SECONDS}` } }));
+    return { ...result, fromCache: false };
+  };
+}
+
 interface Deps {
-  fetchItems: typeof fetchItems;
-  fetchItem?: typeof fetchItem;
-  postComment?: typeof postComment;
+  fetchFacts?: typeof fetchFacts;
+  setLabels?: typeof setLabels;
   cache?: Cache;
   getKey?: JWTVerifyGetKey;
   now?: () => Date;
 }
 
-const CACHE_SECONDS = 60;
-
-let scriptSources: Promise<string> | undefined;
-
-/** The policy's list of the page's scripts by SHA-256, worked out once from their text on the first request (Workers can't do it at load). */
-function pageScriptSources(): Promise<string> {
-  scriptSources ??= Promise.all(
-    PAGE_SCRIPTS.map(async (s) => {
-      const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
-      return `'sha256-${btoa(String.fromCharCode(...new Uint8Array(d)))}'`;
-    }),
-  ).then((hashes) => hashes.join(' '));
-  return scriptSources;
-}
-
-async function pageHeaders(): Promise<Record<string, string>> {
-  return {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Cache-Control': 'no-store',
-    // Inline styles, images from the web, the page's own scripts by their hashes, and forms that post only to itself; nothing else, no frames.
-    'Content-Security-Policy': `default-src 'none'; img-src https:; style-src 'unsafe-inline'; script-src ${await pageScriptSources()}; form-action 'self'`,
-    // Not no-referrer: under that, browsers send "Origin: null" on the page's own form posts, and /answer refuses them.
-    'Referrer-Policy': 'same-origin',
-  };
-}
-
-// The part of Cloudflare's ExportedHandler this Worker uses, so the tests can type-check without the Workers type definitions.
-export interface Handler {
-  fetch(req: Request, env: Env): Promise<Response>;
-}
-
-/** One cached board per CACHE_SECONDS. */
-function cacheKey(at: Date): Request {
-  return new Request(`https://pr-board.internal/items?slot=${Math.floor(at.getTime() / (CACHE_SECONDS * 1000))}`);
-}
-
-export function makeHandler(deps: Deps): Handler {
+export function makeHandler(deps: Deps = {}): Handler {
   const now = deps.now ?? (() => new Date());
-
-  async function load(env: Env, at: Date, fresh: boolean): Promise<{ items: ItemFacts[]; errors: string[] }> {
-    const key = cacheKey(at);
-    const hit = fresh ? undefined : await deps.cache?.match(key);
-    if (hit) {
-      try {
-        const cached = (await hit.json()) as { items?: unknown; errors?: unknown };
-        if (Array.isArray(cached.items) && Array.isArray(cached.errors)) return cached as { items: ItemFacts[]; errors: string[] };
-      } catch {
-        // An entry we can't read is as good as none; fetch fresh.
-      }
-    }
-
-    let result: { items: ItemFacts[]; errors: string[] };
-    try {
-      result = await deps.fetchItems(env.GITHUB_TOKEN, at);
-    } catch (e) {
-      // A failure to reach GitHub at all is not kept, so the next visit tries again.
-      return { items: [], errors: [`Couldn't read GitHub: ${e instanceof Error ? e.message : String(e)}`] };
-    }
-    // Results with error lines are kept too (errors included), so a partly failing GitHub isn't hit on every refresh.
-    if (deps.cache) {
-      await deps.cache.put(
-        key,
-        new Response(JSON.stringify(result), { headers: { 'Cache-Control': `max-age=${CACHE_SECONDS}` } }),
-      );
-    }
-    return result;
-  }
-
-  async function answer(req: Request, env: Env): Promise<Response> {
-    const result = await postAnswer(req, env, { fetchItem: deps.fetchItem ?? fetchItem, postComment: deps.postComment ?? postComment });
-    if ('sent' in result) {
-      // The cached board was read before the answer; drop it so the next view shows the item as answered.
-      await deps.cache?.delete(cacheKey(now()));
-      return new Response(null, { status: 303, headers: { Location: `/?sent=${encodeURIComponent(result.sent)}` } });
-    }
-    return new Response(renderMessage(result.title, result.text, result.link), { status: result.status, headers: await pageHeaders() });
-  }
+  const loadFacts = makeFactsLoader({ fetchFacts: deps.fetchFacts ?? fetchFacts, cache: deps.cache, now });
 
   return {
-    async fetch(req, env) {
+    async fetch(req, env, ctx) {
       const url = new URL(req.url);
-      if (url.pathname === '/answer') {
-        if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
-        if (!(await checkAccess(req, env, deps.getKey))) return new Response('Not allowed', { status: 403 });
-        return answer(req, env);
+      if (url.pathname === '/') {
+        if (req.method !== 'GET') return withHeaders(new Response('Method not allowed', { status: 405 }));
+        // The shell holds no data; the board itself is read through the API.
+        return withHeaders(new Response(SHELL), 'text/html; charset=utf-8');
       }
-      if (url.pathname !== '/') return new Response('Not found', { status: 404 });
-      if (req.method !== 'GET') return new Response('Method not allowed', { status: 405 });
-      if (!(await checkAccess(req, env, deps.getKey))) return new Response('Not allowed', { status: 403 });
-
-      const at = now();
-      // Straight after sending answers, read GitHub afresh, so the item shows as answered.
-      const sentParam = url.searchParams.get('sent');
-      const sent = sentParam !== null && ITEM_REF.test(sentParam) ? sentParam : null;
-      const { items, errors } = await load(env, at, sent !== null);
-      return new Response(renderBoard(buildBoard(items, errors, at), { sent }), { headers: await pageHeaders() });
+      if (url.pathname.startsWith('/api/')) {
+        const who = await caller(req, env, deps.getKey);
+        if (!who) return withHeaders(new Response('Not allowed', { status: 403 }));
+        const apiDeps: ApiDeps = {
+          now,
+          facts: loadFacts,
+          setLabels: deps.setLabels ?? setLabels,
+          waitUntil: (p) => ctx?.waitUntil(p),
+        };
+        return withHeaders(await handleApi(req, env, who, apiDeps));
+      }
+      return withHeaders(new Response('Not found', { status: 404 }));
     },
   };
 }
 
 export default makeHandler({
-  fetchItems,
   cache: typeof caches === 'undefined' ? undefined : (caches as unknown as { default: Cache }).default,
 });

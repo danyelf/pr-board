@@ -56,8 +56,3 @@ export async function caller(req: Request, env: Env, getKey?: JWTVerifyGetKey): 
     return null;
   }
 }
-
-/** Kept for the old board code, which only knows the owner. Claude's service token is not let in. */
-export async function checkAccess(req: Request, env: Env, getKey?: JWTVerifyGetKey): Promise<boolean> {
-  return (await caller(req, env, getKey)) === 'owner';
-}

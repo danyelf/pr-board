@@ -21,11 +21,17 @@ pnpm typecheck
 Create a file named `.dev.vars` in the project root (it is git-ignored) with two lines:
 
 ```
-GITHUB_TOKEN=<the output of: gh auth token>
+GITHUB_TOKEN=<danyel-claude's token>
 ALLOW_LOCAL=1
 ```
 
-`ALLOW_LOCAL=1` lets requests to `localhost` skip the Cloudflare Access check. It has no effect on any other hostname. Then run:
+`ALLOW_LOCAL=1` lets requests to `localhost` skip the Cloudflare Access check. It has no effect on any other hostname. The board keeps its work records in a local D1 database (Cloudflare's SQLite database), which has to be set up before the first run:
+
+```
+pnpm exec wrangler d1 migrations apply pr-board --local
+```
+
+Then run:
 
 ```
 pnpm dev
@@ -58,7 +64,7 @@ All of these have been run for `pr-board.danyelfisher.info`; they stay here for 
 ## Where things are
 
 - `pr-board.config.json` the person the board is for: `ownerName` spells the status section and the `on <name>` label, and `ownerLogin` is the GitHub account asked to review a PR handed to them. The code never names anyone; the tests use `test/fixtures/pr-board.config.json`, with a different person, so a name written into the code fails them. (The Worker's sign-in address is separate: `ALLOWED_EMAIL` in `wrangler.toml`.)
-- `src/worker/` the Worker: GitHub reading, the Access check, page rendering, and `post-answer.ts`, which checks and posts answers.
+- `src/worker/` the Worker: a small page shell, the `/api/…` routes, GitHub reading, the Access check and the D1 store. The page's own code is built into `dist/page` by `pnpm build:page`.
 - `src/shared/` the rules for whose turn it is, stages, and the status section (written as text and, on its last line, as data), `answer.ts` for the answer comment's format, `fingerprint.ts` for the short fingerprint of what a status asks, plus `names.ts` for the label names and other values several parts must agree on.
 - `cli/` `pr-status.ts` (Claude writes the status), `watch-answers.ts` (Claude waits for answers), `mac-service.ts` (the always-on service that starts a session for answers nobody picked up), `answers.ts` (finding, claiming and printing answers, shared by those two), `poll.ts` (their timings and back-off) and `setup-labels.ts`.
 - `mac/` the launchd agent template for the service and an example of its config file.

@@ -8,18 +8,6 @@ import { readFileSync } from 'node:fs';
  */
 export interface RepoWorld { pullRequests: { nodes: any[] }; issues: { nodes: any[] } }
 
-/**
- * The recorded torahmap repo, as it stood just before #573, #574 and #578 merged. The recording was
- * made a few minutes after; only open PRs are read, so the tests need them open.
- */
-export function recordedRepo(): RepoWorld {
-  const data = JSON.parse(readFileSync(new URL('./fixtures/graphql-items-old.json', import.meta.url), 'utf8')).data.r0; // removed with the old page
-  for (const pr of data.pullRequests.nodes) {
-    if ([573, 574, 578].includes(pr.number)) Object.assign(pr, { merged: false, mergedAt: null, closedAt: null });
-  }
-  return data;
-}
-
 /** The torahmap repo as recorded for the facts query: open, merged and closed PRs, and some issues. */
 export function recordedFacts(): RepoWorld {
   return JSON.parse(readFileSync(new URL('./fixtures/graphql-items.json', import.meta.url), 'utf8')).data.r0;

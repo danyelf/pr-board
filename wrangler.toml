@@ -6,7 +6,22 @@ workers_dev = false
 # The page is reachable only here, behind the Cloudflare Access application for this hostname.
 routes = [{ pattern = "pr-board.danyelfisher.info", custom_domain = true }]
 
+[[d1_databases]]
+binding = "DB"
+database_name = "pr-board"
+database_id = "<filled at switch-over>"
+migrations_dir = "migrations"
+
+# The page's script and styles, built by `pnpm build:page`.
+[assets]
+directory = "dist/page"
+
+[build]
+command = "pnpm build:page"
+
 [vars]
+# The client id of the Access service token Claude's Mac-side tools use; empty until the switch-over.
+SERVICE_CLIENT_ID = ""
 ACCESS_TEAM_DOMAIN = "fisherinsights.cloudflareaccess.com"
 ACCESS_AUD = "6faedf2418067af21317b08c774d756e13c5df7ae1bf2978aa4e3129672ea555"
 ALLOWED_EMAIL = "danyel@gmail.com"

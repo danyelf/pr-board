@@ -9,11 +9,13 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
-    "dev": "wrangler dev --infer-origin-from-routes=false"
+    "build:page": "esbuild src/page/main.ts --bundle --format=esm --target=es2022 --outfile=dist/page/app.js && cp src/page/app.css dist/page/app.css",
+    "dev":"wrangler dev --infer-origin-from-routes=false"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261104.1",
     "@types/node": "^26.6.6",
+    "esbuild": "0.28.2",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0",
     "wrangler": "^4.157.0"
