@@ -1,26 +1,32 @@
 // Waits for the owner's answers from the board on the items a Claude session handed over, claims them
-// with a 👀 reaction, prints them and exits, which wakes the session. Run it in the background:
+// there, prints them and exits, which wakes the session. Run it in the background:
 //   node cli/watch-answers.ts owner/repo#N [owner/repo#M ...]
 // It costs nothing while it waits, and it never exits on a timer or because of errors, since every
 // exit is a paid wake-up for the session.
-import { WORKING_ASK } from '../src/shared/answer.ts';
-import { claim, describe, uniqueRefs, waitingAnswers, writeCodeStatus, type Found } from './answers.ts';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { BoardError, boardCall, type BoardDeps } from './board.ts';
+import { describe } from './answers.ts';
 import { OwnerError, currentRepo, gh, readRef, refString, refuseOwner } from './gh.ts';
 import type { Deps as BaseDeps, Ref } from './gh.ts';
 import { POLL_MS, backoff, message } from './poll.ts';
+import type { AnswerRow, WorkRecord } from '../src/shared/work.ts';
 
 export interface Deps extends BaseDeps {
+  board: BoardDeps;
   sleep: (ms: number) => Promise<void>;
-  now?: () => Date;
 }
 
 /** After the first answer, how long to wait for the rest, so one wake-up takes them all. */
 const COLLECT_MS = 60_000;
 
+interface Found { record: WorkRecord; answers: AnswerRow[] }
+
+const where = (ref: Ref) => ({ repo: `${ref.owner}/${ref.repo}`, number: ref.n });
+
 export async function main(argv: string[], deps: Deps): Promise<number> {
   const out = deps.out ?? ((l) => console.log(l));
   const err = deps.err ?? ((l) => console.error(l));
-  const now = deps.now ?? (() => new Date());
   const refs: Ref[] = [];
   // "#N" needs the current directory's repo, which is looked up in the loop so a passing failure is retried.
   const unresolved: number[] = [];
@@ -37,7 +43,7 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
   }
 
   try {
-    await refuseOwner(deps.gh, 'Answers picked up here would look as if nobody had. Run the watcher under Claude\'s account.');
+    await refuseOwner(deps.gh, 'The review request would then look as if nobody had asked. Run the watcher under Claude\'s account.');
   } catch (e) {
     if (e instanceof OwnerError) {
       err(e.message);
@@ -53,39 +59,39 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
         const repo = await currentRepo(deps.gh);
         refs.push(...unresolved.splice(0).map((n) => ({ ...repo, n })));
       }
-      const first = await waitingAnswers(deps.gh, refs, out);
-      if (refs.length === 0) {
-        out('Every item it was watching is closed or merged; nothing left to watch.');
-        return 0;
-      }
-      // Only when no item could be read is GitHub itself failing, and worth waiting longer for.
-      if (first.failed.length === refs.length) throw new Error(first.failed.join('; '));
-      for (const line of first.failed) err(line);
-      if (first.found.length > 0) {
+      const waiting = await boardCall<Found[]>(deps.board, 'POST', '/api/unclaimed', { refs: refs.map(where) });
+      if (waiting.length > 0) {
         await deps.sleep(COLLECT_MS);
         const claimed: Found[] = [];
-        const second = await waitingAnswers(deps.gh, refs, out);
-        for (const line of second.failed) err(line);
-        for (const f of second.found) {
+        // Every watched item is claimed, since more may have come in during the wait; one with nothing left comes back empty.
+        for (const ref of refs) {
           try {
-            if (await claim(deps.gh, f)) claimed.push(f);
+            const got = await boardCall<Found>(deps.board, 'POST', '/api/claim', { ...where(ref), by: 'session' });
+            if (got.answers.length > 0) claimed.push(got);
           } catch (e) {
-            // Left unclaimed, so the next watcher will see it.
-            err(`Couldn't claim ${f.url}: ${message(e)}`);
+            if (!(e instanceof BoardError)) throw e;
+            // Left unclaimed, so the next check sees it.
+            err(`Couldn't claim ${refString(ref)}: ${e.message}`);
           }
         }
         if (claimed.length > 0) {
-          out(`Picked up ${claimed.length === 1 ? 'one answer' : `${claimed.length} answers`} (each now has a 👀):`);
-          for (const f of claimed) out(`\n${describe(f)}`);
-          // Done here rather than left to the session, so the board shows the answers taken in hand at once.
-          for (const ref of uniqueRefs(claimed)) {
-            try {
-              for (const p of await writeCodeStatus(deps.gh, ref, 'claude', WORKING_ASK, null, now())) err(p);
-              out(`\n${refString(ref)}'s status now says "${WORKING_ASK}", waiting on Claude.`);
-            } catch (e) {
-              err(`Couldn't set ${refString(ref)}'s status to "${WORKING_ASK}" (${message(e)}); set it yourself before anything else.`);
-            }
+          out(`Picked up ${claimed.length === 1 ? 'one answer' : `${claimed.length} answers`}:`);
+          for (const c of claimed) out(`\n${describe(c.record, c.answers)}`);
+          return 0;
+        }
+      } else {
+        // Nothing waiting: drop the items whose record has ended, since no answer will come for them.
+        for (const ref of [...refs]) {
+          try {
+            await boardCall(deps.board, 'GET', `/api/work?repo=${encodeURIComponent(`${ref.owner}/${ref.repo}`)}&number=${ref.n}`);
+          } catch (e) {
+            if (!(e instanceof BoardError) || e.status !== 404) throw e;
+            refs.splice(refs.indexOf(ref), 1);
+            out(`${refString(ref)} has ended on the board; no longer watching it.`);
           }
+        }
+        if (refs.length === 0) {
+          out('Every item it was watching has ended; nothing left to watch.');
           return 0;
         }
       }
@@ -102,5 +108,6 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
 
 if (import.meta.main) {
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-  process.exitCode = await main(process.argv.slice(2), { gh, sleep });
+  const board: BoardDeps = { fetch, readFile: (p) => readFileSync(p, 'utf8'), env: process.env, home: homedir() };
+  process.exitCode = await main(process.argv.slice(2), { gh, board, sleep });
 }

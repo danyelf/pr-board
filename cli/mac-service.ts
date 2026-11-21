@@ -18,7 +18,7 @@ import {
   answersCurrentStatus, codeWrittenStatus, isOwnerAnswer,
 } from '../src/shared/answer.ts';
 import { parseStatus } from '../src/shared/status.ts';
-import { claim, claudeReactions, describe, react, unreact, waitingAnswers, writeCodeStatus, writtenAt, type Found, type RestComment } from './answers.ts';
+import { claim, claudeReactions, describe, react, unreact, waitingAnswers, writeCodeStatus, writtenAt, type Found, type RestComment } from './old-answers.ts';
 import { OwnerError, flattenPages, isNotFound, gh as realGh, git as realGit, ps as realPs, readItem, readRef, refString, refuseOwner } from './gh.ts';
 import type { Gh, Ref } from './gh.ts';
 import { PARALLEL_READS, POLL_MS, backoff, inParallel, message } from './poll.ts';
