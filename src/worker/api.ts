@@ -11,13 +11,13 @@ export interface FactsResult {
   facts: Facts[];
   errors: string[];
   /** True when the facts came from the cache, so the labels they show may be out of date. */
-  fromCache?: boolean;
+  fromCache: boolean;
 }
 
 export interface ApiDeps {
   now: () => Date;
   /** `extra` names items to read even when they have no record yet. */
-  facts: (env: Env, records: WorkRecord[], fresh: boolean, extra?: ItemRef[]) => Promise<FactsResult>;
+  facts: (env: Env, records: WorkRecord[], fresh: boolean, extra: ItemRef[]) => Promise<FactsResult>;
   setLabels: typeof setLabels;
   waitUntil: (p: Promise<unknown>) => void;
 }
@@ -92,14 +92,14 @@ async function cardFor(env: Env, deps: ApiDeps, ref: ItemRef): Promise<CardView 
   const record = await findWork(env.DB, ref);
   if (!record) return null;
   const { records, answers } = await openWork(env.DB);
-  const got = await deps.facts(env, records, false);
+  const got = await deps.facts(env, records, false, []);
   const view = buildView(records, answers, got.facts, got.errors, deps.now());
   return view.everything.find((c) => c.key === `${record.repo}#${record.pr ?? record.issue}`) ?? null;
 }
 
 async function board(env: Env, deps: ApiDeps): Promise<BoardView> {
   const { records, answers } = await openWork(env.DB);
-  const got = await deps.facts(env, records, false);
+  const got = await deps.facts(env, records, false, []);
   const now = deps.now();
   const byKey = new Map(got.facts.map((f) => [keyOf(f), f]));
   const open: WorkRecord[] = [];
@@ -110,7 +110,7 @@ async function board(env: Env, deps: ApiDeps): Promise<BoardView> {
     else open.push(r);
   }
   const view = buildView(open, answers, got.facts, got.errors, now);
-  if (got.fromCache !== true) queueLabels(env, deps, view.everything, got.facts);
+  if (!got.fromCache) queueLabels(env, deps, view.everything, got.facts);
   return view;
 }
 

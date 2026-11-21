@@ -25,15 +25,17 @@ interface Harness {
   labelCalls: { number: number; add: string[]; remove: string[] }[];
   waiting: Promise<unknown>[];
   askedFresh: boolean[];
+  askedExtra: ItemRef[][];
 }
 
 function harness(): Harness {
   const db = sqliteDb();
-  const h: Harness = { db, env: { DB: db, GITHUB_TOKEN: 't' } as Env, items: [], fromCache: false, labelCalls: [], waiting: [], askedFresh: [], deps: undefined as never };
+  const h: Harness = { db, env: { DB: db, GITHUB_TOKEN: 't' } as Env, items: [], fromCache: false, labelCalls: [], waiting: [], askedFresh: [], askedExtra: [], deps: undefined as never };
   h.deps = {
     now: () => NOW,
-    facts: async (_env, _records, fresh) => {
+    facts: async (_env, _records, fresh, extra) => {
       h.askedFresh.push(fresh);
+      h.askedExtra.push(extra);
       return { facts: h.items, errors: [], fromCache: h.fromCache };
     },
     setLabels: async (_token, f, add, remove) => {
@@ -117,6 +119,7 @@ describe('the API', () => {
       assert.equal(body.record.version, 1);
       assert.equal(body.handedOver, true);
       assert.deepEqual(h.askedFresh, [true]);
+      assert.deepEqual(h.askedExtra, [[{ repo: 'o/r', n: 5 }]]);
     });
     it('takes the head and the kind from GitHub, not from the client', async () => {
       h.items = [facts({ number: 5, headSha: 'abc123' })];
