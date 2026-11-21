@@ -126,6 +126,18 @@ async function findOpen(db: Db, column: 'pr' | 'issue', repo: string, n: number,
   return row ? toRecord(row) : null;
 }
 
+/**
+ * The record of the PR a new one replaces: its open record, or else its newest record if that ended because the PR
+ * was closed without merging. Claude often closes the old PR before writing the new one's first status, and the board
+ * may end the record in between; the new PR takes it over and reopens it, approvals and all.
+ */
+async function findReplaced(db: Db, repo: string, n: number): Promise<WorkRecord | null> {
+  const open = await findOpen(db, 'pr', repo, n);
+  if (open) return open;
+  const row = await db.prepare('SELECT * FROM work WHERE repo = ? AND pr = ? ORDER BY id DESC LIMIT 1').bind(repo, n).first<WorkRow>();
+  return row && row.ended_how === 'closed' ? toRecord(row) : null;
+}
+
 /** The open record for a PR or issue number. A PR and an issue never share a number, so one lookup serves both. */
 export async function findWork(db: Db, ref: ItemRef): Promise<WorkRecord | null> {
   const row = await db
@@ -162,7 +174,7 @@ export async function setStatus(
 ): Promise<{ record: WorkRecord; handedOver: boolean }> {
   const prev =
     (await findWork(db, ref)) ??
-    (input.replaces !== null ? await findOpen(db, 'pr', ref.repo, input.replaces) : null) ??
+    (input.replaces !== null ? await findReplaced(db, ref.repo, input.replaces) : null) ??
     // An issue's record takes a PR only while it has none. Otherwise this PR (a split, say) gets a record of its own.
     (input.issue !== null ? await findOpen(db, 'issue', ref.repo, input.issue, true) : null);
   const f = applySet(prev, input, now);
@@ -181,20 +193,25 @@ export async function setStatus(
     return { record: await recordById(db, results[0]!.results[0]!.id), handedOver };
   }
 
-  const issue = input.isPr ? (issueFree ?? prev.issue) : ref.n;
+  // A closed record taken over by --replaces is reopened. While it was closed another record may have taken its issue.
+  const reopens = prev.endedAt !== null;
+  const prevIssue = reopens && prev.issue !== null && (await findOpen(db, 'issue', ref.repo, prev.issue)) !== null ? null : prev.issue;
+  const issue = input.isPr ? (issueFree ?? prevIssue) : ref.n;
   const pr = input.isPr ? ref.n : prev.pr;
   const results = (await db.batch([
+    // The approvals are compared too: an approval leaves the version alone, and this write must not wipe one out.
     db
       .prepare(
         `UPDATE work SET issue = ?, pr = ?, has_design = ?, gate = ?, state = ?, reached = ?, ask = ?, questions = ?, to_test = ?,
-          back_reason = ?, approved = ?, rounds = ?, prep_sha = ?, version = ?, turn_since = ?, written_at = ?
-         WHERE id = ? AND version = ? AND ended_at IS NULL RETURNING id`,
+          back_reason = ?, approved = ?, rounds = ?, prep_sha = ?, version = ?, turn_since = ?, written_at = ?, ended_at = NULL, ended_how = NULL
+         WHERE id = ? AND version = ? AND json(approved) = json(?) AND ${reopens ? "ended_how = 'closed'" : 'ended_at IS NULL'} RETURNING id`,
       )
       .bind(
         issue, pr, f.hasDesign ? 1 : 0, f.gate, f.state, f.reached, f.ask, JSON.stringify(f.questions), f.toTest, f.backReason,
         JSON.stringify(f.approved), JSON.stringify(f.rounds), f.prepSha, f.version, f.turnSince, f.writtenAt, prev.id, prev.version,
+        JSON.stringify(prev.approved),
       ),
-    logStmt(db, prev.id, now, 'status', { from: summary(prev), to: summary(f), ask: f.ask, issue, pr, replaces: input.replaces }, STILL_OPEN_AT, [prev.id, f.version]),
+    logStmt(db, prev.id, now, 'status', { from: summary(prev), to: summary(f), ask: f.ask, issue, pr, replaces: input.replaces, ...(reopens ? { reopened: true } : {}) }, STILL_OPEN_AT, [prev.id, f.version]),
   ])) as Written[];
   if (results[0]!.results.length === 0) throw new Refused('This work changed while the status was being written. Try again.');
   return { record: await recordById(db, prev.id), handedOver };

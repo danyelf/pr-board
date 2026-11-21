@@ -132,18 +132,34 @@ async function status(env: Env, deps: ApiDeps, b: Record<string, unknown>): Prom
   const noDesign = b.noDesign ?? false;
   if (typeof noDesign !== 'boolean') throw new BadRequest('"noDesign" must be true or false');
 
+  const named = intOrNull(b, 'issue');
   const existing = await findWork(env.DB, ref);
-  const got = await deps.facts(env, existing ? [existing] : [], true, [ref]);
-  const f = got.facts.find((x) => x.repo === ref.repo && x.number === ref.n);
-  if (!f) return json({ error: `Couldn't read ${ref.repo}#${ref.n} from GitHub${got.errors.length > 0 ? `: ${got.errors.join('; ')}` : ''}` }, 502);
+  const got = await deps.facts(env, existing ? [existing] : [], true, named === null ? [ref] : [ref, { repo: ref.repo, n: named }]);
+  const factsOf = (facts: Facts[], n: number) => facts.find((x) => x.repo === ref.repo && x.number === n);
+  const unreadable = (n: number) => json({ error: `Couldn't read ${ref.repo}#${n} from GitHub${got.errors.length > 0 ? `: ${got.errors.join('; ')}` : ''}` }, 502);
+  const f = factsOf(got.facts, ref.n);
+  if (!f) return unreadable(ref.n);
+
+  // A number held as a record's issue must really be an issue, or a lookup by that number could find the wrong record.
+  let issue: number | null = null;
+  if (named !== null) {
+    const nf = factsOf(got.facts, named);
+    if (!nf) return unreadable(named);
+    if (nf.kind !== 'issue') throw new Refused(`${ref.repo}#${named} is a pull request, not an issue; --issue must name an issue`);
+    issue = named;
+  } else if (f.kind === 'pr' && f.linkedIssue !== null) {
+    // With no issue named, a PR joins the issue GitHub links it to (Closes, Fixes, Resolves or Refs), when that is an issue.
+    const linked = f.linkedIssue;
+    const lf = factsOf(got.facts, linked) ?? factsOf((await deps.facts(env, [], true, [{ repo: ref.repo, n: linked }])).facts, linked);
+    issue = lf?.kind === 'issue' ? linked : null;
+  }
 
   const input: SetInput & { issue: number | null; replaces: number | null } = {
     gate: b.gate as SetInput['gate'], state: b.state as SetInput['state'], ask: b.ask, questions: questions as string[],
     toTest: strOrNull(b, 'toTest'), reason: strOrNull(b, 'reason'), noDesign,
     // The head and the kind come from GitHub, whatever the client says.
     headSha: f.headSha, isPr: f.kind === 'pr',
-    // With no issue named, a PR joins the issue GitHub links it to (Closes, Fixes, Resolves or Refs).
-    issue: intOrNull(b, 'issue') ?? (f.kind === 'pr' ? f.linkedIssue : null), replaces: intOrNull(b, 'replaces'),
+    issue, replaces: intOrNull(b, 'replaces'),
   };
   const result = await setStatus(env.DB, ref, input, deps.now().toISOString());
 
@@ -153,13 +169,51 @@ async function status(env: Env, deps: ApiDeps, b: Record<string, unknown>): Prom
   return json(result);
 }
 
+type Imported = Parameters<typeof importWork>[2];
+
+/**
+ * Checks every field of a record brought in at the switch-over, so the board never stores one it can't read back,
+ * and checks that the record belongs to the item named: its PR when it has one, otherwise its issue.
+ */
+function importedRecord(ref: ItemRef, v: unknown): Imported {
+  const no = (why: string): never => { throw new Refused(`The record can't be imported: ${why}`); };
+  if (!isObject(v)) return no('it must be a JSON object');
+  const text = (k: string) => (typeof v[k] === 'string' ? (v[k] as string) : no(`"${k}" must be text`));
+  const textOrNull = (k: string) => (v[k] === null || typeof v[k] === 'string' ? (v[k] as string | null) : no(`"${k}" must be text or null`));
+  const time = (k: string) => (Number.isNaN(Date.parse(text(k))) ? no(`"${k}" must be a time`) : text(k));
+  const whole = (x: unknown) => typeof x === 'number' && Number.isInteger(x) && x >= 0;
+  const numberOrNull = (k: string) => (v[k] === null || (whole(v[k]) && (v[k] as number) > 0) ? (v[k] as number | null) : no(`"${k}" must be a number or null`));
+  const oneOf = <T extends string>(k: string, list: readonly T[]) => (list.includes(v[k] as T) ? (v[k] as T) : no(`"${k}" must be one of ${list.join(', ')}`));
+
+  const questions = Array.isArray(v.questions) ? v.questions : no('"questions" must be a list');
+  for (const q of questions) {
+    const ok = isObject(q) && whole(q.n) && typeof q.text === 'string' && typeof q.defaultChoice === 'string'
+      && Array.isArray(q.choices) && q.choices.every((c) => typeof c === 'string');
+    if (!ok) no('each question must have a number "n", "text", "choices" and a "defaultChoice"');
+  }
+  const approved = isObject(v.approved) ? v.approved : no('"approved" must be an object');
+  for (const [k, at] of Object.entries(approved)) {
+    if ((k !== 'design' && k !== 'implementation') || typeof at !== 'string' || Number.isNaN(Date.parse(at))) no('"approved" may only give a time for design and implementation');
+  }
+  const rounds = isObject(v.rounds) ? v.rounds : no('"rounds" must be an object');
+  if (Object.keys(rounds).length !== GATES.length || !GATES.every((g) => whole(rounds[g]))) no(`"rounds" must give a count for each of ${GATES.join(', ')}`);
+  if (typeof v.hasDesign !== 'boolean') no('"hasDesign" must be true or false');
+
+  const r: Imported = {
+    issue: numberOrNull('issue'), pr: numberOrNull('pr'), hasDesign: v.hasDesign as boolean,
+    gate: oneOf('gate', GATES), state: oneOf('state', STATES), reached: oneOf('reached', GATES),
+    ask: text('ask'), questions: questions as Imported['questions'], toTest: textOrNull('toTest'), backReason: textOrNull('backReason'),
+    approved: approved as Imported['approved'], rounds: rounds as Imported['rounds'], prepSha: textOrNull('prepSha'),
+    turnSince: time('turnSince'), writtenAt: time('writtenAt'), startedAt: time('startedAt'),
+  };
+  const known = r.pr ?? r.issue;
+  if (known !== ref.n) no(`it is for #${known ?? 'nothing'} (its ${r.pr !== null ? 'PR' : 'issue'}), not #${ref.n}`);
+  return r;
+}
+
 async function importRecord(env: Env, deps: ApiDeps, b: Record<string, unknown>): Promise<Response> {
   const ref = refOf(b);
-  const r = b.record;
-  if (!isObject(r) || !GATES.includes(r.gate as never) || !STATES.includes(r.state as never) || !GATES.includes(r.reached as never)) {
-    throw new BadRequest('"record" must be a work record with a gate, a state and the furthest gate reached');
-  }
-  const record = await importWork(env.DB, ref, r as Parameters<typeof importWork>[2], deps.now().toISOString());
+  const record = await importWork(env.DB, ref, importedRecord(ref, b.record), deps.now().toISOString());
   return json({ record });
 }
 

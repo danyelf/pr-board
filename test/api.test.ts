@@ -139,16 +139,33 @@ describe('the API', () => {
       assert.equal(onIssue.status, 200);
       const issueRecord = await findWork(h.db, { repo: 'o/r', n: 3 });
 
-      h.items = [facts({ number: 5, linkedIssue: 3 })];
+      h.items = [facts({ number: 5, linkedIssue: 3 }), facts({ number: 3, kind: 'issue' })];
       const onPr = await call(h, 'claude', 'POST', '/api/status', { ...STATUS, gate: 'design', state: 'working', questions: [], noDesign: false, issue: null });
       assert.equal(onPr.status, 200);
       const joined = await findWork(h.db, { repo: 'o/r', n: 5 });
       assert.equal(joined?.id, issueRecord?.id);
       assert.equal(joined?.issue, 3);
 
-      h.items = [facts({ number: 7, linkedIssue: 3 })];
+      h.items = [facts({ number: 7, linkedIssue: 3 }), facts({ number: 9, kind: 'issue' })];
       await call(h, 'claude', 'POST', '/api/status', { ...STATUS, number: 7, issue: 9 });
+      assert.deepEqual(h.askedExtra.at(-1), [{ repo: 'o/r', n: 7 }, { repo: 'o/r', n: 9 }]);
       assert.equal((await findWork(h.db, { repo: 'o/r', n: 7 }))?.issue, 9);
+    });
+    it('refuses an --issue that names a pull request', async () => {
+      h.items = [facts({ number: 5 }), facts({ number: 12 })];
+      const res = await call(h, 'claude', 'POST', '/api/status', { ...STATUS, issue: 12 });
+      assert.equal(res.status, 409);
+      assert.match(((await res.json()) as { error: string }).error, /o\/r#12 is a pull request, not an issue/);
+      assert.equal(await findWork(h.db, { repo: 'o/r', n: 5 }), null);
+    });
+    it('does not take a linked number as the issue when GitHub says it is a pull request', async () => {
+      h.items = [facts({ number: 12 })];
+      await call(h, 'claude', 'POST', '/api/status', { ...STATUS, number: 12 });
+      h.items = [facts({ number: 20, linkedIssue: 12 }), facts({ number: 12 })];
+      const res = await call(h, 'claude', 'POST', '/api/status', { ...STATUS, number: 20 });
+      assert.equal(res.status, 200);
+      assert.equal((await findWork(h.db, { repo: 'o/r', n: 20 }))?.issue, null);
+      assert.equal((await findWork(h.db, { repo: 'o/r', n: 12 }))?.pr, 12);
     });
     it('queues the label changes', async () => {
       await seedPaused(h);
@@ -284,6 +301,30 @@ describe('the API', () => {
       assert.equal(res.status, 200);
       assert.equal(((await res.json()) as { record: { ask: string } }).record.ask, 'Imported');
       assert.equal((await call(h, 'claude', 'POST', '/api/import', { repo: 'o/r', number: 7, record })).status, 409);
+    });
+    it('/api/import refuses a record for another item, or one with a field missing or of the wrong kind, and stores nothing', async () => {
+      const record = {
+        issue: null, pr: 12, hasDesign: false, gate: 'implementation', state: 'working', reached: 'implementation', ask: 'Imported', questions: [],
+        toTest: null, backReason: null, approved: {}, rounds: { design: 0, implementation: 0, prep: 0 }, prepSha: null, turnSince: NOW_ISO,
+        writtenAt: NOW_ISO, startedAt: NOW_ISO,
+      };
+      const { rounds: _, ...noRounds } = record;
+      const bad: [unknown, RegExp][] = [
+        [{ ...record, pr: 13 }, /it is for #13 \(its PR\), not #12/],
+        [{ ...record, pr: null }, /not #12/],
+        [noRounds, /"rounds"/],
+        [{ ...record, questions: [{ n: 1, text: 'Q?' }] }, /each question/],
+        [{ ...record, approved: { prep: NOW_ISO } }, /"approved"/],
+        [{ ...record, hasDesign: 'no' }, /"hasDesign"/],
+        [{ ...record, turnSince: 'yesterday' }, /"turnSince" must be a time/],
+      ];
+      for (const [r, why] of bad) {
+        const res = await call(h, 'claude', 'POST', '/api/import', { repo: 'o/r', number: 12, record: r });
+        assert.equal(res.status, 409);
+        assert.match(((await res.json()) as { error: string }).error, why);
+      }
+      assert.equal(await findWork(h.db, { repo: 'o/r', n: 12 }), null);
+      assert.equal(await findWork(h.db, { repo: 'o/r', n: 13 }), null);
     });
   });
 });

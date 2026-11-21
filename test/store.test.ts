@@ -85,6 +85,46 @@ describe('setStatus and findWork', () => {
     expect((await openWork(db)).records.map((r) => r.id)).toEqual([first.record.id]);
   });
 
+  it('takes over and reopens the record of a replaced PR that was closed before the new status, keeping its approvals', async () => {
+    const old = { repo: 'o/r', n: 7 };
+    await setStatus(db, old, input({ state: 'complete', questions: [] }), T0);
+    await addAnswer(db, old, answer({ choices: {}, approval: 'approve, build it' }), T0);
+    const first = await findWork(db, old);
+    await endWork(db, first!.id, 'closed', T1);
+    const moved = await setStatus(db, PR, input({ replaces: 7, gate: 'implementation', state: 'working', questions: [] }), T2);
+    expect(moved.record).toMatchObject({ id: first!.id, pr: 5, gate: 'implementation', endedAt: null, endedHow: null });
+    expect(moved.record.approved.design).toBe(T0);
+  });
+
+  it('does not take over the record of a replaced PR that was merged', async () => {
+    const old = { repo: 'o/r', n: 7 };
+    const first = await setStatus(db, old, input(), T0);
+    await endWork(db, first.record.id, 'merged', T1);
+    const fresh = await setStatus(db, PR, input({ replaces: 7 }), T2);
+    expect(fresh.record.id).not.toBe(first.record.id);
+    expect((await findWork(db, old))).toBeNull();
+  });
+
+  it('refuses a status written while the owner approves, so the approval is not wiped out', async () => {
+    await setStatus(db, PR, input({ state: 'complete', questions: [] }), T0);
+    // The owner's approval lands after the status has read the record and before it writes.
+    let approved = false;
+    const racing: Db = {
+      prepare: (sql) => db.prepare(sql),
+      batch: async (stmts) => {
+        if (!approved) {
+          approved = true;
+          await addAnswer(db, PR, answer({ choices: {}, approval: 'approve, build it' }), T1);
+        }
+        return db.batch(stmts);
+      },
+    };
+    await expect(setStatus(racing, PR, input({ state: 'complete', questions: [], ask: 'Corrected ask' }), T2)).rejects.toThrow('This work changed');
+    const r = await findWork(db, PR);
+    expect(r).toMatchObject({ version: 1, ask: 'Which one?' });
+    expect(r!.approved.design).toBe(T1);
+  });
+
   it('says it handed over only when the turn moves to the owner', async () => {
     expect((await setStatus(db, PR, input({ state: 'working', questions: [] }), T0)).handedOver).toBe(false);
     expect((await setStatus(db, PR, input({ state: 'paused' }), T1)).handedOver).toBe(true);
