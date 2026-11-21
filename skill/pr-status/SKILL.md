@@ -53,7 +53,7 @@ The rules the command enforces:
 - `--gate` and `--state` are always required.
 - **Forward needs the earlier gate approved.** You can't move to implementation while design is unapproved, or to prep while implementation is unapproved. Nothing starts at prep, and prep needs a PR, not an issue.
 - **Back needs `--reason`.** Going back clears the approvals of that gate and every later one. The card shows the reason.
-- Every `--question` has choices with exactly one in bold as the default, like `(**leave** | change)`. Questions are replaced each time: repeat `--question` for every question still open.
+- Every `--question` has choices with exactly one in bold as the default, like `(**leave** | change)`. Questions are replaced each time: repeat `--question` for every question still open. The board adds a "file an issue" choice to each of your questions itself; don't write it in.
 - `--to-test` is required at implementation complete. Put the steps there: what to open, what to try, what should happen.
 - Each of `--ask`, `--to-test`, `--question` and `--reason` is one line. Write several steps as `1) … 2) … 3) …` on one line.
 - When a PR's status hands it to Danyel (paused or complete), the command also asks him to review it on GitHub, so GitHub notifies him.

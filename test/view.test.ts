@@ -48,7 +48,7 @@ describe('the cards sketched in the design', () => {
     expect(c.tag).toBe('1 question for you');
     expect(looks(c)).toEqual(['approved', 'paused', 'todo']);
     expect(c.boxes[1]!.badge).toBe('1 question');
-    expect(c.questions).toEqual(pinnedVerses.record.questions);
+    expect(c.questions).toEqual(pinnedVerses.record.questions.map((q) => ({ ...q, choices: [...q.choices, 'file an issue'] })));
     expect(c.approval).toBeNull();
     expect(c.noteLabel).toBe('Note');
     expect(c.links.merge).toBeNull();
@@ -63,6 +63,18 @@ describe('the cards sketched in the design', () => {
     expect(c.boxes[0]!.round).toBe(2);
     expect(c.approval).toEqual({ choices: ['approve, build it', 'needs changes'], defaultChoice: 'approve, build it' });
     expect(c.waitingSince).toBe(searchBox.record.turnSince);
+  });
+
+  it('offers "file an issue" last on each question, once, and never on an approval', () => {
+    const questions = [
+      { n: 1, text: 'Colour?', choices: ['red', 'green'], defaultChoice: 'red' },
+      { n: 2, text: 'Where?', choices: ['top', 'file an issue', 'bottom'], defaultChoice: 'bottom' },
+    ];
+    const v = view([{ ...searchBox.record, questions }], [], [searchBox.facts]);
+    const c = v.waiting[0]!;
+    expect(c.questions.map((q) => q.choices)).toEqual([['red', 'green', 'file an issue'], ['top', 'bottom', 'file an issue']]);
+    expect(c.questions.map((q) => q.defaultChoice)).toEqual(['red', 'bottom']);
+    expect(c.approval!.choices).not.toContain('file an issue');
   });
 
   it('#564 is reopened, with Implementation on hold', () => {
@@ -312,7 +324,7 @@ describe('sections', () => {
   it('shows questions only while paused or complete', () => {
     const qs = pinnedVerses.record.questions;
     expect(only([record({ state: 'working', questions: qs })], [], [facts()]).questions).toEqual([]);
-    expect(only([record({ state: 'complete', toTest: 'x', questions: qs })], [], [facts()]).questions).toEqual(qs);
+    expect(only([record({ state: 'complete', toTest: 'x', questions: qs })], [], [facts()]).questions.map((q) => q.text)).toEqual(qs.map((q) => q.text));
   });
 });
 

@@ -1,7 +1,7 @@
 // The board the page draws, worked out from the board's own records and answers and from what GitHub says.
 // Nothing here writes anything: the label changes it lists are for the Worker to make.
 import type { Facts } from './facts.ts';
-import { DAY_MS, PICKUP_GRACE_MS, WORKING_STALLS_MS } from './names.ts';
+import { DAY_MS, FILE_AN_ISSUE, PICKUP_GRACE_MS, WORKING_STALLS_MS } from './names.ts';
 import { APPROVAL_CHOICES, GATES, gatesOf, turnOf, type AnswerRow, type Gate, type WorkRecord } from './work.ts';
 import { labelChanges, wantedLabels } from './labels.ts';
 
@@ -229,7 +229,10 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
     toTest: r.toTest,
     // The reason for the last move back matters only while a later gate is on hold.
     backReason: GATES.indexOf(r.gate) < GATES.indexOf(r.reached) ? r.backReason : null,
-    questions: r.state === 'paused' || r.state === 'complete' ? r.questions.map((q) => ({ ...q, choices: [...q.choices] })) : [],
+    // Every one of Claude's questions also offers "file an issue", last; an approval never does.
+    questions: r.state === 'paused' || r.state === 'complete'
+      ? r.questions.map((q) => ({ ...q, choices: [...q.choices.filter((c) => c !== FILE_AN_ISSUE), FILE_AN_ISSUE] }))
+      : [],
     approval: askingApproval && r.gate !== 'prep'
       ? { choices: [...APPROVAL_CHOICES[r.gate]], defaultChoice: APPROVAL_CHOICES[r.gate][0] }
       : null,

@@ -27,7 +27,6 @@ export const LABELS = [
 ];
 
 interface RepoSummary { full_name: string; pushed_at: string | null }
-interface RepoDetail { merge_commit_message?: string; squash_merge_commit_message?: string }
 
 export async function main(argv: string[], deps: Deps): Promise<number> {
   const out = deps.out ?? ((l) => console.log(l));
@@ -52,10 +51,6 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
             await deps.gh(['api', '-X', 'POST', `repos/${name}/labels`, '-f', `name=${label.name}`, '-f', `color=${label.color}`, '-f', `description=${label.description}`]);
             out(`${name}: created "${label.name}"`);
           }
-        }
-        const detail = JSON.parse(await deps.gh(['api', `repos/${name}`])) as RepoDetail;
-        if (detail.merge_commit_message === 'PR_BODY' || detail.squash_merge_commit_message === 'PR_BODY') {
-          out(`WARNING ${name}: merge commits copy the pull request description into history, so the status section would leak into commit messages. Change it in the repo's merge settings.`);
         }
       } catch (e) {
         failed = true;

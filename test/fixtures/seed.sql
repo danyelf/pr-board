@@ -18,7 +18,7 @@ VALUES (626, 'acme/torahmap', NULL, 626, 1, 'prep', 'complete', 'prep', 'Ready t
 -- #573 Pinned verses: paused in Implementation with one question. The question's text has HTML in it, to show it stays text.
 INSERT INTO work (id, repo, issue, pr, has_design, gate, state, reached, ask, questions, to_test, back_reason, approved, rounds, prep_sha, version, turn_since, written_at, confirmed_at, started_at)
 VALUES (573, 'acme/torahmap', NULL, 573, 1, 'implementation', 'paused', 'implementation', 'One thing to decide <script>alert(1)</script>',
-  '[{"n":1,"text":"Pin colour? <b>not bold</b>","choices":["gold","grey","file an issue"],"defaultChoice":"gold"}]', NULL, NULL,
+  '[{"n":1,"text":"Pin colour? <b>not bold</b>","choices":["gold","grey"],"defaultChoice":"gold"}]', NULL, NULL,
   '{"design":"2026-11-16T10:00:00.000Z"}', '{"design":1,"implementation":0,"prep":0}', NULL, 3,
   strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 minutes'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 minutes'), NULL,
   strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-4000 minutes'));
