@@ -19,7 +19,7 @@ const SHELL = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PR Board</title>
 <link rel="stylesheet" href="/app.css">
-<script src="/app.js" defer></script>
+<script type="module" src="/app.js"></script>
 </head>
 <body>
 <main id="board">Loading…</main>

@@ -132,7 +132,8 @@ describe('worker', () => {
     const page = await res.text();
     expect(page).toMatch(/<title>[^<]+<\/title>/);
     expect(page).toContain('<link rel="stylesheet" href="/app.css">');
-    expect(page).toContain('<script src="/app.js" defer></script>');
+    // A module script, so the page script's top-level names stay out of the browser's global scope.
+    expect(page).toContain('<script type="module" src="/app.js"></script>');
     expect(page).toContain('<main id="board">Loading…</main>');
   });
 

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { el } from '../src/page/el.ts';
-import { formProblem, initialForm, offersQuestions, toAnswer } from '../src/page/form.ts';
+import { afterRefusal, formProblem, initialForm, offersQuestions, toAnswer } from '../src/page/form.ts';
 import { plan } from '../src/page/merge.ts';
 import type { BoardView, CardView } from '../src/shared/view.ts';
 
@@ -154,6 +154,15 @@ describe('the answer form', () => {
     expect(formProblem(c, { ...initialForm(c), approval: 'needs changes' })).toMatch(/note/);
     expect(formProblem(c, { ...initialForm(c), approval: 'needs changes', note: 'redo it' })).toBeNull();
     expect(formProblem(c, initialForm(c))).toBeNull();
+  });
+
+  it('keeps the typed note after a refusal, but starts the choices afresh', () => {
+    const fresh = card({ version: 4, questions: [{ n: 1, text: 'New question?', choices: ['yes', 'no'], defaultChoice: 'no' }] });
+    expect(afterRefusal(fresh, 'please also fix the check')).toEqual({ choices: { '1': 'no' }, approval: null, note: 'please also fix the check', touched: true });
+  });
+
+  it('leaves the form untouched after a refusal when no note was typed', () => {
+    expect(afterRefusal(card(), '').touched).toBe(false);
   });
 
   it('asks for a note when there is nothing else to send', () => {

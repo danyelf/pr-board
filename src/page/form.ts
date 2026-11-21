@@ -32,6 +32,14 @@ export function initialForm(c: CardView): FormState {
   return { choices, approval: c.approval?.defaultChoice ?? null, note: '', touched: false };
 }
 
+/**
+ * The form for the fresh card the board sent back with a refusal. The typed note is kept, since it was the
+ * owner's own words; the choices start from the defaults again, because the questions may have changed.
+ */
+export function afterRefusal(fresh: CardView, typedNote: string): FormState {
+  return { ...initialForm(fresh), note: typedNote, touched: typedNote !== '' };
+}
+
 /** Why the form can't be sent as it stands, in words for the owner; null when it can. */
 export function formProblem(c: CardView, s: FormState): string | null {
   const offered = offersQuestions(c) && (c.questions.length > 0 || c.approval !== null);

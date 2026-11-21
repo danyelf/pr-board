@@ -2,7 +2,7 @@
 import type { BoardView, CardView } from '../shared/view.ts';
 import { arrange, clock, drawCard, showChanged, showError, showSending, type CardHandlers } from './draw.ts';
 import { el } from './el.ts';
-import { formProblem, initialForm, toAnswer, type FormState } from './form.ts';
+import { afterRefusal, formProblem, initialForm, toAnswer, type FormState } from './form.ts';
 import { plan } from './merge.ts';
 
 const REFRESH_MS = 30_000;
@@ -50,9 +50,8 @@ function touched(): Set<string> {
   return keys;
 }
 
-/** Draws the card afresh, with an untouched form, in place of whatever node it had. */
-function replaceCard(c: CardView): HTMLElement {
-  const s = initialForm(c);
+/** Draws the card afresh in place of whatever node it had, with the given form or an untouched one. */
+function replaceCard(c: CardView, s: FormState = initialForm(c)): HTMLElement {
   const node = drawCard(doc, c, s, handlers, new Date());
   nodes.get(c.key)?.replaceWith(node);
   nodes.set(c.key, node);
@@ -107,7 +106,7 @@ async function send(key: string): Promise<void> {
   }
   if (res.status === 409 && body?.card) {
     remember(body.card);
-    const fresh = replaceCard(body.card);
+    const fresh = replaceCard(body.card, afterRefusal(body.card, s.note));
     showError(fresh, body.error ?? 'The board refused this answer.');
     layout();
     return;
@@ -124,7 +123,6 @@ async function send(key: string): Promise<void> {
 
 // The page's fixed parts.
 const root = doc.getElementById('board')!;
-// Not named "status": the script is loaded as a classic script, where that name is the browser's own window.status.
 const statusLine = el(doc, 'p', { class: 'status', role: 'status' });
 const errors = el(doc, 'div', { class: 'errors', hidden: '' });
 const turnButton = el(doc, 'button', { type: 'button' }, 'By whose turn');
