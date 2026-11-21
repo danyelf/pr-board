@@ -1,101 +1,89 @@
 import { describe, expect, it } from 'vitest';
-import { LOOK_DEFAULT, WORKING_ASK, renderAnswer } from '../src/shared/answer.ts';
-import { statusFingerprint } from '../src/shared/fingerprint.ts';
-import { parseStatus, renderStatus } from '../src/shared/status.ts';
-import type { Status } from '../src/shared/types.ts';
+import { describe as describeAnswers } from '../cli/answers.ts';
 import type { Gh } from '../cli/gh.ts';
 import { main } from '../cli/watch-answers.ts';
-
-interface Comment { id: number; user: { login: string }; body: string; html_url: string; created_at: string; updated_at: string }
-interface Item { kind: 'pr' | 'issue'; body: string; comments: Comment[]; state: 'open' | 'closed'; lastEditedAt: string | null; createdAt: string }
+import type { AnswerRow, WorkRecord } from '../src/shared/work.ts';
 
 const POLL = 60_000;
 const COLLECT = 60_000;
 const MAX_BACKOFF = 300_000;
-/** When pr-status wrote the status; the World's clock starts after it. */
-const WRITTEN = '2026-11-08T10:00:00.000Z';
-const asking: Status = { waitingOn: 'owner', since: null, ask: 'look', questions: [{ n: 1, text: 'Colour?', choices: ['leave', 'change'], defaultChoice: 'leave' }], toTest: null, writtenAt: WRITTEN };
+
+function record(over: Partial<WorkRecord> = {}): WorkRecord {
+  return {
+    id: 1, repo: 'acme/x', issue: null, pr: 5, hasDesign: true, gate: 'implementation', state: 'complete', reached: 'implementation',
+    ask: 'Look it over', questions: [{ n: 1, text: 'Colour?', choices: ['leave', 'change'], defaultChoice: 'leave' }], toTest: 'open it',
+    backReason: null, approved: {}, rounds: { design: 1, implementation: 1, prep: 0 }, prepSha: null, version: 3,
+    turnSince: '2026-11-08T10:00:00Z', writtenAt: '2026-11-08T10:00:00Z', confirmedAt: null, startedAt: '2026-11-01T00:00:00Z', endedAt: null, endedHow: null,
+    ...over,
+  };
+}
+
+function answer(over: Partial<AnswerRow> = {}): AnswerRow {
+  return {
+    id: 10, workId: 1, version: 3, at: '2026-11-08T10:05:00Z', choices: { '1': 'change' }, approval: 'looks good, prep for merge', note: 'tint is strong\nbut fine',
+    claimedAt: null, claimedBy: null, stateBefore: 'complete', gaveUpAt: null, giveUpHint: null, ...over,
+  };
+}
+
+/** The board as the watcher sees it: records with answers, each answer claimed once. */
+class Board {
+  records: WorkRecord[] = [record()];
+  answers: AnswerRow[] = [];
+  /** Answers another session claims just before this one does. */
+  lostRace = new Set<number>();
+  failUnclaimed = 0;
+  sent: { method: string; path: string; body: unknown }[] = [];
+
+  find(repo: string, n: number): WorkRecord | undefined {
+    return this.records.find((r) => r.repo === repo && (r.pr === n || r.issue === n) && r.endedAt === null);
+  }
+
+  fetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    const path = url.pathname + url.search;
+    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
+    this.sent.push({ method: init?.method ?? 'GET', path, body });
+    const reply = (status: number, data: unknown) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+    if (url.pathname === '/api/unclaimed') {
+      if (this.failUnclaimed > 0) { this.failUnclaimed--; return reply(502, { error: 'Bad Gateway' }); }
+      const refs = (body!.refs as { repo: string; number: number }[]);
+      const found = new Map<number, { record: WorkRecord; answers: AnswerRow[] }>();
+      for (const ref of refs) {
+        const rec = this.find(ref.repo, ref.number);
+        if (!rec) continue;
+        const open = this.answers.filter((a) => a.workId === rec.id && a.claimedAt === null);
+        if (open.length > 0) found.set(rec.id, { record: rec, answers: open });
+      }
+      return reply(200, [...found.values()]);
+    }
+    if (url.pathname === '/api/claim') {
+      const rec = this.find(body!.repo as string, body!.number as number);
+      // The real board refuses a claim on an item with no open record.
+      if (!rec) return reply(409, { error: 'not open on the board' });
+      const mine = this.answers.filter((a) => a.workId === rec.id && a.claimedAt === null && !this.lostRace.has(a.id));
+      for (const a of this.answers) if (this.lostRace.has(a.id)) a.claimedAt = 'other';
+      for (const a of mine) { a.claimedAt = 'now'; a.claimedBy = body!.by as 'session'; }
+      return reply(200, { record: rec, answers: mine });
+    }
+    if (url.pathname === '/api/work') {
+      const rec = this.find(url.searchParams.get('repo')!, Number(url.searchParams.get('number')));
+      if (!rec) return reply(404, { error: 'not open on the board' });
+      return reply(200, { record: rec, answers: this.answers.filter((a) => a.workId === rec.id) });
+    }
+    return reply(404, { error: 'Not found' });
+  };
+}
 
 class World {
-  items = new Map<string, Item>();
-  reactions = new Map<number, string[]>();
+  board = new Board();
   me = 'robot';
-  /** Answers another session of the same account claims just before this one does. */
-  lostRace = new Set<number>();
-  failChecks = 0;
   failRepoLookups = 0;
-  /** Items GitHub can't find, as if deleted or mistyped. */
-  missing = new Set<string>();
-  nextId = 100;
-  /** Minutes after WRITTEN, moved on by each comment. */
-  clock = 1;
-  calls: string[] = [];
-  /** The items whose status was written, in order. */
-  statusWrites: string[] = [];
-
-  item(ref: string, kind: 'pr' | 'issue' = 'pr', status: Status = asking): Item {
-    const it: Item = { kind, body: renderStatus(status), comments: [], state: 'open', lastEditedAt: null, createdAt: '2026-11-01T00:00:00Z' };
-    this.items.set(ref, it);
-    return it;
-  }
-
-  answer(ref: string, answers: Record<string, string>, over: { login?: string; fingerprint?: string; note?: string; at?: string } = {}): number {
-    const id = this.nextId++;
-    const body = renderAnswer(asking, { fingerprint: over.fingerprint ?? statusFingerprint(asking), answers, note: over.note ?? '' });
-    const at = over.at ?? new Date(Date.parse(WRITTEN) + this.clock++ * 60_000).toISOString();
-    this.items.get(ref)!.comments.push({ id, user: { login: over.login ?? 'sam-gh' }, body, html_url: `https://github.com/${ref.replace('#', '/pull/')}#issuecomment-${id}`, created_at: at, updated_at: at });
-    return id;
-  }
-
   gh: Gh = async (args) => {
     const line = args.join(' ');
-    this.calls.push(line);
     if (line === 'api user -q .login') return `${this.me}\n`;
     if (line === 'repo view --json nameWithOwner -q .nameWithOwner') {
       if (this.failRepoLookups > 0) { this.failRepoLookups--; throw new Error('gh: could not reach GitHub'); }
       return 'acme/x\n';
-    }
-    if (args[0] === 'api' && args[1] === 'graphql') {
-      const value = (name: string) => args.find((a) => a.startsWith(`${name}=`))!.slice(name.length + 1);
-      const it = this.items.get(`${value('owner')}/${value('repo')}#${value('n')}`)!;
-      return `${JSON.stringify({ lastEditedAt: it.lastEditedAt, createdAt: it.createdAt })}\n`;
-    }
-    const comments = /^api repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments\?per_page=100 --paginate --slurp$/.exec(line);
-    if (comments) {
-      if (this.failChecks > 0) { this.failChecks--; throw new Error('gh: HTTP 502 Bad Gateway'); }
-      const item = this.items.get(`${comments[1]}#${comments[2]}`)!;
-      return JSON.stringify([item.comments.map((c) => ({ ...c, reactions: { total_count: (this.reactions.get(c.id) ?? []).length } }))]);
-    }
-    // Writing the status, as pr-status does: the PR's description, or a status comment on an issue.
-    const patchPr = /^api -X PATCH repos\/([^/]+\/[^/]+)\/pulls\/(\d+) -f body=([\s\S]*)$/.exec(line);
-    if (patchPr) {
-      this.items.get(`${patchPr[1]}#${patchPr[2]}`)!.body = patchPr[3]!;
-      this.statusWrites.push(`${patchPr[1]}#${patchPr[2]}`);
-      return '{}';
-    }
-    const postStatus = /^api -X POST repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments -f body=([\s\S]*)$/.exec(line);
-    if (postStatus) {
-      const at = new Date(Date.parse(WRITTEN) + this.clock++ * 60_000).toISOString();
-      this.items.get(`${postStatus[1]}#${postStatus[2]}`)!.comments.push({ id: this.nextId++, user: { login: this.me }, body: postStatus[3]!, html_url: 'x', created_at: at, updated_at: at });
-      this.statusWrites.push(`${postStatus[1]}#${postStatus[2]}`);
-      return '{}';
-    }
-    if (/^api -X DELETE repos\/[^/]+\/[^/]+\/issues\/\d+\/labels\/.+$/.test(line)) return '';
-    const item = /^api repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(line);
-    if (item) {
-      if (this.missing.has(`${item[1]}#${item[2]}`)) throw new Error('gh: HTTP 404 Not Found');
-      const it = this.items.get(`${item[1]}#${item[2]}`)!;
-      return JSON.stringify({ state: it.state, body: it.kind === 'pr' ? it.body : 'issue text', ...(it.kind === 'pr' ? { pull_request: {} } : {}) });
-    }
-    const list = /^api repos\/[^/]+\/[^/]+\/issues\/comments\/(\d+)\/reactions\?per_page=100 --paginate --slurp$/.exec(line);
-    if (list) return JSON.stringify([(this.reactions.get(Number(list[1])) ?? []).map((login) => ({ user: { login }, content: 'eyes' }))]);
-    const react = /^api -X POST repos\/[^/]+\/[^/]+\/issues\/comments\/(\d+)\/reactions -f content=eyes --include$/.exec(line);
-    if (react) {
-      const id = Number(react[1]);
-      const who = this.reactions.get(id) ?? [];
-      const already = who.includes(this.me) || this.lostRace.has(id);
-      if (!who.includes(this.me)) this.reactions.set(id, [...who, this.me]);
-      return already ? 'HTTP/2.0 200 OK\nContent-Type: application/json\n\n{}' : 'HTTP/2.0 201 Created\nContent-Type: application/json\n\n{}';
     }
     throw new Error(`unexpected gh call: ${line}`);
   };
@@ -110,229 +98,111 @@ async function watch(world: World, argv: string[], onSleep: (count: number, ms: 
     if (sleeps.length > 500) throw new Error('the watcher never stopped');
     onSleep(sleeps.length, ms);
   };
-  const code = await main(argv, { gh: world.gh, sleep, out: (l) => out.push(l), err: (l) => err.push(l) });
+  const board = { fetch: world.board.fetch, readFile: () => JSON.stringify({ clientId: 'id', clientSecret: 'secret' }), env: {}, home: '/home/x' };
+  const code = await main(argv, { gh: world.gh, board, sleep, out: (l) => out.push(l), err: (l) => err.push(l) });
   return { code, sleeps, out: out.join('\n'), err: err.join('\n') };
 }
 
 describe('watch-answers', () => {
-  it('checks once a minute until an answer comes, waits a minute more, claims it with 👀 and prints it', async () => {
+  it('checks once a minute until an answer comes, waits a minute more, claims it for the session and prints it', async () => {
     const w = new World();
-    w.item('acme/x#5');
-    let id = 0;
-    const r = await watch(w, ['acme/x#5'], (n) => { if (n === 3) id = w.answer('acme/x#5', { '1': 'change', look: LOOK_DEFAULT }, { note: 'tint is strong\nbut fine' }); });
+    const r = await watch(w, ['acme/x#5'], (n) => { if (n === 3) w.board.answers.push(answer()); });
     expect(r.code).toBe(0);
     expect(r.sleeps).toEqual([POLL, POLL, POLL, COLLECT]);
-    expect(w.reactions.get(id)).toEqual(['robot']);
-    expect(r.out).toContain(`acme/x#5: https://github.com/acme/x/pull/5#issuecomment-${id}`);
-    expect(r.out).toContain(`fingerprint ${statusFingerprint(asking)} matches the current status`);
+    expect(w.board.sent.find((s) => s.path === '/api/claim')?.body).toEqual({ repo: 'acme/x', number: 5, by: 'session' });
+    expect(w.board.answers[0]!.claimedBy).toBe('session');
+    expect(r.out).toContain('acme/x#5');
     expect(r.out).toContain('1. Colour? → change');
-    expect(r.out).toContain('How does it look? → looks good, prep for merge');
+    expect(r.out).toContain('looks good, prep for merge');
     expect(r.out).toContain('Note: tint is strong\n    but fine');
   });
 
-  it('sets each item it claimed an answer on to "Working on your answers", waiting on Claude, before it wakes the session', async () => {
+  it("doesn't exit when the claim comes back with no answers because another session got there first", async () => {
     const w = new World();
-    w.item('acme/x#5');
-    w.item('acme/y#7', 'issue');
-    w.answer('acme/x#5', { '1': 'change' });
-    w.answer('acme/x#5', { '1': 'leave' });
-    w.answer('acme/y#7', { '1': 'change' });
-    const r = await watch(w, ['acme/x#5', 'acme/y#7']);
-    expect(r.code).toBe(0);
-    expect(w.statusWrites).toEqual(['acme/x#5', 'acme/y#7']);
-    expect(parseStatus(w.items.get('acme/x#5')!.body)).toMatchObject({ waitingOn: 'claude', ask: WORKING_ASK, questions: [] });
-    const issueStatus = w.items.get('acme/y#7')!.comments.at(-1)!.body;
-    expect(parseStatus(issueStatus)).toMatchObject({ waitingOn: 'claude', ask: WORKING_ASK });
-    expect(r.out).toContain(`acme/x#5's status now says "${WORKING_ASK}"`);
-    // The answers are described from the status as it was when they were found, so the questions still read in full.
-    expect(r.out).toContain('1. Colour? → change');
-    expect(r.err).toBe('');
-  });
-
-  it('tells the session to set the status itself when it could not', async () => {
-    const w = new World();
-    w.item('acme/x#5');
-    w.answer('acme/x#5', { '1': 'change' });
-    const gh = w.gh;
-    w.gh = async (args, opts) => {
-      if (args.includes('PATCH')) throw new Error('gh: HTTP 403 Forbidden');
-      return gh(args, opts);
-    };
-    const r = await watch(w, ['acme/x#5']);
-    expect(r.code).toBe(0);
-    expect(r.err).toContain(`Couldn't set acme/x#5's status to "${WORKING_ASK}" (gh: HTTP 403 Forbidden); set it yourself before anything else.`);
-  });
-
-  it('passes over answers written before the status, and reads no reactions for them', async () => {
-    const w = new World();
-    w.item('acme/x#5');
-    const old = w.answer('acme/x#5', { '1': 'leave' }, { at: '2026-11-08T09:00:00Z' });
-    let fresh = 0;
-    const r = await watch(w, ['acme/x#5'], (n) => { if (n === 2) fresh = w.answer('acme/x#5', { '1': 'change' }); });
-    expect(r.code).toBe(0);
-    expect(r.out).not.toContain(`issuecomment-${old}`);
-    expect(r.out).toContain(`issuecomment-${fresh}`);
-    expect(w.calls.some((c) => c.includes(`comments/${old}/reactions`))).toBe(false);
-  });
-
-  it("times a status edited by hand by the PR's last description edit, and an issue's by its status comment", async () => {
-    const w = new World();
-    const pr = w.item('acme/x#5');
-    pr.body = pr.body.replace('**Ask:** look', '**Ask:** look again');
-    pr.lastEditedAt = '2026-11-08T10:30:00Z';
-    const beforeEdit = w.answer('acme/x#5', { '1': 'leave' }, { at: '2026-11-08T10:20:00Z' });
-    const issue = w.item('acme/y#7', 'issue');
-    issue.comments.push({ id: 1, user: { login: 'danyel-claude' }, body: renderStatus({ ...asking, writtenAt: undefined }), html_url: 'x', created_at: '2026-11-08T08:00:00Z', updated_at: '2026-11-08T10:30:00Z' });
-    const beforeStatus = w.answer('acme/y#7', { '1': 'leave' }, { at: '2026-11-08T10:25:00Z' });
-    const after = w.answer('acme/y#7', { '1': 'change' }, { at: '2026-11-08T10:40:00Z' });
-    const r = await watch(w, ['acme/x#5', 'acme/y#7']);
-    expect(r.out).not.toContain(`issuecomment-${beforeEdit}`);
-    expect(r.out).not.toContain(`issuecomment-${beforeStatus}`);
-    expect(r.out).toContain(`issuecomment-${after}`);
-  });
-
-  it('drops an item that is closed or merged, and stops, saying so, once none is left', async () => {
-    const w = new World();
-    const pr = w.item('acme/x#5');
-    w.item('acme/y#7', 'issue');
-    const r = await watch(w, ['acme/x#5', 'acme/y#7'], (n) => {
-      if (n === 1) pr.state = 'closed';
-      if (n === 3) w.items.get('acme/y#7')!.state = 'closed';
+    w.board.answers.push(answer());
+    w.board.lostRace.add(10);
+    let fresh = false;
+    const r = await watch(w, ['acme/x#5'], (n) => {
+      if (n === 4 && !fresh) { fresh = true; w.board.answers.push(answer({ id: 11, choices: { '1': 'leave' }, approval: null, note: '' })); }
     });
     expect(r.code).toBe(0);
-    expect(r.sleeps).toEqual([POLL, POLL, POLL]);
-    expect(r.out).toContain('acme/x#5 is closed or merged; no longer watching it.');
-    expect(r.out).toContain('acme/y#7 is closed or merged; no longer watching it.');
+    expect(r.sleeps).toEqual([COLLECT, POLL, POLL, POLL, COLLECT]);
+    expect(r.out).toContain('1. Colour? → leave');
+    expect(r.out).not.toContain('→ change');
+  });
+
+  it('keeps going through errors, waiting longer each time up to 5 minutes, and never exits because of them', async () => {
+    const w = new World();
+    w.board.answers.push(answer());
+    w.board.failUnclaimed = 6;
+    const r = await watch(w, ['acme/x#5']);
+    expect(r.code).toBe(0);
+    expect(r.sleeps).toEqual([120_000, 240_000, MAX_BACKOFF, MAX_BACKOFF, MAX_BACKOFF, MAX_BACKOFF, COLLECT]);
+    expect(r.err).toContain('502');
+    expect(r.err.split('\n').filter((l) => l.includes('trying again')).length).toBe(6);
+  });
+
+  it('goes back to the ordinary wait once a check works again', async () => {
+    const w = new World();
+    w.board.failUnclaimed = 2;
+    const r = await watch(w, ['acme/x#5'], (n) => { if (n === 4) w.board.answers.push(answer()); });
+    expect(r.sleeps).toEqual([120_000, 240_000, POLL, POLL, COLLECT]);
+  });
+
+  it('finds answers for an issue number after a PR was attached, since the board resolves it', async () => {
+    const w = new World();
+    w.board.records = [record({ issue: 3, pr: 9 })];
+    w.board.answers.push(answer());
+    const r = await watch(w, ['acme/x#3']);
+    expect(r.code).toBe(0);
+    expect(w.board.sent.find((s) => s.path === '/api/unclaimed')?.body).toEqual({ refs: [{ repo: 'acme/x', number: 3 }] });
+    expect(w.board.sent.find((s) => s.path === '/api/claim')?.body).toEqual({ repo: 'acme/x', number: 3, by: 'session' });
+    expect(r.out).toContain('1. Colour? → change');
+  });
+
+  it('stops, saying so, once every watched record has ended', async () => {
+    const w = new World();
+    w.board.records.push(record({ id: 2, repo: 'acme/y', pr: 7 }));
+    const r = await watch(w, ['acme/x#5', 'acme/y#7'], (n) => {
+      if (n === 1) w.board.records[0]!.endedAt = '2026-11-09T00:00:00Z';
+      if (n === 2) w.board.records[1]!.endedAt = '2026-11-09T00:00:00Z';
+    });
+    expect(r.code).toBe(0);
+    expect(r.sleeps).toEqual([POLL, POLL]);
+    expect(r.out).toContain('acme/x#5 has ended on the board; no longer watching it.');
     expect(r.out).toContain('nothing left to watch');
+  });
+
+  it('prints the answers it claimed when another watched item has ended, and stops watching that one', async () => {
+    const w = new World();
+    w.board.records.push(record({ id: 2, repo: 'acme/y', pr: 7, endedAt: '2026-11-09T00:00:00Z' }));
+    w.board.answers.push(answer());
+    const r = await watch(w, ['acme/x#5', 'acme/y#7']);
+    expect(r.code).toBe(0);
+    expect(r.sleeps).toEqual([COLLECT]);
+    expect(w.board.answers[0]!.claimedBy).toBe('session');
+    expect(r.out).toContain('acme/y#7 has ended on the board');
+    expect(r.out).toContain('1. Colour? → change');
   });
 
   it("works out a #N reference's repo inside the loop, so a passing failure is retried rather than fatal", async () => {
     const w = new World();
-    w.item('acme/x#5');
-    w.answer('acme/x#5', { '1': 'leave' });
+    w.board.answers.push(answer());
     w.failRepoLookups = 2;
     const r = await watch(w, ['#5']);
     expect(r.code).toBe(0);
     expect(r.sleeps).toEqual([120_000, 240_000, COLLECT]);
     expect(r.err).toContain('could not reach GitHub');
-    expect(r.out).toContain('acme/x#5: https://github.com/acme/x/pull/5#issuecomment-');
+    expect(r.out).toContain('acme/x#5');
   });
 
-  it("passes over answers already claimed, other people's comments, and comments not in the answer format", async () => {
-    const w = new World();
-    const item = w.item('acme/x#5');
-    const claimed = w.answer('acme/x#5', { '1': 'leave' });
-    w.reactions.set(claimed, ['other-bot']);
-    w.answer('acme/x#5', { '1': 'leave' }, { login: 'bob' });
-    item.comments.push({ id: 1, user: { login: 'sam-gh' }, body: 'Answers: 1 leave', html_url: 'x', created_at: '2026-11-08T11:00:00Z', updated_at: '2026-11-08T11:00:00Z' });
-    let fresh = 0;
-    const r = await watch(w, ['acme/x#5'], (n) => { if (n === 2) fresh = w.answer('acme/x#5', { '1': 'change' }); });
-    expect(r.code).toBe(0);
-    expect(r.sleeps).toEqual([POLL, POLL, COLLECT]);
-    expect(r.out).toContain(`issuecomment-${fresh}`);
-    expect(r.out).not.toContain(`issuecomment-${claimed}`);
-    expect(w.reactions.get(claimed)).toEqual(['other-bot']);
-  });
-
-  it("doesn't count the owner's own 👀 as a claim", async () => {
-    const w = new World();
-    w.item('acme/x#5');
-    const id = w.answer('acme/x#5', { '1': 'leave' });
-    w.reactions.set(id, ['sam-gh']);
-    const r = await watch(w, ['acme/x#5']);
-    expect(r.code).toBe(0);
-    expect(r.out).toContain(`issuecomment-${id}`);
-    expect(w.reactions.get(id)).toEqual(['sam-gh', 'robot']);
-  });
-
-  it('collects an answer on another item that comes in during the extra minute', async () => {
-    const w = new World();
-    w.item('acme/x#5');
-    w.item('acme/y#7', 'issue');
-    const first = w.answer('acme/x#5', { '1': 'leave' });
-    let second = 0;
-    const r = await watch(w, ['acme/x#5', 'acme/y#7'], (n, ms) => { if (n === 1 && ms === COLLECT) second = w.answer('acme/y#7', { '1': 'change' }); });
-    expect(r.code).toBe(0);
-    expect(r.out).toContain(`issuecomment-${first}`);
-    expect(r.out).toContain(`acme/y#7: https://github.com/acme/y/pull/7#issuecomment-${second}`);
-    expect(w.reactions.get(first)).toEqual(['robot']);
-    expect(w.reactions.get(second)).toEqual(['robot']);
-  });
-
-  it("says when an answer's fingerprint doesn't match the current status, and to ask again", async () => {
-    const w = new World();
-    w.item('acme/x#5');
-    w.answer('acme/x#5', { '1': 'change' }, { fingerprint: 'abcdef12' });
-    const r = await watch(w, ['acme/x#5']);
-    expect(r.code).toBe(0);
-    expect(r.out).toContain(`fingerprint abcdef12 does NOT match the current status (${statusFingerprint(asking)})`);
-    expect(r.out).toContain('ask again');
-    expect(r.out).toContain('1 → change');
-  });
-
-  it("skips an answer another session claimed first, and keeps watching", async () => {
-    const w = new World();
-    w.item('acme/x#5');
-    const lost = w.answer('acme/x#5', { '1': 'leave' });
-    w.lostRace.add(lost);
-    let fresh = 0;
-    const r = await watch(w, ['acme/x#5'], (n) => { if (n === 4) fresh = w.answer('acme/x#5', { '1': 'change' }); });
-    expect(r.code).toBe(0);
-    expect(r.out).not.toContain(`issuecomment-${lost}`);
-    expect(r.out).toContain(`issuecomment-${fresh}`);
-  });
-
-  it('keeps going through errors, waiting longer each time up to 5 minutes, and never exits because of them', async () => {
-    const w = new World();
-    w.item('acme/x#5');
-    w.answer('acme/x#5', { '1': 'leave' });
-    w.failChecks = 6;
-    const r = await watch(w, ['acme/x#5']);
-    expect(r.code).toBe(0);
-    expect(r.sleeps).toEqual([120_000, 240_000, MAX_BACKOFF, MAX_BACKOFF, MAX_BACKOFF, MAX_BACKOFF, COLLECT]);
-    expect(r.err).toContain('HTTP 502 Bad Gateway');
-    expect(r.err.split('\n').filter((l) => l.includes('trying again')).length).toBe(6);
-  });
-
-  it("keeps reading the other items when one can't be read, and says which", async () => {
-    const w = new World();
-    w.missing.add('acme/gone#3');
-    w.item('acme/x#5');
-    const id = w.answer('acme/x#5', { '1': 'leave' });
-    const r = await watch(w, ['acme/gone#3', 'acme/x#5']);
-    expect(r.code).toBe(0);
-    expect(r.sleeps).toEqual([COLLECT]);
-    expect(w.reactions.get(id)).toEqual(['robot']);
-    expect(r.err).toContain("Couldn't read acme/gone#3: gh: HTTP 404 Not Found");
-  });
-
-  it('keeps checking once a minute while one item stays unreadable and the others read fine', async () => {
-    const w = new World();
-    w.missing.add('acme/gone#3');
-    w.item('acme/x#5');
-    const r = await watch(w, ['acme/gone#3', 'acme/x#5'], (n) => { if (n === 3) w.answer('acme/x#5', { '1': 'leave' }); });
-    expect(r.code).toBe(0);
-    expect(r.sleeps).toEqual([POLL, POLL, POLL, COLLECT]);
-  });
-
-  it('goes back to the ordinary wait once a check works again', async () => {
-    const w = new World();
-    w.item('acme/x#5');
-    w.failChecks = 2;
-    const r = await watch(w, ['acme/x#5'], (n) => { if (n === 4) w.answer('acme/x#5', { '1': 'leave' }); });
-    expect(r.sleeps).toEqual([120_000, 240_000, POLL, POLL, COLLECT]);
-  });
-
-  it("refuses to start under the owner's own account, whose 👀 the board does not count", async () => {
+  it("refuses to start under the owner's own account, whose gh would look like nobody had picked the review up", async () => {
     const w = new World();
     w.me = 'sam-gh';
-    w.item('acme/x#5');
-    const id = w.answer('acme/x#5', { '1': 'leave' });
     const r = await watch(w, ['acme/x#5']);
     expect(r.code).toBe(1);
     expect(r.sleeps).toEqual([]);
     expect(r.err).toContain("gh is signed in as sam-gh, the board's owner");
-    expect(w.reactions.get(id)).toBeUndefined();
   });
 
   it('stops at once with the usage when it is given nothing to watch or a reference it cannot read', async () => {
@@ -343,5 +213,23 @@ describe('watch-answers', () => {
       expect(r.sleeps).toEqual([]);
     }
     expect((await watch(w, [])).err).toContain('Usage: watch-answers');
+  });
+});
+
+describe('describe', () => {
+  it('gives the item, each question with its choice, the approval and the indented note', () => {
+    const text = describeAnswers(record(), [answer()]);
+    expect(text).toBe([
+      'acme/x#5',
+      '  1. Colour? → change',
+      '  Approval: looks good, prep for merge',
+      '  Note: tint is strong',
+      '    but fine',
+    ].join('\n'));
+  });
+
+  it('names the issue when the work has no PR yet, and skips questions that got no choice', () => {
+    const text = describeAnswers(record({ pr: null, issue: 3 }), [answer({ choices: {}, approval: null, note: '' })]);
+    expect(text).toBe('acme/x#3');
   });
 });

@@ -1,1 +1,579 @@
-{"data":{"r0":{"pullRequests":{"nodes":[{"number":578,"title":"VIS: list the papers the picked authors or topics light","url":"https://github.com/danyelf/torahmap/pull/578","body":"Picking an author or topic lights their papers on the map, but you couldn't see them as a list or jump to one. Now a list of them appears under the picks, the way search lists its results:\n\n- one row per paper, in program order: the title, then the day, time and session;\n- a dot in each pick's colour, so a paper two picks share gets both;\n- a click pins the paper's first lit square and moves the map to it.\n\nThis holds for authors, keywords, cited people and cited works, which share the code. Of the three mockups, this was the one-list design.\n\n**How:**\n- The row is search's own, split out as `resultRow` (`packages/search/src/resultsList.ts`), so the two lists build rows the same way. The box style moved from `#search-results` to a shared `.results-list` class; search's box keeps its id and its panel sizing.\n- An overlay's controls now get the same `travelTo(id)` its focus panel already had (`renderControls`, `packages/shell/src/overlays/types.ts`). The tests that call `renderControls` pass a do-nothing `travelTo`.\n- The list reads the same names for each square that the map lights by (`namesAt` now takes a square id), so the list and the map can't disagree. That matters for the citation overlays, which light only the squares holding a work.\n\n**Desktop** (two authors picked; the panel scrolls the list):\n![vis-authors-panel--desktop](https://github.com/danyelf/torahmap/blob/4a4909c9cb3f5d6a0f5fcea5edd358aabf92a91e/vis-authors-panel--desktop.png?raw=true)\n\n**Phone** (the list is below the picks, in the sheet):\n![vis-authors-panel--phone](https://github.com/danyelf/torahmap/blob/4a4909c9cb3f5d6a0f5fcea5edd358aabf92a91e/vis-authors-panel--phone.png?raw=true)\n\n**To look:** on the preview, open the VIS map with `?overlay=authors&authors=Jeffrey Heer,Hyeok Kim`, click a paper in the list, and try Cited works the same way. This branch starts from main, so until #576 is merged a paper with no text still lights only its abstract square.\n\nCloses #577\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n","isDraft":false,"createdAt":"2026-11-05T22:53:49Z","closedAt":"2026-11-06T00:26:11Z","merged":true,"mergedAt":"2026-11-06T00:26:11Z","mergeStateStatus":"UNKNOWN","headRefName":"vis-paper-list","baseRefName":"main","labels":{"nodes":[]},"closingIssuesReferences":{"nodes":[{"number":577,"repository":{"nameWithOwner":"danyelf/torahmap"}}]},"files":{"nodes":[{"path":"apps/euaiact/test/search.test.ts","changeType":"MODIFIED"},{"path":"apps/ieeevis/src/overlays/citations.ts","changeType":"MODIFIED"},{"path":"apps/ieeevis/src/overlays/citedPeople.ts","changeType":"MODIFIED"},{"path":"apps/ieeevis/src/overlays/citedWorks.ts","changeType":"MODIFIED"},{"path":"apps/ieeevis/src/overlays/listOverlay.ts","changeType":"MODIFIED"},{"path":"apps/ieeevis/src/overlays/listPicks.ts","changeType":"MODIFIED"},{"path":"apps/ieeevis/test/citations.test.ts","changeType":"MODIFIED"},{"path":"apps/ieeevis/test/listOverlay.test.ts","changeType":"MODIFIED"},{"path":"apps/talmud/src/overlays/rabbiPicks.ts","changeType":"MODIFIED"},{"path":"apps/talmud/src/overlays/rabbis.ts","changeType":"MODIFIED"},{"path":"apps/talmud/test/rabbis.test.ts","changeType":"MODIFIED"},{"path":"apps/talmud/test/search.test.ts","changeType":"MODIFIED"},{"path":"apps/tanakh/test/helpers/overlayHost.ts","changeType":"MODIFIED"},{"path":"apps/tanakh/test/unit/overlays/commentary.test.ts","changeType":"MODIFIED"},{"path":"apps/tanakh/test/unit/overlays/haftarah.test.ts","changeType":"MODIFIED"},{"path":"apps/tanakh/test/unit/overlays/search-requote.test.ts","changeType":"MODIFIED"},{"path":"apps/tanakh/test/unit/overlays/search.test.ts","changeType":"MODIFIED"},{"path":"apps/tanakh/test/unit/overlays/trop.test.ts","changeType":"MODIFIED"},{"path":"packages/search/src/resultsList.ts","changeType":"MODIFIED"},{"path":"packages/search/src/search.css","changeType":"MODIFIED"},{"path":"packages/search/src/termSearch.ts","changeType":"MODIFIED"},{"path":"packages/search/test/resultsList.test.ts","changeType":"ADDED"},{"path":"packages/search/test/termSearch.test.ts","changeType":"MODIFIED"},{"path":"packages/shell/src/main.ts","changeType":"MODIFIED"},{"path":"packages/shell/src/overlays/types.ts","changeType":"MODIFIED"},{"path":"test-harness/main.ts","changeType":"MODIFIED"},{"path":"test/overlay-switching.test.ts","changeType":"MODIFIED"},{"path":"test/url-state-sync.test.ts","changeType":"MODIFIED"},{"path":"test/view-state-restore.test.ts","changeType":"MODIFIED"}]},"commits":{"nodes":[{"commit":{"oid":"8ef2998b9c92d4dc308136eb341b5b73207014ca","committedDate":"2026-11-05T23:37:32Z"}},{"commit":{"oid":"629776d7b9dbd3280955e2636a0ec02afb123f03","committedDate":"2026-11-05T23:37:32Z"}},{"commit":{"oid":"1c7b1024638b223f94dc428e3ad3df333a126075","committedDate":"2026-11-05T23:37:32Z"}},{"commit":{"oid":"89c37c635b1458d3032b6faa10a536120e6cd17c","committedDate":"2026-11-05T23:53:42Z"}},{"commit":{"oid":"f96d3ae1916eae7b2e0a3a4505a3511279e5d1fb","committedDate":"2026-11-06T00:19:40Z"}}]},"comments":{"nodes":[{"author":{"login":"danyel-claude"},"body":"Reviewed up to `60c80cc9`\n\n🤖 Claude: a fresh reviewer that hadn't seen the discussion read the branch. What it found, and what became of each:\n\n- **In the citation overlays, a click went to the paper's first square, which is usually unlit there:** fixed in `d34d9464`. A click now goes to the first lit square, with a test.\n- **The list read per-paper names while the map reads per-square names, agreeing only because of today's data:** fixed in `d34d9464`. The list is built from the squares the map lights.\n- **On a phone the list scrolled inside the panel's own scroll:** fixed in `d34d9464`. The list has no height limit, so the panel scrolls it.\n- **\"N papers\" was written in two places:** fixed in `d34d9464`; it's one helper now.\n- **No test for a citation overlay's list:** added in `d34d9464`.\n- **Typing keeps the find box's focus; moving the style to a class changes nothing for search; `travelTo` beside search's own click handler is not a real duplication:** checked, no change.\n- **`paperList` walks days and sessions again, and builds its heading the way `drawFinder` does:** kept. It needs the session name, and the heading is three lines.\n","url":"https://github.com/danyelf/torahmap/pull/578#issuecomment-6671656827","createdAt":"2026-11-05T22:53:57Z","updatedAt":"2026-11-05T22:53:57Z"},{"author":{"login":"cloudflare-workers-and-pages"},"body":"## Deploying with &nbsp;<a href=\"https://workers.dev\"><img alt=\"Cloudflare Workers\" src=\"https://workers.cloudflare.com/logo.svg\" width=\"16\"></a> &nbsp;Cloudflare Workers\nThe latest updates on your project. Learn more about [integrating Git with Workers](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/).\n\n| Status | Name | Latest Commit | Preview URL | Updated (UTC) |\n| -|-|-|-|-|\n| ✅ Deployment successful! <br>[View logs](https://dash.cloudflare.com/?to=/d2e7ed98d0671c75c0e9304ea281579b/workers/services/view/torahmap/production/builds/3ae01808-8a79-4cbf-8f24-3ba0b25816c7) | torahmap | f96d3ae1 | <a href='https://36b216b0-torahmap.danyel.workers.dev'>Commit Preview URL</a><br><br><a href='https://vis-paper-list-torahmap.danyel.workers.dev'>Branch Preview URL</a> | Nov 06 2026, 12:20 AM |","url":"https://github.com/danyelf/torahmap/pull/578#issuecomment-6671737878","createdAt":"2026-11-05T22:58:44Z","updatedAt":"2026-11-06T00:21:54Z"},{"author":{"login":"danyel-claude"},"body":"Reviewed up to `629776d`\n\n🤖 Claude: prep for merge. Two fresh reviewers, one for duplication and one for bugs, read the branch's own commits. It is now rebased onto main after #576.\n\n- **Bugs:** none. It checked a click while a story has the map, a click from a full-height phone sheet, the citations overlay passing `travelTo` along, the search row split, and every caller of the changed `namesAt`.\n- **A pick that lights no square drew \"0 papers\" over an empty box:** fixed in `1c7b102`; no list then.\n- **\"Which picks light this square\" was written out in five places:** fixed in `1c7b102`; it's one helper, `litBy`.\n- **The style comment restated its rule:** shortened in `1c7b102`.\n- **`paperList` walks days and sessions itself instead of using `papersOf`:** kept, because it needs each paper's session name.\n- **The list and the map each work out the lit squares:** kept. The cost is small, and caching it isn't worth the extra code.\n\nUnit tests (3,211) and browser tests (509) pass on the code combined with #576.\n","url":"https://github.com/danyelf/torahmap/pull/578#issuecomment-6672430498","createdAt":"2026-11-05T23:39:09Z","updatedAt":"2026-11-05T23:39:09Z"}]},"timelineItems":{"nodes":[]},"lastEditedAt":null,"isCrossRepository":false},{"number":574,"title":"One rule for the popup when the pin changes (createApp restructure, hover and pin)","url":"https://github.com/danyelf/torahmap/pull/574","body":"Refs #558. Stacked on #573; merge that first, and this PR's base becomes main.\n\n**The problem.** Four places change the pinned verse: a reader's pin, a reader's unpin, a story stop, and a link or Back. Each fixed up the popup its own way. `pinItem` drew the pin, `unpinItem` hid the popup, a story stop hid it only if the stop dropped a pin, and a link hid it whenever the link named no verse. A fresh audit of hover, pin and focus (the next option in #558) found those differences accidental, not deliberate.\n\n**What the audit concluded.** One function owning hover, pin and focus together isn't worth it. What follows a pin depends on who asked (taking the map from the story, telemetry, the URL, centring the camera), not just on what changed. A single `setFocus` would end up needing three kinds of caller and ordering rules, which moves the logic rather than removing it. The useful step turned out smaller still: one rule for the popup.\n\n**The change** (`packages/shell/src/main.ts`):\n- `showPin()` draws the popup once the pin changes: the pinned verse, else the hovered verse as a hover, else nothing. `pinItem`, `unpinItem`, the story stop and the link restore call it instead of their own fix-ups.\n- `refreshPopup` is unchanged. It redraws what the popup shows and never hides it, because a hovered verse's popup stays up after the mouse leaves the map, so its words can be clicked.\n- The story frame's write of the verse under a still mouse becomes `followPointer()`.\n\n**The one visible difference.** With a mouse, unpinning a verse while the pointer rests on it (by Escape, or by clicking the pinned verse) now leaves that verse in the popup as an ordinary hover. Before, the popup disappeared until the mouse moved. The same holds after a story stop that drops its pin, or a link with no verse, while the mouse is over the map. Touch is unaffected: a touch never sets a hover.\n\n**Left alone, for Danyel to decide:**\n- While a story scrolls under a still mouse, the popup and the overlay's focus don't follow the verse now under the pointer (they do follow a moving mouse).\n- The arrow-key step doesn't stop a camera glide still running from a search result click, so the glide could carry the camera off the stepped-to verse. That's from reading the code; untried.\n\n**Checks.**\n- Unit tests: 3,206 passed.\n- Two new layout tests:\n  - \"unpinning a verse under the pointer leaves it in the popup, as a hover\" fails on main, where the popup hides.\n  - \"a word searched from a hovered verse's popup leaves the popup up\" guards the case the first version broke.\n- Layout suite: 513 passed. Loading suite: 51 passed, run by hand.\n\n**To look at on the preview:** pin a verse, leave the mouse on it, press Escape. The popup should stay up, unpinned. Then hover a verse, move onto its popup, and click a word to search it: the popup should stay.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n","isDraft":false,"createdAt":"2026-11-04T07:23:56Z","closedAt":"2026-11-06T00:08:45Z","merged":true,"mergedAt":"2026-11-06T00:08:44Z","mergeStateStatus":"UNKNOWN","headRefName":"one-pin-setter","baseRefName":"main","labels":{"nodes":[]},"closingIssuesReferences":{"nodes":[]},"files":{"nodes":[{"path":"packages/shell/src/main.ts","changeType":"MODIFIED"},{"path":"test/layout/tanakh.spec.ts","changeType":"MODIFIED"}]},"commits":{"nodes":[{"commit":{"oid":"48a02b9f8eafe3b4b404c0a97ea19cbe979f6807","committedDate":"2026-11-06T00:02:46Z"}},{"commit":{"oid":"55693c04e350d8f4ff551c58014307b8bca13398","committedDate":"2026-11-06T00:02:46Z"}}]},"comments":{"nodes":[{"author":{"login":"cloudflare-workers-and-pages"},"body":"## Deploying with &nbsp;<a href=\"https://workers.dev\"><img alt=\"Cloudflare Workers\" src=\"https://workers.cloudflare.com/logo.svg\" width=\"16\"></a> &nbsp;Cloudflare Workers\nThe latest updates on your project. Learn more about [integrating Git with Workers](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/).\n\n| Status | Name | Latest Commit | Preview URL | Updated (UTC) |\n| -|-|-|-|-|\n| ✅ Deployment successful! <br>[View logs](https://dash.cloudflare.com/?to=/d2e7ed98d0671c75c0e9304ea281579b/workers/services/view/torahmap/production/builds/17dcaed5-9b51-43d9-9f59-a3199a029ed8) | torahmap | 3ff60a8c | <a href='https://a0bf6594-torahmap.danyel.workers.dev'>Commit Preview URL</a><br><br><a href='https://one-pin-setter-torahmap.danyel.workers.dev'>Branch Preview URL</a> | Nov 04 2026, 07:32 AM |","url":"https://github.com/danyelf/torahmap/pull/574#issuecomment-6625162650","createdAt":"2026-11-04T07:24:42Z","updatedAt":"2026-11-04T07:32:38Z"},{"author":{"login":"danyel-claude"},"body":"Reviewed up to `6202b139`\n\n🤖 Claude: two fresh reviews, one for duplication and one for bugs. Fixes are in `3ff60a8c`. Unit tests 3,206 passed; layout suite 513 passed; loading suite 51 passed.\n\nBugs:\n- Letting `refreshPopup` hide the popup when nothing is pinned or hovered closed a hovered verse's popup after the mouse left the map, for example under the click on one of its words that starts a search — fixed: `refreshPopup` is back as it was, and the rule for after a pin change is a separate `showPin`. New test: \"a word searched from a hovered verse's popup leaves the popup up\", which failed on the reviewed version.\n- A story stop that drops its pin can show the verse under the mouse from before the map moved — left: the tools' redraw in the same step already did this whenever no pin was set; `followPointer` catches up on the next frame.\n- The popup was drawn twice when a link or stop changed the pin — fixed: the story stop and the link call `showPin` only when they drop the pin, after the tools' redraw has drawn a new one.\n- Pinning the already-pinned verse no longer redrew the popup — gone with `setPin`: every pin redraws, as before.\n\nDuplication:\n- `setPin` drew the popup and then `setTools` drew it again — fixed by dropping `setPin` (above).\n- The hover handler's `if (!pinnedItem) updateSidebarWrapper(square)` looks like the popup rule — left: it hides the popup on a gap between verses, which `refreshPopup` deliberately never does.\n- `followPointer` is outside the pin change — kept: it is the hover half of the same audit, and one function with a one-line comment.\n- Comments on `setPin` and `followPointer` restated the code — fixed: `setPin` is gone and `followPointer`'s comment is one line.\n","url":"https://github.com/danyelf/torahmap/pull/574#issuecomment-6625282681","createdAt":"2026-11-04T07:31:31Z","updatedAt":"2026-11-04T07:31:31Z"},{"author":{"login":"danyel-claude"},"body":"Reviewed up to `55693c0`\n\n🤖 Claude: rebased onto main after #573 merged, with no conflicts and no change to its own two commits. Typecheck and unit tests (3,208) pass, and so do the browser tests (513).","url":"https://github.com/danyelf/torahmap/pull/574#issuecomment-6672867483","createdAt":"2026-11-06T00:06:06Z","updatedAt":"2026-11-06T00:06:06Z"}]},"timelineItems":{"nodes":[]},"lastEditedAt":null,"isCrossRepository":false},{"number":573,"title":"Rebuild a tool panel on a link or a stop only when its tool changed","url":"https://github.com/danyelf/torahmap/pull/573","body":"Closes #569\n\n**The problem.** Opening a link, pressing Back, or reaching a story stop cleared both tool panels and built them again from scratch, even when the link named the same tools, for example when Back only pinned a verse again. A rebuild loses the panel's focus and scroll position, and sends the search's `replaced` telemetry, so that event counted redraws rather than a search being replaced.\n\n**The change.**\n- `toolsChange` (`packages/shell/src/tools.ts`) also says, for each tool, whether what a link names of it changed (`linked`), comparing the parameters each state would write.\n- `setTools` (`packages/shell/src/main.ts`) still takes the tools a link or a stop builds, exactly as before, and redraws both panels with them. A panel is cleared and rebuilt only when its overlay switched or the link names its tool anew; otherwise it is redrawn into what is there, as a reader's own edit is. `replaced` now fires only on a rebuild.\n- The overlay panel is drawn once at startup, after the story column exists, because None's starting points list the stories. That used to happen as a side effect of every link and stop.\n- The tools plan is marked done, with step 3 (typing overlay ids and settings per text) dropped.\n\nA first version kept the held settings whenever a link wrote the same ones. Review showed that keeps what a link does not carry: a Haftarah story stop's `reading`, a hover preview, and colours a new search could then share with an overlay. So the tools are always rebuilt, and only the panel's redraw changes.\n\n**Checks.**\n- Unit tests: 3,206 passed, including one for `linked`.\n- A new layout test pins a verse, unpins it with Escape, presses Back, and checks both panels' controls are the same elements as before. It fails without the change.\n- Layout suite: 510 passed. Loading suite: 51 passed, run by hand.\n\n**To look at on the preview:** search for a word, open the search panel, pin a verse, press Escape, then Back. The panel should stay put rather than flash or scroll back to the top. Story scrolling, especially through the Haftarah story, should look the same as before.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n","isDraft":false,"createdAt":"2026-11-04T06:59:48Z","closedAt":"2026-11-06T00:01:31Z","merged":true,"mergedAt":"2026-11-06T00:01:31Z","mergeStateStatus":"UNKNOWN","headRefName":"panels-unchanged","baseRefName":"main","labels":{"nodes":[]},"closingIssuesReferences":{"nodes":[{"number":569,"repository":{"nameWithOwner":"danyelf/torahmap"}}]},"files":{"nodes":[{"path":"docs/plans/2026-11-02-tool-state-value.md","changeType":"MODIFIED"},{"path":"packages/shell/src/main.ts","changeType":"MODIFIED"},{"path":"packages/shell/src/tools.ts","changeType":"MODIFIED"},{"path":"packages/shell/test/tools.test.ts","changeType":"MODIFIED"},{"path":"test/layout/tanakh-analytics.spec.ts","changeType":"MODIFIED"},{"path":"test/layout/tanakh.spec.ts","changeType":"MODIFIED"}]},"commits":{"nodes":[{"commit":{"oid":"20513b2f337ff87acc027c4c688de2a91eb88904","committedDate":"2026-11-04T06:59:22Z"}},{"commit":{"oid":"bd27521281c75e47e8810739023539182d4200ab","committedDate":"2026-11-04T07:07:34Z"}},{"commit":{"oid":"b59b43fb9823322d1fd0acc880f60b1bf29f74f1","committedDate":"2026-11-04T07:18:42Z"}}]},"comments":{"nodes":[{"author":{"login":"cloudflare-workers-and-pages"},"body":"## Deploying with &nbsp;<a href=\"https://workers.dev\"><img alt=\"Cloudflare Workers\" src=\"https://workers.cloudflare.com/logo.svg\" width=\"16\"></a> &nbsp;Cloudflare Workers\nThe latest updates on your project. Learn more about [integrating Git with Workers](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/).\n\n| Status | Name | Latest Commit | Preview URL | Updated (UTC) |\n| -|-|-|-|-|\n| ✅ Deployment successful! <br>[View logs](https://dash.cloudflare.com/?to=/d2e7ed98d0671c75c0e9304ea281579b/workers/services/view/torahmap/production/builds/f49c36ec-bae3-4aeb-aa83-5650f4c45da7) | torahmap | b59b43fb | <a href='https://a799b570-torahmap.danyel.workers.dev'>Commit Preview URL</a><br><br><a href='https://panels-unchanged-torahmap.danyel.workers.dev'>Branch Preview URL</a> | Nov 04 2026, 07:19 AM |","url":"https://github.com/danyelf/torahmap/pull/573#issuecomment-6624760813","createdAt":"2026-11-04T07:00:32Z","updatedAt":"2026-11-04T07:20:12Z"},{"author":{"login":"danyel-claude"},"body":"Reviewed up to `bd275212`\n\n🤖 Claude: three fresh reviews in all: duplication and bugs on the first version (`20513b2f`), then bugs again on the rework (`bd275212`). Fixes are in `bd275212` and `b59b43fb`. Unit tests 3,206 passed; layout suite 510 passed (plus `explore-link-copied`, the #570 flake, which passed alone on a rerun); loading suite 51 passed.\n\nFirst version, bugs:\n- Keeping held settings when a link wrote the same ones kept what a link doesn't carry: a Haftarah story stop's `reading`, so the popup and focus lagged a stop behind — fixed by the rework: links rebuild the tools as on main, and only the panel's redraw depends on what the link names.\n- Back or Forward could give a held overlay the same colour as a rebuilt search — fixed by the same rework.\n- A hover preview survived a link; search word colours could disagree with the story's picture — fixed by the same rework.\n- The search's files were no longer fetched again on every link — fixed: a link always rebuilds the search, so they are.\n\nFirst version, duplication: the hand-rolled comparison, the repeated `has` test, the unbraced `else`, a test repeating others, long comments — all went with the rework.\n\nRework, bugs:\n- `replaced` was skipped when a link named the same words; it tracks words by id, and a link always makes new ids, so the link's words were later sent as the reader's — fixed in `b59b43fb`: `setTools` calls it for every link's search, beside `readerChanged`. New test: \"a linked search Back brings again is never recorded either\", which failed before the fix.\n- `toolsChange` wrote each state's link twice — fixed: once each.\n- The `setTools` and `drawOverlayPanel` comments described the old rule — fixed.\n- The search and every overlay's controls redraw correctly into what is there from a link's settings; skipping the search's `destroy()` leaves nothing open — checked, no change.\n- In the IEEE VIS and Talmud pick finders, a half-typed query stays in the box after Back — left: the suggestions are recomputed, and keeping what the reader typed is the point of this change.\n","url":"https://github.com/danyelf/torahmap/pull/573#issuecomment-6625073329","createdAt":"2026-11-04T07:19:12Z","updatedAt":"2026-11-04T07:19:12Z"}]},"timelineItems":{"nodes":[]},"lastEditedAt":null,"isCrossRepository":false},{"number":576,"title":"VIS: a paper with no text lights in full, a little dimmer","url":"https://github.com/danyelf/torahmap/pull/576","body":"A friend looked up Jeffrey Heer under **Authors**. The card says 4 papers, but only three showed, and one of those lit a single square.\n\nThe other two are papers with no full text: the VISxAI interactive article (Mon 13:00) and \"Crossing the Chasm\" (Thu 13:24, in *From design spaces to visual design*). Their squares stand in for text we don't have, and each carries a thin grey ring. A ring is a fixed number of screen pixels wide, so on a small square it covers the whole square and hides the colour the overlay gives it. Crossing the Chasm showed only its abstract square, which has no ring; the VISxAI article showed nothing.\n\nTwo changes:\n\n- A square an overlay makes stand out gets no ring (`fillDefaultColors`, `packages/shell/src/itemColoring.ts`). Unlit squares keep their rings.\n- So a lit paper with no text still reads as missing, its stand-in squares keep 60% of the pick's colour (`PLACEHOLDER_KEEPS`, `apps/ieeevis/src/overlays/listOverlay.ts`). A real abstract stays full strength. This holds for authors, keywords and the two citation overlays, which share that code.\n\n**Before:** in the right-hand column, *From design spaces to visual design* lights one square.\n![heer-before](https://github.com/danyelf/torahmap/blob/399648119b14bbb57eb1c9754090bf27419b9e50/heer-before.png?raw=true)\n\n**After:** all four papers light. The two with no text, Monday's at the bottom left and Thursday's, are dimmer than the two on Tuesday.\n![heer-dimmed](https://github.com/danyelf/torahmap/blob/399648119b14bbb57eb1c9754090bf27419b9e50/heer-dimmed.png?raw=true)\n\nThe strengths compared, 45% on top, 60% (chosen) in the middle and 75% at the bottom. Left is Monday's paper with no text, middle is a Tuesday paper with full text, and right is Crossing the Chasm, whose abstract square stays bright.\n![dim-compare](https://github.com/danyelf/torahmap/blob/399648119b14bbb57eb1c9754090bf27419b9e50/dim-compare.png?raw=true)\n\n**To look:** on the preview, open the VIS map with `?overlay=authors&authors=Jeffrey Heer`.\n\nCloses #575\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n","isDraft":false,"createdAt":"2026-11-05T22:07:05Z","closedAt":"2026-11-05T23:37:08Z","merged":true,"mergedAt":"2026-11-05T23:37:08Z","mergeStateStatus":"UNKNOWN","headRefName":"vis-author-papers","baseRefName":"main","labels":{"nodes":[]},"closingIssuesReferences":{"nodes":[{"number":575,"repository":{"nameWithOwner":"danyelf/torahmap"}}]},"files":{"nodes":[{"path":"apps/ieeevis/src/overlays/listOverlay.ts","changeType":"MODIFIED"},{"path":"apps/ieeevis/test/listOverlay.test.ts","changeType":"MODIFIED"},{"path":"packages/shell/src/app/text.ts","changeType":"MODIFIED"},{"path":"packages/shell/src/itemColoring.ts","changeType":"MODIFIED"},{"path":"test/combineLayers.test.ts","changeType":"MODIFIED"}]},"commits":{"nodes":[{"commit":{"oid":"0c99799b180d10e5f95cb1c72b78943b4684576e","committedDate":"2026-11-05T22:06:15Z"}},{"commit":{"oid":"33645ec4feb47c8839c958a3d453b99ed381fe53","committedDate":"2026-11-05T22:42:34Z"}},{"commit":{"oid":"2be994ec7b904af9f50cc4a905634a3bf4c9bed4","committedDate":"2026-11-05T23:27:51Z"}}]},"comments":{"nodes":[{"author":{"login":"danyel-claude"},"body":"Reviewed up to `0c99799b`\n\n🤖 Claude: a fresh reviewer that hadn't seen the discussion read it for correctness and for duplication. It found nothing to fix.\n\n- **Every caller and every overlay that lights squares (Talmud hadran ring, VIS stand-in squares, search, the cross-fade):** correct. In a cross-fade a square counts as lit if either side lights it, so no ring flickers. Kept as is.\n- **The comment \"a small square is all ring\" might be unmeasured:** it holds. The ring is a fixed width in screen pixels (`u_ring.x / u_zoom`, `webgl.ts:96`), and a square smaller on screen than `u_ring.z` has no hole, so it is drawn entirely in the ring colour (`webgl.ts:121`). Kept.\n","url":"https://github.com/danyelf/torahmap/pull/576#issuecomment-6670815491","createdAt":"2026-11-05T22:08:30Z","updatedAt":"2026-11-05T22:08:30Z"},{"author":{"login":"cloudflare-workers-and-pages"},"body":"## Deploying with &nbsp;<a href=\"https://workers.dev\"><img alt=\"Cloudflare Workers\" src=\"https://workers.cloudflare.com/logo.svg\" width=\"16\"></a> &nbsp;Cloudflare Workers\nThe latest updates on your project. Learn more about [integrating Git with Workers](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/).\n\n| Status | Name | Latest Commit | Preview URL | Updated (UTC) |\n| -|-|-|-|-|\n| ✅ Deployment successful! <br>[View logs](https://dash.cloudflare.com/?to=/d2e7ed98d0671c75c0e9304ea281579b/workers/services/view/torahmap/production/builds/976a97c4-dbf1-41b5-b767-5dcd3c95996a) | torahmap | 2be994ec | <a href='https://4f9514b4-torahmap.danyel.workers.dev'>Commit Preview URL</a><br><br><a href='https://vis-author-papers-torahmap.danyel.workers.dev'>Branch Preview URL</a> | Nov 05 2026, 11:29 PM |","url":"https://github.com/danyelf/torahmap/pull/576#issuecomment-6670875470","createdAt":"2026-11-05T22:11:39Z","updatedAt":"2026-11-05T23:29:14Z"},{"author":{"login":"danyel-claude"},"body":"Reviewed up to `33645ec`\n\n🤖 Claude: prep for merge. Two fresh reviewers, one for duplication and one for bugs, read the whole branch.\n\n- **Bugs:** none. It traced search together with an overlay, the story's cross-fade, the Talmud's base ring, split colours, the hover and pin, and the citation overlays.\n- **Duplication:** none. The two \"keeps\" constants mean different things, and `isPlaceholder` is reused rather than written again.\n- **The comment on a standout's base ring was wordy:** shortened in `2be994ec`.\n- **The comment on `PLACEHOLDER_KEEPS` could drop its reason:** kept, because the reason is what a reader needs.\n\nUp to date with main. Unit tests pass, and the browser tests passed (509) at `33645ec`; `2be994ec` changes only a comment.\n","url":"https://github.com/danyelf/torahmap/pull/576#issuecomment-6672209574","createdAt":"2026-11-05T23:28:14Z","updatedAt":"2026-11-05T23:28:14Z"}]},"timelineItems":{"nodes":[]},"lastEditedAt":null,"isCrossRepository":false},{"number":564,"title":"Code map: a SeeSoft-style map of a pull request","url":"https://github.com/danyelf/torahmap/pull/564","body":"A map of this repo in the manner of SeeSoft: every line of code is a bar in a fixed place, shaped by its indent and length. It is coloured by what this pull request did to each line, by churn, by line type, or by file type. Every folder is a box, at every depth, and every file sits on a faint shade with its name above it. It answers \"1,200 lines changed in 53 files — *which* 53?\" at a glance. Preview only: the live site does not build it.\n\n**Look at it:** https://codemap-design-torahmap.danyel.workers.dev/codemap/\n\n- **☰ → Overlay → Pull request.** Green is added, amber changed, red where lines were removed. `apps/codemap` and `scripts/codemap` should be all green. The ‹ › buttons step through the commits one at a time.\n- **Churn:** when each line last changed, or how many times, over the whole history.\n- **Line type:** blank, comment, import, function or class opening, code.\n- **File type:** code, prose, scripts, styles and pages, data and settings, by the file’s ending.\n- **Folders and files.** Folder names keep their size on screen: outer folders first, deeper ones as you zoom in. File names show once you zoom in far enough for them to fit above their file. A file wraps into a new column every 200 lines.\n- **Pan and zoom.** At about 139,000 lines this is the biggest map the engine has drawn, more than the Talmud's 81,793 squares. Smoothness has not been measured: headless browsers draw without the graphics card.\n\n**Making the data for a pull request:** `npm run codemap` on its branch writes `public/data/codemap/` (see \"Code map data\" in `docs/working-in-the-repo.md`). It takes about a minute for this repo. Two open PRs that both carry the data conflict; run it again to settle the conflict.\n\nDesign: `docs/plans/2026-11-02-code-map-design.md`.\n\n### Pictures\n\n![codemap-default--desktop](https://github.com/danyelf/torahmap/blob/c00bf64d9754a780368cb646f4553f721ad07349/codemap-default--desktop.png?raw=true)\n![codemap-default--phone](https://github.com/danyelf/torahmap/blob/c00bf64d9754a780368cb646f4553f721ad07349/codemap-default--phone.png?raw=true)\n![codemap-file--desktop](https://github.com/danyelf/torahmap/blob/c00bf64d9754a780368cb646f4553f721ad07349/codemap-file--desktop.png?raw=true)\n![codemap-file--phone](https://github.com/danyelf/torahmap/blob/c00bf64d9754a780368cb646f4553f721ad07349/codemap-file--phone.png?raw=true)\n![codemap-kind--desktop](https://github.com/danyelf/torahmap/blob/c00bf64d9754a780368cb646f4553f721ad07349/codemap-kind--desktop.png?raw=true)\n![codemap-kind--phone](https://github.com/danyelf/torahmap/blob/c00bf64d9754a780368cb646f4553f721ad07349/codemap-kind--phone.png?raw=true)\n![codemap-pr--desktop](https://github.com/danyelf/torahmap/blob/c00bf64d9754a780368cb646f4553f721ad07349/codemap-pr--desktop.png?raw=true)\n![codemap-pr--phone](https://github.com/danyelf/torahmap/blob/c00bf64d9754a780368cb646f4553f721ad07349/codemap-pr--phone.png?raw=true)\n\n### Open questions for Danyel\n\n- **The opening view fits the whole repo.** A link with an overlay but no camera opens at a fixed zoom (0.05), which fits the repo’s height on a desktop; the shell gives such links a fixed zoom, not the fitted one.\n- **Folder boxes are drawn over the bars,** as the VIS map’s panels are, so their tints add up: a bar in a folder three deep is lightened about a fifth of the way toward the tint. The mockup drew them under the bars. Putting them under needs a layer of the shell’s beneath the canvas, or a blend; say if the dulling shows.\n- **Moiré:** none at screen density 2. At 1.5 there is mild uneven striping inside dense columns, most visible at zoom 0.22, with no bands across the map. Checked at rest only, and before the folder boxes; not checked again since.\n- **What is drawn:** `docs/` is the largest folder (about 41,600 lines). `data/`, downloaded files and two generated AI Act JSON files are left out.\n- **Churn and formatting commits:** \"when last changed\" skips the formatting commits listed in `.git-blame-ignore-revs` (git blame honours it); \"how many times\" counts them.\n- **One shared change:** on touch screens, segmented buttons are at least 24px wide (`packages/shell/src/styles/controls.css`), for the ‹ › buttons. Every map's layout tests pass.\n\nCloses #563\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n","isDraft":false,"createdAt":"2026-11-02T21:39:59Z","closedAt":null,"merged":false,"mergedAt":null,"mergeStateStatus":"BLOCKED","headRefName":"codemap-design","baseRefName":"main","labels":{"nodes":[]},"closingIssuesReferences":{"nodes":[{"number":563,"repository":{"nameWithOwner":"danyelf/torahmap"}}]},"files":{"nodes":[{"path":"apps/codemap/package.json","changeType":"ADDED"},{"path":"apps/codemap/src/baseColor.ts","changeType":"ADDED"},{"path":"apps/codemap/src/constants.ts","changeType":"ADDED"},{"path":"apps/codemap/src/data.ts","changeType":"ADDED"},{"path":"apps/codemap/src/files.ts","changeType":"ADDED"},{"path":"apps/codemap/src/ids.ts","changeType":"ADDED"},{"path":"apps/codemap/src/labels.ts","changeType":"ADDED"},{"path":"apps/codemap/src/layout.ts","changeType":"ADDED"},{"path":"apps/codemap/src/main.ts","changeType":"ADDED"},{"path":"apps/codemap/src/names.ts","changeType":"ADDED"},{"path":"apps/codemap/src/overlays/churn.ts","changeType":"ADDED"},{"path":"apps/codemap/src/overlays/fileType.ts","changeType":"ADDED"},{"path":"apps/codemap/src/overlays/index.ts","changeType":"ADDED"},{"path":"apps/codemap/src/overlays/lineKind.ts","changeType":"ADDED"},{"path":"apps/codemap/src/overlays/pullRequest.ts","changeType":"ADDED"},{"path":"apps/codemap/src/page.ts","changeType":"ADDED"},{"path":"apps/codemap/src/references.ts","changeType":"ADDED"},{"path":"apps/codemap/src/search.ts","changeType":"ADDED"},{"path":"apps/codemap/src/site.ts","changeType":"ADDED"},{"path":"apps/codemap/src/text.ts","changeType":"ADDED"},{"path":"apps/codemap/test/baseColor.test.ts","changeType":"ADDED"},{"path":"apps/codemap/test/helpers/fixture.ts","changeType":"ADDED"},{"path":"apps/codemap/test/layout.test.ts","changeType":"ADDED"},{"path":"apps/codemap/test/names.test.ts","changeType":"ADDED"},{"path":"apps/codemap/test/overlays.test.ts","changeType":"ADDED"},{"path":"apps/codemap/test/references.test.ts","changeType":"ADDED"},{"path":"apps/codemap/test/text.test.ts","changeType":"ADDED"},{"path":"build.ts","changeType":"MODIFIED"},{"path":"docs/plans/2026-11-02-code-map-design.md","changeType":"ADDED"},{"path":"docs/working-in-the-repo.md","changeType":"MODIFIED"},{"path":"package-lock.json","changeType":"MODIFIED"},{"path":"package.json","changeType":"MODIFIED"},{"path":"packages/shell/src/styles/controls.css","changeType":"MODIFIED"},{"path":"pages.ts","changeType":"MODIFIED"},{"path":"public/data/codemap/structure.json","changeType":"ADDED"},{"path":"public/data/codemap/texts.json","changeType":"ADDED"},{"path":"scripts/codemap/build.ts","changeType":"ADDED"},{"path":"scripts/codemap/collect.test.ts","changeType":"ADDED"},{"path":"scripts/codemap/collect.ts","changeType":"ADDED"},{"path":"scripts/codemap/diff.test.ts","changeType":"ADDED"},{"path":"scripts/codemap/diff.ts","changeType":"ADDED"},{"path":"scripts/codemap/exclude.ts","changeType":"ADDED"},{"path":"scripts/codemap/fixtures/sample.diff","changeType":"ADDED"},{"path":"scripts/codemap/lineKind.test.ts","changeType":"ADDED"},{"path":"scripts/codemap/lineKind.ts","changeType":"ADDED"},{"path":"test/layout/app.ts","changeType":"MODIFIED"},{"path":"test/layout/codemap.spec.ts","changeType":"ADDED"},{"path":"test/layout/known.test.ts","changeType":"MODIFIED"},{"path":"test/layout/known.ts","changeType":"MODIFIED"},{"path":"tsconfig.json","changeType":"MODIFIED"},{"path":"vite.config.ts","changeType":"MODIFIED"}]},"commits":{"nodes":[{"commit":{"oid":"a9daf414ce3c0e08fd2aecec4ef4d4ecbd711eb3","committedDate":"2026-11-02T23:38:09Z"}},{"commit":{"oid":"e4463fbc092729177fa58546ae91798788f06c0d","committedDate":"2026-11-02T23:38:09Z"}},{"commit":{"oid":"8ebe12eeb4e7b7438f5f0deeafccd2e92fe7121c","committedDate":"2026-11-02T23:38:09Z"}},{"commit":{"oid":"bc8a8ed034bf63e6d652d82c3f33fbef66649c38","committedDate":"2026-11-02T23:38:09Z"}},{"commit":{"oid":"70a81be32e4b595d6e01ba2fb6fbb40687013d71","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"d03d7b7754f9b3dc88a9ff3928a6f97e697857b0","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"4258254818cf6e9e1cfaf69caa6e558419eb8ef3","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"b07fd44d2c8ac1fe490d7d63d41a1be2f4e97c10","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"92253a8b2a0df81dc0f3e8b91db18530482f6f1e","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"44ef29dfbb8d557ba2214ac28eedb4481fa2f895","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"1d13d42c297a236bc8000ff80bd20ba62cda8c32","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"a4eac09429c3eac75b0fd2da80a71cb66a923513","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"94ee10a73c8128edbbef6f41c006c3036a4e886d","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"f9074c4c8c3383a0e2b4a5b9116411090209574f","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"270fea7758b1f66cea30dae86b457aa2ae2b064b","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"ed578e941eee1070e912713f8a2f7ac2636b3928","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"6bdf991c8719d81a27fb71bfc193df072c47556f","committedDate":"2026-11-02T23:38:10Z"}},{"commit":{"oid":"5aa58a78da0141c1af6871bc02940f48f691fd01","committedDate":"2026-11-02T23:39:52Z"}},{"commit":{"oid":"7aeee4ee59fcc6f26267c07164b87ababb09c881","committedDate":"2026-11-03T00:31:28Z"}},{"commit":{"oid":"658bce2fb7f434929a6ffe68eef60623dced2a05","committedDate":"2026-11-03T00:31:49Z"}},{"commit":{"oid":"5df78594136ffc33a4e9b625808a2fd3480f055e","committedDate":"2026-11-03T00:32:10Z"}}]},"comments":{"nodes":[{"author":{"login":"cloudflare-workers-and-pages"},"body":"## Deploying with &nbsp;<a href=\"https://workers.dev\"><img alt=\"Cloudflare Workers\" src=\"https://workers.cloudflare.com/logo.svg\" width=\"16\"></a> &nbsp;Cloudflare Workers\nThe latest updates on your project. Learn more about [integrating Git with Workers](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/).\n\n| Status | Name | Latest Commit | Preview URL | Updated (UTC) |\n| -|-|-|-|-|\n| ✅ Deployment successful! <br>[View logs](https://dash.cloudflare.com/?to=/d2e7ed98d0671c75c0e9304ea281579b/workers/services/view/torahmap/production/builds/f3c76099-bee2-448b-af4f-2688092a9cab) | torahmap | 5df78594 | <a href='https://fe2a29e7-torahmap.danyel.workers.dev'>Commit Preview URL</a><br><br><a href='https://codemap-design-torahmap.danyel.workers.dev'>Branch Preview URL</a> | Nov 03 2026, 12:36 AM |","url":"https://github.com/danyelf/torahmap/pull/564#issuecomment-6590100180","createdAt":"2026-11-02T22:28:43Z","updatedAt":"2026-11-03T00:36:51Z"},{"author":{"login":"danyel-claude"},"body":"Reviewed up to `6bdf991c`\n\n🤖 Claude: the whole branch was reviewed by a fresh reviewer before the rebase onto main; the rebase was clean, and only the regenerated data (`5aa58a78`) came after. Each of the seven tasks also had its own review.\n\nFinal review, one line per finding and what became of it:\n\n- The `h` line kind was called \"a file header\"; it is a line opening a function or class. Renamed. One code comment still says \"file header\", and the legend leaves out \"interface\": left as they are.\n- `experiments/eu-ai-act/ai-act.json` and `refs.json` are generated but were drawn (10% of the map). Now left out.\n- The design's status and size were out of date. Updated.\n- The finished plan contradicted the code. Deleted.\n- Smoothness at about 139,000 lines was never measured. Not measurable headless; Danyel pans the preview.\n- The popup did not say when the line last changed. It now shows the date.\n- The kind overlay copied the base grey's colour value. Now imported.\n- Git's own settings (`diff.noprefix`, colour, external diff) could change what the script reads. Now overridden on every call.\n- A link to a commit past the last showed \"99 of 13\". Now treated as all commits.\n- Left as they are: a removal has two names (`deletedBefore` in the data, `removedBefore` in the diff code); two functions are both called `marksOf`; a merge commit on a branch would show main's changes as its own; main keeps this branch's data after merge until the script is run again.\n\nDuring the build, a test's `git init` picked up the commit hook's `GIT_DIR` and set `core.bare = true` on the main checkout. It was set back and checked, and the script now clears git's settings before each call. Other tests in the repo that run git have not been checked for the same problem.\n","url":"https://github.com/danyelf/torahmap/pull/564#issuecomment-6591339682","createdAt":"2026-11-02T23:41:37Z","updatedAt":"2026-11-02T23:41:37Z"}]},"timelineItems":{"nodes":[]},"lastEditedAt":null,"isCrossRepository":false}]},"issues":{"nodes":[{"number":563,"title":"Code map: a SeeSoft-style map of a pull request's changes","url":"https://github.com/danyelf/torahmap/issues/563","body":"A new text on the shared engine: every line of the repo as a bar shaped by its indent and length, coloured by what a pull request added, changed or deleted (all commits, or step by step), by churn, and by line type. Design: docs/plans/2026-11-02-code-map-design.md (PR to follow).","createdAt":"2026-11-02T21:39:20Z","closedAt":null,"labels":{"nodes":[{"name":"enhancement"},{"name":"P2"},{"name":"in-progress"},{"name":"general"}]},"comments":{"nodes":[{"author":{"login":"danyel-claude"},"body":"🤖 Claude: design in branch `codemap-design`.","url":"https://github.com/danyelf/torahmap/issues/563#issuecomment-6589140805","createdAt":"2026-11-02T21:40:02Z","updatedAt":"2026-11-02T21:40:02Z"}]},"timelineItems":{"nodes":[{"__typename":"LabeledEvent","label":{"name":"enhancement"},"createdAt":"2026-11-02T21:39:21Z"},{"__typename":"LabeledEvent","label":{"name":"P2"},"createdAt":"2026-11-02T21:39:21Z"},{"__typename":"LabeledEvent","label":{"name":"general"},"createdAt":"2026-11-02T21:39:21Z"},{"__typename":"LabeledEvent","label":{"name":"in-progress"},"createdAt":"2026-11-02T21:40:01Z"}]}}]}}}}
+{
+  "data": {
+    "r0": {
+      "pullRequests": {
+        "pageInfo": {
+          "hasNextPage": true
+        },
+        "nodes": [
+          {
+            "number": 641,
+            "title": "Loading test: expect the accent on the requoted search mark",
+            "url": "https://github.com/danyelf/torahmap/pull/641",
+            "body": "<!-- status -->\n**Waiting on:** Danyel, since 2026-11-21T01:08:50.185Z\n**Ask:** \n<!-- status-data {\"v\":1,\"waitingOn\":\"owner\",\"since\":\"2026-11-21T01:08:50.185Z\",\"ask\":\"\",\"questions\":[],\"toTest\":null,\"writtenAt\":\"2026-11-21T01:08:50.185Z\",\"fingerprint\":\"6572b39f\"} -->\n<!-- /status -->\n\nCloses #634\n\nThe test was wrong, not the code. Commit 376269fc made a search mark carry every point and accent of its last letter (so עָלָה֙, with the pashta), and updated the unit test `search-requote.test.ts` to match. The loading test of the same behaviour kept expecting the bare word. This changes its expectation to the accented form.\n\nChecks: the loading test passes on desktop and phone; typecheck, `npm test` and `npm run test:browser` run. One other loading test (\"fails its prebuild alone\") failed once on desktop during the full run while other suites were running, and passed when rerun alone.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01SVi92Tu7UYadpkYQqKjkgE",
+            "createdAt": "2026-11-21T01:08:41Z",
+            "closedAt": null,
+            "updatedAt": "2026-11-21T01:10:27Z",
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "name": "on danyel"
+                }
+              ]
+            },
+            "comments": {
+              "pageInfo": {
+                "hasPreviousPage": false
+              },
+              "nodes": [
+                {
+                  "author": {
+                    "login": "cloudflare-workers-and-pages"
+                  },
+                  "body": "## Deploying with &nbsp;<a href=\"https://workers.dev\"><img alt=\"Cloudflare Workers\" src=\"https://workers.cloudflare.com/logo.svg\" width=\"16\"></a> &nbsp;Cloudflare Workers\nThe latest updates on your project. Learn more about [integrating Git with Workers](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/).\n\n| Status | Name | Latest Commit | Preview URL | Updated (UTC) |\n| -|-|-|-|-|\n| ✅ Deployment successful! <br>[View logs](https://dash.cloudflare.com/?to=/d2e7ed98d0671c75c0e9304ea281579b/workers/services/view/torahmap/production/builds/1247a42b-2381-474e-a060-859d5ce66290) | torahmap | 11a71ded | <a href='https://62f5feec-torahmap.danyel.workers.dev'>Commit Preview URL</a><br><br><a href='https://cantillation-quote-634-torahmap.danyel.workers.dev'>Branch Preview URL</a> | Nov 21 2026, 01:09 AM |"
+                }
+              ]
+            },
+            "isDraft": false,
+            "isCrossRepository": false,
+            "merged": false,
+            "mergeStateStatus": "BLOCKED",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "headRefName": "cantillation-quote-634",
+            "headRefOid": "11a71ded044143526a3badbc8319a7edd92564a8",
+            "baseRefName": "main",
+            "closingIssuesReferences": {
+              "nodes": [
+                {
+                  "number": 634,
+                  "repository": {
+                    "nameWithOwner": "danyelf/torahmap"
+                  }
+                }
+              ]
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 640,
+            "title": "Colour echoes by distance from the selected verse",
+            "url": "https://github.com/danyelf/torahmap/pull/640",
+            "body": "<!-- status -->\n**Waiting on:** Danyel, since 2026-11-21T01:03:40.299Z\n**Ask:** \n**To test:** Echoes view: pin a verse (II Kings 22:1) and check the four distance colours and the legend\n<!-- status-data {\"v\":1,\"waitingOn\":\"owner\",\"since\":\"2026-11-21T01:03:40.299Z\",\"ask\":\"\",\"questions\":[],\"toTest\":\"Echoes view: pin a verse (II Kings 22:1) and check the four distance colours and the legend\",\"writtenAt\":\"2026-11-21T01:03:40.299Z\",\"fingerprint\":\"6572b39f\"} -->\n<!-- /status -->\n\nThe Echoes view coloured each verse by a colour wheel laid over the map, which was hard to read. It now colours by how far each echo is from the selected verse.\n\n**What it does**\n- Four steps, near to far: same chapter, same book, same section of the Tanakh (Torah / Prophets / Writings), another section. Kings I/II, Samuel I/II, Chronicles I/II, Ezra/Nehemiah and the Twelve Minor Prophets each count as one book. Ramp is plasma-like, near dark and far light: chapter (0.54, 0.19, 300), book (0.64, 0.22, 350), section (0.84, 0.15, 50), another section (0.96, 0.1, 95) in OKLCH.\n- Verse selected (pinned or hovered): the verse is white, its echoes take their distance colour, other verses with echoes are dimmed grey, the rest are plain grey.\n- Nothing selected: each verse with echoes takes the colour of its farthest echo.\n- Plain grey squares keep their usual light-and-dark pattern at 0.6 of its brightness in this view only, so the palest step stands out. The pattern is not narrowed.\n- The legend lists the four steps; the card summary shows four swatches (the labelled version was too wide on a phone).\n- Removed with the wheel: the wheel itself, the section strips in the legend, and the shell's backdrop layer (`backdrop.ts`, the `backdrop` overlay hook, its test), which only the wheel used. `wheel.ts` became `places.ts`, keeping only the reading order.\n\nCloses #606\nCloses #494 (the wheel was a backdrop that popped in; both the wheel and the backdrop are gone)\n\n**Choices Danyel did not settle**\n- Ezra/Nehemiah counted as one book, as in the prototype; the issue named only Kings, Chronicles and the minor prophets (and the brief Samuel).\n- The ramp colours are the prototype's OKLCH values as given; some channels fall just outside sRGB and clip, as they did in the prototype pictures.\n\n**To look at** on the branch preview https://echo-distance-606-torahmap.danyel.workers.dev/ : `?overlay=text-analytics&analysis=echoes` at rest, then pin a verse such as II Kings 22:1 or I Kings 16:27 and hover others.\n\nChecks: typecheck, `npm test`, layout suite (the echoes states pass on desktop, tablet and phone).\n\n![at rest](https://github.com/danyelf/torahmap/blob/c3b69e59abdfa7224184f715ba4ef08f62105ff6/explore-text-analytics-echoes-view--desktop.png?raw=true)\n![pinned](https://github.com/danyelf/torahmap/blob/c3b69e59abdfa7224184f715ba4ef08f62105ff6/explore-text-analytics-echoes-view-pinned--desktop.png?raw=true)\n![zoomed out](https://github.com/danyelf/torahmap/blob/c3b69e59abdfa7224184f715ba4ef08f62105ff6/explore-text-analytics-echoes-view-zoomed-out--desktop.png?raw=true)\n![Kings pinned](https://github.com/danyelf/torahmap/blob/c3b69e59abdfa7224184f715ba4ef08f62105ff6/explore-text-analytics-echoes-kings-pinned--desktop.png?raw=true)\n![phone](https://github.com/danyelf/torahmap/blob/c3b69e59abdfa7224184f715ba4ef08f62105ff6/explore-text-analytics-echoes-view--phone.png?raw=true)\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01SVi92Tu7UYadpkYQqKjkgE\n",
+            "createdAt": "2026-11-21T01:03:33Z",
+            "closedAt": null,
+            "updatedAt": "2026-11-21T01:07:43Z",
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "name": "on danyel"
+                }
+              ]
+            },
+            "comments": {
+              "pageInfo": {
+                "hasPreviousPage": false
+              },
+              "nodes": [
+                {
+                  "author": {
+                    "login": "cloudflare-workers-and-pages"
+                  },
+                  "body": "## Deploying with &nbsp;<a href=\"https://workers.dev\"><img alt=\"Cloudflare Workers\" src=\"https://workers.cloudflare.com/logo.svg\" width=\"16\"></a> &nbsp;Cloudflare Workers\nThe latest updates on your project. Learn more about [integrating Git with Workers](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/).\n\n| Status | Name | Latest Commit | Preview URL | Updated (UTC) |\n| -|-|-|-|-|\n| ✅ Deployment successful! <br>[View logs](https://dash.cloudflare.com/?to=/d2e7ed98d0671c75c0e9304ea281579b/workers/services/view/torahmap/production/builds/0c6a98ce-4f9d-4d42-922d-9532f6ac7cf6) | torahmap | 51e57d4c | <a href='https://c4e28e91-torahmap.danyel.workers.dev'>Commit Preview URL</a><br><br><a href='https://echo-distance-606-torahmap.danyel.workers.dev'>Branch Preview URL</a> | Nov 21 2026, 01:04 AM |"
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "`npm run test:browser` on `51e57d4c`: the layout suite passed, 561 passed and 131 skipped, none failed. It chose no loading suite for this change."
+                }
+              ]
+            },
+            "isDraft": false,
+            "isCrossRepository": false,
+            "merged": false,
+            "mergeStateStatus": "DIRTY",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "headRefName": "echo-distance-606",
+            "headRefOid": "51e57d4c19492647143c997da796c106ba13d889",
+            "baseRefName": "main",
+            "closingIssuesReferences": {
+              "nodes": [
+                {
+                  "number": 494,
+                  "repository": {
+                    "nameWithOwner": "danyelf/torahmap"
+                  }
+                },
+                {
+                  "number": 606,
+                  "repository": {
+                    "nameWithOwner": "danyelf/torahmap"
+                  }
+                }
+              ]
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 623,
+            "title": "Keyboard shortcuts: Cmd/Ctrl-F search, G next hit, K go to",
+            "url": "https://github.com/danyelf/torahmap/pull/623",
+            "body": "<!-- status -->\n**Waiting on:** Danyel, since 2026-11-20T20:52:41.387Z\n**Ask:** \n<!-- status-data {\"v\":1,\"waitingOn\":\"owner\",\"since\":\"2026-11-20T20:52:41.387Z\",\"ask\":\"\",\"questions\":[],\"toTest\":null,\"writtenAt\":\"2026-11-20T20:52:41.387Z\",\"fingerprint\":\"6572b39f\"} -->\n<!-- /status -->\n\n",
+            "createdAt": "2026-11-19T17:56:50Z",
+            "closedAt": "2026-11-20T21:00:12Z",
+            "updatedAt": "2026-11-20T21:18:08Z",
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "name": "on danyel"
+                }
+              ]
+            },
+            "comments": {
+              "pageInfo": {
+                "hasPreviousPage": false
+              },
+              "nodes": [
+                {
+                  "author": {
+                    "login": "cloudflare-workers-and-pages"
+                  },
+                  "body": "## Deploying with &nbsp;<a href=\"https://workers.dev\"><img alt=\"Cloudflare Workers\" src=\"https://workers.cloudflare.com/logo.svg\" width=\"16\"></a> &nbsp;Cloudflare Workers\nThe latest updates on your project. Learn more about [integrating Git with Workers](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/).\n\n| Status | Name | Latest Commit | Preview URL | Updated (UTC) |\n| -|-|-|-|-|\n| ✅ Deployment successful! <br>[View logs](https://dash.cloudflare.com/?to=/d2e7ed98d0671c75c0e9304ea281579b/workers/services/view/torahmap/production/builds/70ff8717-81e9-48f0-bda1-343057b42993) | torahmap | 92fe78a0 | <a href='https://9d86dd9b-torahmap.danyel.workers.dev'>Commit Preview URL</a> | Nov 20 2026, 08:53 PM |"
+                },
+                {
+                  "author": {
+                    "login": "danyelf"
+                  },
+                  "body": "<!-- pr-board answer {\"v\":1,\"fingerprint\":\"6572b39f\",\"answers\":{\"look\":\"looks good, prep for merge\"},\"note\":\"\"} -->\n**Answers from PR Board**\n\nHow does it look? → **looks good, prep for merge**"
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "Reviewed up to `647529d`\n\nRebased onto main (clean). Two reviews: one for duplication and drift, one for bugs.\n\n- Ctrl-Shift-F and Ctrl-Shift-K were taken from the browser, and Ctrl-Shift-K is Firefox's web console. Fixed in `5d0eac4`: only G uses Shift.\n- On Windows or Linux with a Hebrew keyboard layout, Ctrl-F reports the Hebrew letter, so none of the shortcuts fired. Fixed in `5d0eac4`: when the key isn't a Latin letter, the letter is read from its place on the keyboard (`shortcutLetter`), and a test covers it.\n- The gesture tests depended on the platform happy-dom reports. Fixed in `5d0eac4`: they pass `mac: false`. That also gives the `mac` option, which a reviewer called unused, its use.\n- The \"open this panel unless it's already open\" check was written out in `find`, `goTo` and `takeStart`, and it left the menu down when the panel was already open. Fixed in `5d0eac4`: one `openPanel` helper, which also closes the menu.\n- The key handler tested the letters twice. Fixed in `5d0eac4`: it is now one switch.\n- Trimmed comments that repeated `hasMainModifier`'s own doc or each other. Fixed in `5d0eac4`.\n- `hits` filters all the squares on each key press. Declined: it reuses the memoized `searchFor`, so it can't drift from the colouring, and the cost per press is small.\n- The layout test imports `goToBox.ts` by relative path. Declined: the shell package doesn't export that file, and adding an export only for a test isn't worth it.\n- The About wording and the fixed \"Ctrl / ⌘\" label. Declined: readers see that text and you have already looked at it, and the label is right on both platforms.\n\nVerified: typecheck, unit tests, `npm run test:browser` (543 passed).\n"
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "Reviewed up to `5d0eac4`\n\nI read the fix commit myself. The changes are small and covered by the new tests. Nothing further found.\n"
+                }
+              ]
+            },
+            "isDraft": false,
+            "isCrossRepository": false,
+            "merged": true,
+            "mergeStateStatus": "UNKNOWN",
+            "reviewDecision": "APPROVED",
+            "headRefName": "616-goto-shortcut",
+            "headRefOid": "92fe78a0c1e41409c77431dcdafb7828955525d2",
+            "baseRefName": "main",
+            "closingIssuesReferences": {
+              "nodes": []
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 631,
+            "title": "Colour search terms by hashing the word, from six hues",
+            "url": "https://github.com/danyelf/torahmap/pull/631",
+            "body": "<!-- status -->\n**Waiting on:** Danyel, since 2026-11-20T18:31:11.261Z\n**Ask:** Back to the original nine colours, as you asked. A new box gets a random free colour and keeps it while you type; a word arriving from a link or story gets its hashed colour\n**Questions:**\n1. A typed word may come back in a different colour after a reload or a shared link, since links carry no colour.  (**leave it** | carry each term's colour in the link)\n**To test:** 1) Search two words and check neither changes colour as you type 2) reload: colours may change (the question) 3) Open the Tour stop with Jacob: his name should be orange, as the story now says\n<!-- status-data {\"v\":1,\"waitingOn\":\"owner\",\"since\":\"2026-11-20T18:31:11.261Z\",\"ask\":\"Back to the original nine colours, as you asked. A new box gets a random free colour and keeps it while you type; a word arriving from a link or story gets its hashed colour\",\"questions\":[{\"n\":1,\"text\":\"A typed word may come back in a different colour after a reload or a shared link, since links carry no colour.\",\"choices\":[\"leave it\",\"carry each term's colour in the link\"],\"defaultChoice\":\"leave it\"}],\"toTest\":\"1) Search two words and check neither changes colour as you type 2) reload: colours may change (the question) 3) Open the Tour stop with Jacob: his name should be orange, as the story now says\",\"writtenAt\":\"2026-11-20T18:31:11.261Z\",\"fingerprint\":\"1267845a\"} -->\n<!-- /status -->\n\n## The problem\n\nA search term's colour depended only on how many terms came before it: the first was always blue, the second always orange. Danyel asked for the colour to come from the word instead.\n\n## What changed\n\n**The palette is unchanged from main**: the same nine hues, in the same order, at the same lightness and chroma cap.\n\n**Colour from the word.** The term's text is lowercased and stripped of vowel points and punctuation (the same `plainName` the picks use), hashed (FNV-1a), and taken mod 9. If that colour is held by another term or a pick, it steps to the next in the list. So \"Abraham\" and \"abraham\" agree, and a word's colour depends on what else is on the map only when there is a clash.\n\n**When it is chosen.** Chosen once, when the term is made, and kept until it is removed; typing never changes it. A box the reader opens to type in gets a random free colour. A term that arrives with its word (a link, a story stop, a comma-split word) gets the hashed colour, so links and stops always show the same colours. Removing a term recolours nobody else.\n\n**Picks share the palette.** The limits are as on main: at most five terms and four picks, so together they never exceed the nine colours and a colour is always left. Picks and terms also refuse to be added when no free colour remains.\n\n**Other places.** The IEEE VIS story swatches for search terms now read each term's real colour. In the tour, Jacob's name now lands on the orange rather than the pink, so the story text says \"in orange\". The EU AI Act ring test finds the search's colour from the palette instead of expecting a fixed cyan.\n\nTests check behaviour (same word, same colour whatever the case or order; a clash takes the next free; terms and picks never share) and assert no specific colours.\n\n## What to look at\n\nPreview: https://620-term-colours-torahmap.danyel.workers.dev. Search a word, then the same word in another case, then the tour stop \"Jacob's name, in orange\".\n\n![explore-search--desktop](https://github.com/danyelf/torahmap/blob/ba2d38f1522d91535f158ce2e1d243b74951ba7c/explore-search--desktop.png?raw=true)\n![explore-search--phone](https://github.com/danyelf/torahmap/blob/ba2d38f1522d91535f158ce2e1d243b74951ba7c/explore-search--phone.png?raw=true)\n![explore-search-and-overlay--desktop](https://github.com/danyelf/torahmap/blob/ba2d38f1522d91535f158ce2e1d243b74951ba7c/explore-search-and-overlay--desktop.png?raw=true)\n![explore-search-and-overlay--phone](https://github.com/danyelf/torahmap/blob/ba2d38f1522d91535f158ce2e1d243b74951ba7c/explore-search-and-overlay--phone.png?raw=true)\n\nCloses #620\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01SVi92Tu7UYadpkYQqKjkgE\n",
+            "createdAt": "2026-11-20T00:37:15Z",
+            "closedAt": "2026-11-20T20:00:55Z",
+            "updatedAt": "2026-11-20T20:01:05Z",
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "name": "on danyel"
+                }
+              ]
+            },
+            "comments": {
+              "pageInfo": {
+                "hasPreviousPage": false
+              },
+              "nodes": [
+                {
+                  "author": {
+                    "login": "cloudflare-workers-and-pages"
+                  },
+                  "body": "## Deploying with &nbsp;<a href=\"https://workers.dev\"><img alt=\"Cloudflare Workers\" src=\"https://workers.cloudflare.com/logo.svg\" width=\"16\"></a> &nbsp;Cloudflare Workers\nThe latest updates on your project. Learn more about [integrating Git with Workers](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/).\n\n| Status | Name | Latest Commit | Preview URL | Updated (UTC) |\n| -|-|-|-|-|\n| ✅ Deployment successful! <br>[View logs](https://dash.cloudflare.com/?to=/d2e7ed98d0671c75c0e9304ea281579b/workers/services/view/torahmap/production/builds/bb1acd18-9a0c-4028-b40e-b9644016d3fe) | torahmap | 13a72616 | <a href='https://d8da2d3e-torahmap.danyel.workers.dev'>Commit Preview URL</a> | Nov 20 2026, 06:31 PM |"
+                },
+                {
+                  "author": {
+                    "login": "danyelf"
+                  },
+                  "body": "<!-- pr-board answer {\"v\":1,\"fingerprint\":\"6572b39f\",\"answers\":{\"look\":\"needs changes\"},\"note\":\"hm - this one is tricky. It's almost there, except:\\n1- you seem much more obsessed with color blindness than I asked you to be. But that' sok.\\n2- much as I love the hash idea, it's really distracting to see the color changing each time. Maybe we should jsut pick a random() color each search term. wdyt?\"} -->\n**Answers from PR Board**\n\nHow does it look? → **needs changes**\n\nNote:\n> hm - this one is tricky. It's almost there, except:\n> 1- you seem much more obsessed with color blindness than I asked you to be. But that' sok.\n> 2- much as I love the hash idea, it's really distracting to see the color changing each time. Maybe we should jsut pick a random() color each search term. wdyt?"
+                },
+                {
+                  "author": {
+                    "login": "danyelf"
+                  },
+                  "body": "got too complex."
+                }
+              ]
+            },
+            "isDraft": false,
+            "isCrossRepository": false,
+            "merged": false,
+            "mergeStateStatus": "BLOCKED",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "headRefName": "620-term-colours",
+            "headRefOid": "13a72616f0aee3c9184d2537a310808df53782b3",
+            "baseRefName": "main",
+            "closingIssuesReferences": {
+              "nodes": [
+                {
+                  "number": 620,
+                  "repository": {
+                    "nameWithOwner": "danyelf/torahmap"
+                  }
+                }
+              ]
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 626,
+            "title": "Better camera motion: one flight path for every glide",
+            "url": "https://github.com/danyelf/torahmap/pull/626",
+            "body": "<!-- status -->\n**Waiting on:** Danyel, since 2026-11-20T09:23:12.020Z\n**Ask:** \n<!-- status-data {\"v\":1,\"waitingOn\":\"owner\",\"since\":\"2026-11-20T09:23:12.020Z\",\"ask\":\"\",\"questions\":[],\"toTest\":null,\"writtenAt\":\"2026-11-20T18:39:52.905Z\",\"fingerprint\":\"6572b39f\"} -->\n<!-- /status -->\n\nCloses #605\n\nEvery camera move that is not the reader's own hands now goes through one function, `planGlide` (`packages/engine/src/glide.ts`), driven by `animateCameraTo`. Hit stepping, Go to, the overlay panels' travel, the left and right arrows (which used to jump, and now slide at the zoom you have), and the story's rejoin and phone-swipe eases all use it. `centerOnItem` is gone.\n\n- **Long moves** rise, pan and descend (van Wijk and Nuij's flight), so you see where you are going instead of a blur.\n- **Moves of about a screen-width or less** are an eased pan at a steady zoom.\n- **Longer moves take longer**, from 300 ms up to 2 s.\n- **Flattening rule:** the camera never rises until it sees more than 0.75 times the distance it travels, so a middling move stays low while a long one still rises.\n- **Interrupting:** a move that starts while another is running eases out only, so a held arrow key keeps moving.\n- **Reduced motion:** every camera move snaps.\n\nAll the numbers are named constants at the top of `glide.ts` (`FLIGHT_*`, `PAN_WITHIN_WIDTHS`).\n\n## What to look at\n\nOn the preview: search a word and click through hits far apart; Go to \"I Chronicles 1:1\" from Genesis 1:1 (long) and \"Isaiah 40:1\" from \"Psalms 23:1\" (medium); pin a verse and hold the left or right arrow. Frames below are the real app at 24 fps, stepped on a fixed clock (software WebGL), not a live recording.\n\nLong, Genesis 1:1 to I Chronicles 1:1 (1.6 s, rises to zoom 0.57):\n![long](https://github.com/danyelf/torahmap/blob/9b26fb09d67111d1347649f44aa1672e39cf8564/filmstrip-long.png?raw=true)\n\nMedium, Psalms 23:1 to Isaiah 40:1 (1.4 s, rises to zoom 0.79):\n![mid](https://github.com/danyelf/torahmap/blob/9b26fb09d67111d1347649f44aa1672e39cf8564/filmstrip-mid.png?raw=true)\n\nShort, Genesis 1:1 to 3:5 (300 ms, no zoom change):\n![short](https://github.com/danyelf/torahmap/blob/9b26fb09d67111d1347649f44aa1672e39cf8564/filmstrip-short.png?raw=true)\n\nVideos: [long](https://github.com/danyelf/torahmap/blob/9b26fb09d67111d1347649f44aa1672e39cf8564/long.mp4?raw=true), [mid](https://github.com/danyelf/torahmap/blob/9b26fb09d67111d1347649f44aa1672e39cf8564/mid.mp4?raw=true), [short](https://github.com/danyelf/torahmap/blob/9b26fb09d67111d1347649f44aa1672e39cf8564/short.mp4?raw=true).\n\n## Not changed\n\nThe story's scroll-driven blend between stops (`controller.ts`) and Back/Forward and links, which set the camera outright, are as before. The rejoin and swipe durations (700 ms, 1500 ms) are unchanged since the colour blend shares them, so they do not shorten under reduced motion.\n\n## Checks\n\nTypecheck, all unit tests, `npm run test:browser` (541 passed). Unit tests cover the path (ends match, never below the zoom floor, short moves keep their zoom, rise capped by distance, duration grows within limits, interrupting starts moving at once, reduced motion snaps).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01SVi92Tu7UYadpkYQqKjkgE\n",
+            "createdAt": "2026-11-19T21:40:02Z",
+            "closedAt": "2026-11-20T19:10:09Z",
+            "updatedAt": "2026-11-20T19:49:23Z",
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "name": "on danyel"
+                }
+              ]
+            },
+            "comments": {
+              "pageInfo": {
+                "hasPreviousPage": false
+              },
+              "nodes": [
+                {
+                  "author": {
+                    "login": "cloudflare-workers-and-pages"
+                  },
+                  "body": "## Deploying with &nbsp;<a href=\"https://workers.dev\"><img alt=\"Cloudflare Workers\" src=\"https://workers.cloudflare.com/logo.svg\" width=\"16\"></a> &nbsp;Cloudflare Workers\nThe latest updates on your project. Learn more about [integrating Git with Workers](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/).\n\n| Status | Name | Latest Commit | Preview URL | Updated (UTC) |\n| -|-|-|-|-|\n| ✅ Deployment successful! <br>[View logs](https://dash.cloudflare.com/?to=/d2e7ed98d0671c75c0e9304ea281579b/workers/services/view/torahmap/production/builds/d70c835d-1c5c-4c96-8705-c5f5d62b2456) | torahmap | 71b63772 | <a href='https://9e8257fb-torahmap.danyel.workers.dev'>Commit Preview URL</a> | Nov 20 2026, 06:41 PM |"
+                },
+                {
+                  "author": {
+                    "login": "danyelf"
+                  },
+                  "body": "<!-- pr-board answer {\"v\":1,\"fingerprint\":\"6572b39f\",\"answers\":{\"look\":\"looks good, prep for merge\"},\"note\":\"\"} -->\n**Answers from PR Board**\n\nHow does it look? → **looks good, prep for merge**"
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "Reviewed up to `6aee466`\n\nTwo reviews of the rebased branch: one fresh read for duplication and drift, one for bugs.\n\n- The story's rejoin eased the camera twice: once with the story's curve, then again inside the glide. The camera lagged the colour change (at a quarter of the way, the camera had made 0.2% of its trip and the picture 12.5%). Fixed in `7e4a8d3`: the glide gets the raw progress, and the picture keeps the story's curve.\n- `FLIGHT_MIN_ZOOM = 0.1` was a copy of the Tanakh's zoom floor. Talmud's floor is 0.05 and VIS's is 0.08. Fixed in `7e4a8d3`: the glide reads `link.zoom.min` from the text, so a long flight on Talmud can now rise to 0.05.\n- A map with no width yet (hidden, or not yet laid out) made the rejoin compute NaN cameras. Fixed in `7e4a8d3`: with no width the glide falls back to a plain pan, and a test covers it.\n- The highest point of the flight was counted even when it fell outside the path, so the flattening loop flattened a little more than it needed to. Fixed in `7e4a8d3`.\n- The `gliding` flag repeated what `stopCameraGlide` already says. Fixed in `7e4a8d3`: `onDone` clears the stop function, and the code checks that instead.\n- Comments trimmed in `7e4a8d3`. The \"every camera move goes through here\" line is now in one place (`glideTo`).\n- Ease curves \"written twice\": declined. The engine's existing curves are quadratic and the glide's are cubic, so they are different functions, not copies.\n- The rejoin plans a new path every frame, so if the reader scrolls during a rejoin and the target crosses the one-screen-width line, the path switches from a pan to a flight and the camera jumps. Declined for now. It needs a reader scrolling mid-rejoin, and planning once would leave the camera aiming at an old target.\n- Plan the pan case before building the flight path, to skip the work: declined. The saving is tiny and the code would get longer.\n- Tuning constants exported only for tests: declined. The tests read the duration limits from them instead of repeating the numbers.\n\nUnit tests (3248), typecheck and the layout browser suite (541 passed) pass at `7e4a8d3`.\n"
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "Reviewed up to `7e4a8d3`\n\nRead the fix commit; each change does what the comment above says, and nothing else changed. No new findings."
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "Reviewed up to `7e4a8d3`\n\n- Rejoin eased camera and picture on two curves: fixed in 0327956; the glide takes already-eased progress and the rejoin feeds one eased value to both.\n- Easing functions beside `easingFunctions`: fixed in 0327956; they now live only in `animateCameraTo`, which owns the move's easing.\n- Rejoin replans every frame: declined; its target (the story camera) moves as the reader scrolls, so a plan made once would be wrong.\n- Reduced motion handled two ways: declined; the camera option and the colour fade are different mechanisms, and each is tested.\n- Six exported constants: fixed in 0327956; only the ones the test reads are still exported.\n- Magic numbers in the flattening loop: fixed in 0327956, now named.\n- Prose: false `glideTo` docstring, restating comments, long `planGlide` docstring: fixed in 0327956.\n- `glideToCentre` single-use wrapper: fixed in 0327956, inlined.\n- Missing test for a path stopping at the rho floor: declined; the zoom-floor test covers the flattened path.\n- Correctness review: no bugs found."
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "Reviewed up to `0327956`\n\nRead the fix commit after the first round: mechanical (easing moved into `animateCameraTo`, constants named, comments trimmed). Typecheck, `npm test` and the layout browser suite pass. Nothing further found."
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "🤖 Claude: prep for merge"
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "Reviewed up to `71b6377`\n\nLead's follow-up on the rejoin: the camera and picture already share one eased value (0327956); the plan is rebuilt each frame because the story's target camera moves as the reader scrolls (the code comment says so). Reduced motion was ignored by the rejoin and the phone page-swipe ease: fixed in 71b6377, both now snap (duration 0). Typecheck, `npm test` and the layout browser suite pass. Nothing further found."
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "🤖 Claude: prep for merge"
+                }
+              ]
+            },
+            "isDraft": false,
+            "isCrossRepository": false,
+            "merged": true,
+            "mergeStateStatus": "UNKNOWN",
+            "reviewDecision": "APPROVED",
+            "headRefName": "605-camera-paths",
+            "headRefOid": "71b63772cf3fac986fe80ee26941d8f959739c9a",
+            "baseRefName": "main",
+            "closingIssuesReferences": {
+              "nodes": [
+                {
+                  "number": 605,
+                  "repository": {
+                    "nameWithOwner": "danyelf/torahmap"
+                  }
+                }
+              ]
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "issues": {
+        "pageInfo": {
+          "hasNextPage": true
+        },
+        "nodes": [
+          {
+            "number": 638,
+            "title": "Keyboard access sweep of menus, buttons and the search flow",
+            "url": "https://github.com/danyelf/torahmap/issues/638",
+            "body": "Go through the menus, buttons and search panel and make each action reachable and confirmable from the keyboard, with focus landing where you'd expect after each step.\n\nExamples Danyel gave:\n- After typing a search word, **Enter** adds it (\"add word\").\n- While adding a word, **Escape** backs out without adding it.\n- While moving through the hit list, a key shows the selected hit on the map (\"show this hit\").\n\nScope beyond these: tab order and visible focus in the menu, overlay panel, popup and story panel; every button has an accessible name; Escape closes whatever is open on top; the About panel's list of controls (`packages/shell/src/aboutPanel.ts`) stays in step. Builds on the shortcuts in #623 (Cmd/Ctrl-F, G, K).\n\n🤖 Claude: filed for Danyel.",
+            "createdAt": "2026-11-20T18:12:57Z",
+            "closedAt": null,
+            "updatedAt": "2026-11-21T01:03:36Z",
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "name": "enhancement"
+                },
+                {
+                  "name": "P2"
+                },
+                {
+                  "name": "general"
+                },
+                {
+                  "name": "parked"
+                }
+              ]
+            },
+            "comments": {
+              "pageInfo": {
+                "hasPreviousPage": false
+              },
+              "nodes": [
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "<!-- status -->\n**Waiting on:** nobody, since 2026-11-21T01:03:33.275Z\n**Ask:** \n<!-- status-data {\"v\":1,\"waitingOn\":\"nobody\",\"since\":\"2026-11-21T01:03:33.275Z\",\"ask\":\"\",\"questions\":[],\"toTest\":null,\"writtenAt\":\"2026-11-21T01:03:33.275Z\",\"fingerprint\":\"6572b39f\"} -->\n<!-- /status -->"
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "🤖 Claude: folding in #630: in the search list, the down (and up) arrow should move the selected verse and the camera too, not only the highlight in the list."
+                }
+              ]
+            }
+          },
+          {
+            "number": 632,
+            "title": "Haftarah: a reading with two passages is coloured across the gap between them",
+            "url": "https://github.com/danyelf/torahmap/issues/632",
+            "body": "Danyel noticed while trying the pinned-reading card in #628: lighting **Tzav** colours the whole area in Jeremiah, though its Ashkenazi haftarah is two passages with a gap between them (Jeremiah 7:21–8:3 and 9:22–23, as `public/data/overlays/haftarah/mappings.json` has it). The data holds the gap; something between the data and the map spans it. Other readings with more than one passage are probably affected too.\n\n🤖 Claude: filed from Danyel's report.",
+            "createdAt": "2026-11-20T02:25:08Z",
+            "closedAt": "2026-11-20T18:15:50Z",
+            "updatedAt": "2026-11-21T01:03:32Z",
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "name": "bug"
+                },
+                {
+                  "name": "P2"
+                },
+                {
+                  "name": "tanakh"
+                },
+                {
+                  "name": "parked"
+                }
+              ]
+            },
+            "comments": {
+              "pageInfo": {
+                "hasPreviousPage": false
+              },
+              "nodes": [
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "<!-- status -->\n**Waiting on:** nobody, since 2026-11-21T01:03:29.907Z\n**Ask:** \n<!-- status-data {\"v\":1,\"waitingOn\":\"nobody\",\"since\":\"2026-11-21T01:03:29.907Z\",\"ask\":\"\",\"questions\":[],\"toTest\":null,\"writtenAt\":\"2026-11-21T01:03:29.907Z\",\"fingerprint\":\"6572b39f\"} -->\n<!-- /status -->"
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "🤖 Claude: working on this in branch `632-haftarah-gaps`."
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "🤖 Claude: the ranges are right. Tzav's Ashkenazi haftarah gives exactly Jeremiah 7:21–8:3 and 9:22–23. The gap is filled because lighting a reading also lights every reading that shares a verse with it (`litByPreview` in `apps/tanakh/src/overlays/haftarah.ts`, pinned by the test \"lights every reading that shares a verse with the previewed one\"). Tisha B'Av Morning (Jeremiah 8:13–9:23) shares 9:22–23, so its whole passage lights up in its own colour, gap included. Open question for Danyel: keep that, or light only the chosen reading's own verses? The fix touches code #628 also edits, so it would come after #628."
+                }
+              ]
+            }
+          },
+          {
+            "number": 620,
+            "title": "explore: colors more diverse",
+            "url": "https://github.com/danyelf/torahmap/issues/620",
+            "body": "right now, the first search I show is always blue ,the second always orange. feels inelegant... and loses some of the beauty. imagining things like:\n* the search is some hash(text), with collision avoidance (so it chains, or picks the next available color off the lsit)\n\nNot sure how that would feel, but especailly for IEEEVIS mpa, we KEPT coming back to the same view -- blue dots on grey screen",
+            "createdAt": "2026-11-19T07:34:24Z",
+            "closedAt": null,
+            "updatedAt": "2026-11-21T01:02:32Z",
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false
+              },
+              "nodes": [
+                {
+                  "name": "enhancement"
+                },
+                {
+                  "name": "P2"
+                },
+                {
+                  "name": "in-progress"
+                },
+                {
+                  "name": "general"
+                }
+              ]
+            },
+            "comments": {
+              "pageInfo": {
+                "hasPreviousPage": false
+              },
+              "nodes": [
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "🤖 Claude: working on this in branch `620-term-colours`."
+                },
+                {
+                  "author": {
+                    "login": "danyelf"
+                  },
+                  "body": "We tried one draft of this, and it did not work at all. \n1) when we tried to hash on the string as it was, the color changed every frame. No fun at all.\n2) when we set a random number per row, we got back to the current thing except in different order, because the first row was always (e.g) red.\n\nWhat we learned:\n* We should keep a limited palette (~6), probably the same first six we use today (teal, orange, ...)\n* We should avoid collisions by picking the next color\n\nWhat I'd like to explore next are ideas like:\n* Hash on only the FIRST CHARACTER of the string. That will mean the color stays constant, and works for sharing too"
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "🤖 Claude: tried in #631 (hash colours, respaced hues). Danyel kept the original colours; closing."
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "🤖 Claude: correcting my closing note. Danyel closed #631 because its many iterations left too much cruft, not because he dropped the change. Rewriting the final behaviour cleanly from main: the original nine colours; a new box gets a random free colour and keeps it while typing; a word arriving with its text (link, story stop) gets its hashed colour."
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "<!-- status -->\n**Waiting on:** Claude, since 2026-11-21T01:02:28.357Z\n**Ask:** \n<!-- status-data {\"v\":1,\"waitingOn\":\"claude\",\"since\":\"2026-11-21T01:02:28.357Z\",\"ask\":\"\",\"questions\":[],\"toTest\":null,\"writtenAt\":\"2026-11-21T01:02:28.357Z\",\"fingerprint\":\"6572b39f\"} -->\n<!-- /status -->"
+                },
+                {
+                  "author": {
+                    "login": "danyel-claude"
+                  },
+                  "body": "🤖 Claude: working on this in branch `term-colours-620` (clean rewrite)."
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

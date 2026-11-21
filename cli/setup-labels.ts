@@ -1,5 +1,10 @@
 import { OWNER_NAME } from '../src/shared/config.ts';
-import { DAY_MS, LABEL_IN_PROGRESS, LABEL_ON_OWNER, LABEL_PARKED, REPO_WINDOW_DAYS } from '../src/shared/names.ts';
+import {
+  DAY_MS, LABEL_GATE_DESIGN, LABEL_GATE_IMPLEMENTATION, LABEL_GATE_PREP, LABEL_IN_PROGRESS, LABEL_ON_OWNER, LABEL_PARKED,
+  LABEL_READY_TO_MERGE, REPO_WINDOW_DAYS,
+} from '../src/shared/names.ts';
+import { MANAGED_LABELS } from '../src/shared/labels.ts';
+import { message } from '../src/shared/helpers.ts';
 import { flattenPages, gh } from './gh.ts';
 import type { Deps as BaseDeps } from './gh.ts';
 
@@ -7,14 +12,22 @@ interface Deps extends BaseDeps {
   now: () => Date;
 }
 
-const LABELS = [
-  { name: LABEL_ON_OWNER, color: 'e8a33a', description: `Waiting on ${OWNER_NAME}: a look, an answer, or a merge` },
-  { name: LABEL_PARKED, color: 'c9c6bd', description: `Waiting on something outside ${OWNER_NAME} and Claude` },
+const LABEL_LOOKS: Record<string, { color: string; description: string }> = {
+  [LABEL_GATE_DESIGN]: { color: '8b6fd0', description: 'The board: this work is at the design gate' },
+  [LABEL_GATE_IMPLEMENTATION]: { color: '4a9bd0', description: 'The board: this work is at the implementation gate' },
+  [LABEL_GATE_PREP]: { color: '3aa89a', description: 'The board: this work is at prep for merge' },
+  [LABEL_ON_OWNER]: { color: 'e8a33a', description: `The board: waiting on ${OWNER_NAME}` },
+  [LABEL_READY_TO_MERGE]: { color: '4caf50', description: 'The board: checks pass and it is ready to merge' },
+  [LABEL_PARKED]: { color: 'c9c6bd', description: `The board: waiting on something outside ${OWNER_NAME} and Claude` },
+};
+
+/** The labels this creates: the ones the board writes, and `in-progress`, which people and sessions set themselves. */
+export const LABELS = [
+  ...MANAGED_LABELS.map((name) => ({ name, ...LABEL_LOOKS[name]! })),
   { name: LABEL_IN_PROGRESS, color: '4a7bd0', description: 'Picked up: someone is working on it' },
 ];
 
 interface RepoSummary { full_name: string; pushed_at: string | null }
-interface RepoDetail { merge_commit_message?: string; squash_merge_commit_message?: string }
 
 export async function main(argv: string[], deps: Deps): Promise<number> {
   const out = deps.out ?? ((l) => console.log(l));
@@ -40,19 +53,15 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
             out(`${name}: created "${label.name}"`);
           }
         }
-        const detail = JSON.parse(await deps.gh(['api', `repos/${name}`])) as RepoDetail;
-        if (detail.merge_commit_message === 'PR_BODY' || detail.squash_merge_commit_message === 'PR_BODY') {
-          out(`WARNING ${name}: merge commits copy the pull request description into history, so the status section would leak into commit messages. Change it in the repo's merge settings.`);
-        }
       } catch (e) {
         failed = true;
-        err(`${name}: ${e instanceof Error ? e.message : String(e)}`);
+        err(`${name}: ${message(e)}`);
       }
     }
     if (repos.length === 0) out(`No repos pushed to in the last ${REPO_WINDOW_DAYS} days.`);
     return failed ? 1 : 0;
   } catch (e) {
-    err(e instanceof Error ? e.message : String(e));
+    err(message(e));
     return 1;
   }
 }

@@ -1,5 +1,7 @@
 # PR Board: design
 
+> Partly replaced by `2026-11-20-gates-and-board-state-design.md`: its sections on the stage strip (Stage, inferred), the status section, turn labels, the status hook, how answers get back to Claude and how they are claimed now follow that design; this document's goals, its page sections and its "Left for later" list (under Next parts) still stand. Where the two disagree, the newer one wins.
+
 Date: 2026-11-05. Status: draft for review.
 
 ## Why this exists

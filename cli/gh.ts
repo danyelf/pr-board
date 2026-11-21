@@ -1,5 +1,4 @@
 import { execFile } from 'node:child_process';
-import { pickStatusComment, statusText } from '../src/shared/status.ts';
 import { OWNER_LOGIN } from '../src/shared/config.ts';
 
 /** Runs a command. `env`, when given, replaces the environment it runs in. */
@@ -42,17 +41,18 @@ export const gh: Gh = run('gh');
 export const git: Gh = run('git');
 export const ps: Gh = run('ps');
 
-/** Thrown when `gh` would act as the board's owner, whose 👀 the board doesn't count as a claim. */
+/** Thrown when `gh` would act as the board's owner rather than as Claude's account. */
 export class OwnerError extends Error {}
 
 /**
- * Returns the login `gh` acts as. Throws an OwnerError when that is the board's owner, since an
- * answer claimed by the owner would look to the board as if nobody had picked it up. Other
- * failures (GitHub unreachable) are thrown as they are, for the caller to decide on.
+ * Returns the login `gh` acts as. Throws an OwnerError when that is the board's owner: a session's
+ * `gh` must be Claude's account, so that the review request asking the owner to look at a PR comes
+ * from someone else and GitHub notifies them. Other failures (GitHub unreachable) are thrown as they
+ * are, for the caller to decide on.
  */
 export async function refuseOwner(gh: Gh, advice: string): Promise<string> {
   const login = (await gh(['api', 'user', '-q', '.login'])).trim();
-  if (login === OWNER_LOGIN) throw new OwnerError(`gh is signed in as ${login}, the board's owner. The board doesn't count the owner's own 👀 as a claim. ${advice}`);
+  if (login === OWNER_LOGIN) throw new OwnerError(`gh is signed in as ${login}, the board's owner. Sessions must use Claude's account, so that the review request asking the owner to look comes from someone else and notifies them. ${advice}`);
   return login;
 }
 
@@ -60,13 +60,6 @@ export async function refuseOwner(gh: Gh, advice: string): Promise<string> {
 export function flattenPages(json: string): unknown[] {
   const parsed: unknown = JSON.parse(json || '[]');
   return Array.isArray(parsed) ? parsed.flat() : [];
-}
-
-/** Whether GitHub said 404. Reads only what the command printed, not the command, whose path may hold a 404 (item #404). */
-export function isNotFound(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const at = message.lastIndexOf(' failed: ');
-  return /\b404\b|Not Found/i.test(at === -1 ? message : message.slice(at + ' failed: '.length));
 }
 
 /** Reads "owner/repo#N", or "#N" (just the number, in the current directory's repo). Throws on anything else. */
@@ -82,40 +75,4 @@ export function readRef(text: string): Ref | { n: number } {
 export async function parseRef(text: string, gh: Gh): Promise<Ref> {
   const ref = readRef(text);
   return 'owner' in ref ? ref : { ...(await currentRepo(gh)), n: ref.n };
-}
-
-/** Every comment on the item, oldest first, however many pages there are. */
-export async function issueComments<T extends { body: string }>(gh: Gh, ref: Ref): Promise<T[]> {
-  const url = `repos/${ref.owner}/${ref.repo}/issues/${ref.n}/comments?per_page=100`;
-  return flattenPages(await gh(['api', url, '--paginate', '--slurp'])) as T[];
-}
-
-export interface ItemRead<T> {
-  isPr: boolean;
-  /** Not closed, and for a PR not merged (a merged PR is closed too). */
-  open: boolean;
-  /** The text the status lives in. */
-  statusText: string;
-  /** For an issue, the comment that text comes from; null for a PR, or an issue with no status comment. */
-  statusComment: T | null;
-  comments: T[];
-  labels: string[];
-}
-
-/** An item and its comments, with the text its status lives in. */
-export async function readItem<T extends { body: string }>(gh: Gh, ref: Ref): Promise<ItemRead<T>> {
-  const item = JSON.parse(await gh(['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.n}`])) as {
-    state?: string; pull_request?: unknown; body?: string | null; labels?: { name?: string }[];
-  };
-  const comments = await issueComments<T>(gh, ref);
-  const isPr = Boolean(item.pull_request);
-  const statusComment = isPr ? null : pickStatusComment(comments);
-  const text = statusText({ kind: isPr ? 'pr' : 'issue', body: item.body ?? '', statusCommentBody: statusComment?.body ?? null });
-  const labels = (item.labels ?? []).map((l) => l.name).filter((n): n is string => typeof n === 'string');
-  return { isPr, open: item.state !== 'closed', statusText: text, statusComment, comments, labels };
-}
-
-/** The text that holds an item's status, as the board reads it. */
-export async function readStatusText(gh: Gh, ref: Ref): Promise<string> {
-  return (await readItem(gh, ref)).statusText;
 }

@@ -1,0 +1,4 @@
+{"type":"user","timestamp":"2026-11-05T09:00:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"user","content":"earlier"}}
+{"type":"assistant","timestamp":"2026-11-05T09:01:00Z","cwd":"/Users/danyel/code/MISC/tor
+{"type":"user","timestamp":"2026-11-05T10:00:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"user","content":"what is in src?"}}
+{"type":"assistant","timestamp":"2026-11-05T10:01:00Z","cwd":"/Users/danyel/code/MISC/torahmap","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls src"}}]}}
