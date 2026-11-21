@@ -4,6 +4,8 @@ import { PAGE_SCRIPTS } from '../src/worker/render.ts';
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from 'jose';
 import { makeHandler, type Env, type Handler } from '../src/worker/index.ts';
 import { GitHubRefused } from '../src/worker/github.ts';
+import { caller } from '../src/worker/access.ts';
+import type { Db } from '../src/worker/store.ts';
 import { LOOK_DEFAULT, parseAnswer } from '../src/shared/answer.ts';
 import { statusFingerprint } from '../src/shared/fingerprint.ts';
 import { parseStatus, renderStatus } from '../src/shared/status.ts';
@@ -15,7 +17,8 @@ const AUD = 'aud-123';
 const EMAIL = 'danyel@gmail.com';
 const NOW = new Date('2026-11-06T00:00:00Z');
 
-const env: Env = { GITHUB_TOKEN: 'tok', ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD, ALLOWED_EMAIL: EMAIL };
+const CLIENT_ID = 'claude-client.access';
+const env: Env = { GITHUB_TOKEN: 'tok', ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD, ALLOWED_EMAIL: EMAIL, SERVICE_CLIENT_ID: CLIENT_ID, DB: {} as Db };
 
 let getKey: ReturnType<typeof createLocalJWKSet>;
 let privateKey: CryptoKey;
@@ -27,8 +30,10 @@ beforeAll(async () => {
   getKey = createLocalJWKSet({ keys: [jwk] });
 });
 
-function sign(over: { email?: string; noEmail?: boolean; aud?: string; iss?: string } = {}): Promise<string> {
-  return new SignJWT(over.noEmail ? {} : { email: over.email ?? EMAIL })
+function sign(over: { email?: string; noEmail?: boolean; commonName?: string; aud?: string; iss?: string } = {}): Promise<string> {
+  const claims: Record<string, string> = over.noEmail ? {} : { email: over.email ?? EMAIL };
+  if (over.commonName !== undefined) claims.common_name = over.commonName;
+  return new SignJWT(claims)
     .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
     .setAudience(over.aud ?? AUD)
     .setIssuer(over.iss ?? `https://${TEAM}`)
@@ -64,6 +69,70 @@ async function get(h: Handler, url: string, headers: Record<string, string> = {}
 
 const ok = { items: [facts({ number: 1, labels: ['on sam'] })], errors: [] as string[] };
 
+describe('caller', () => {
+  const url = 'https://board.example.com/';
+  async function who(over: Parameters<typeof sign>[0] | null, e: Env = env, extra: Record<string, string> = {}, u = url) {
+    const headers: Record<string, string> = { ...extra };
+    if (over) headers['Cf-Access-Jwt-Assertion'] = await sign(over);
+    return caller(new Request(u, { headers }), e, getKey);
+  }
+
+  it('is the owner for a token with the owner address', async () => {
+    expect(await who({})).toBe('owner');
+  });
+
+  it('compares the owner address without regard to capital letters', async () => {
+    expect(await who({ email: 'Danyel@GMAIL.com' })).toBe('owner');
+  });
+
+  it('is Claude for a service token with the right common name', async () => {
+    expect(await who({ noEmail: true, commonName: CLIENT_ID })).toBe('claude');
+  });
+
+  it('is nobody for a service token with another common name', async () => {
+    expect(await who({ noEmail: true, commonName: 'someone-else.access' })).toBeNull();
+  });
+
+  it('never makes Claude of a token with an email, even with the matching common name', async () => {
+    expect(await who({ commonName: CLIENT_ID })).toBe('owner');
+    expect(await who({ email: 'x@example.com', commonName: CLIENT_ID })).toBeNull();
+  });
+
+  it('never makes Claude of anyone when the service client id is empty or missing', async () => {
+    const unset = { ...env } as Partial<Env>;
+    delete unset.SERVICE_CLIENT_ID;
+    for (const e of [unset as Env, { ...env, SERVICE_CLIENT_ID: '' }]) {
+      expect(await who({ noEmail: true, commonName: '' }, e)).toBeNull();
+      expect(await who({ noEmail: true }, e)).toBeNull();
+    }
+  });
+
+  it('lets no owner in when no allowed email is set, even a token with no email', async () => {
+    const unset = { ...env } as Partial<Env>;
+    delete unset.ALLOWED_EMAIL;
+    for (const e of [unset as Env, { ...env, ALLOWED_EMAIL: '' }]) {
+      expect(await who({ noEmail: true }, e)).toBeNull();
+    }
+  });
+
+  it('is nobody for no header, the wrong audience, or garbage', async () => {
+    expect(await who(null)).toBeNull();
+    expect(await who({ aud: 'other' })).toBeNull();
+    expect(await caller(new Request(url, { headers: { 'Cf-Access-Jwt-Assertion': 'nonsense' } }), env, getKey)).toBeNull();
+  });
+
+  it('on localhost with ALLOW_LOCAL is the owner, or Claude when the local header says so', async () => {
+    const local = { ...env, ALLOW_LOCAL: '1' };
+    expect(await who(null, local, {}, 'http://localhost:8787/')).toBe('owner');
+    expect(await who(null, local, { 'X-Local-Caller': 'claude' }, 'http://localhost:8787/')).toBe('claude');
+  });
+
+  it('ignores the local header off localhost, and without ALLOW_LOCAL', async () => {
+    expect(await who(null, { ...env, ALLOW_LOCAL: '1' }, { 'X-Local-Caller': 'claude' })).toBeNull();
+    expect(await who(null, env, { 'X-Local-Caller': 'claude' }, 'http://localhost:8787/')).toBeNull();
+  });
+});
+
 describe('worker', () => {
   it('refuses a request with no Access header', async () => {
     const res = await get(handler(ok).h, 'https://board.example.com/');
@@ -85,43 +154,9 @@ describe('worker', () => {
     expect([...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])).toEqual(PAGE_SCRIPTS);
   });
 
-  it('refuses a valid signature for the wrong email', async () => {
-    const res = await get(handler(ok).h, 'https://board.example.com/', { 'Cf-Access-Jwt-Assertion': await sign({ email: 'x@example.com' }) });
-    expect(res.status).toBe(403);
-  });
-
-  it('compares the email without regard to capital letters', async () => {
-    const res = await get(handler(ok).h, 'https://board.example.com/', { 'Cf-Access-Jwt-Assertion': await sign({ email: 'Danyel@GMAIL.com' }) });
-    expect(res.status).toBe(200);
-  });
-
-  it('lets nobody in when no allowed email is set, even a token with no email', async () => {
-    const unset = { ...env } as Partial<Env>;
-    delete unset.ALLOWED_EMAIL;
-    for (const e of [unset as Env, { ...env, ALLOWED_EMAIL: '' }]) {
-      const res = await get(handler(ok).h, 'https://board.example.com/', { 'Cf-Access-Jwt-Assertion': await sign({ noEmail: true }) }, e);
-      expect(res.status).toBe(403);
-    }
-  });
-
-  it('refuses the wrong audience', async () => {
-    const res = await get(handler(ok).h, 'https://board.example.com/', { 'Cf-Access-Jwt-Assertion': await sign({ aud: 'other' }) });
-    expect(res.status).toBe(403);
-  });
-
-  it('refuses garbage in the header', async () => {
-    const res = await get(handler(ok).h, 'https://board.example.com/', { 'Cf-Access-Jwt-Assertion': 'nonsense' });
-    expect(res.status).toBe(403);
-  });
-
   it('lets localhost through when ALLOW_LOCAL is 1', async () => {
     const res = await get(handler(ok).h, 'http://localhost:8787/', {}, { ...env, ALLOW_LOCAL: '1' });
     expect(res.status).toBe(200);
-  });
-
-  it('does not let another host through when ALLOW_LOCAL is 1', async () => {
-    const res = await get(handler(ok).h, 'https://board.example.com/', {}, { ...env, ALLOW_LOCAL: '1' });
-    expect(res.status).toBe(403);
   });
 
   it('caches a clean fetch and reuses it', async () => {
