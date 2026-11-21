@@ -1,14 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { LABEL_ON_OWNER, LABEL_PARKED } from '../src/shared/names.ts';
-import { hasStatusSection } from '../src/shared/status.ts';
-import { currentRepo, flattenPages, gh, git, refString } from '../cli/gh.ts';
+import { BoardError, boardCall } from '../cli/board.ts';
+import type { BoardDeps } from '../cli/board.ts';
+import { currentRepo, gh, git, refString } from '../cli/gh.ts';
 import type { Deps, Gh, Ref } from '../cli/gh.ts';
 
 export interface HookDeps extends Deps {
   git: Gh;
-  /** The home folder, where the list of "status is still right" notes is kept. */
-  home: string;
+  board: BoardDeps;
   stdin: string;
 }
 
@@ -25,7 +25,6 @@ interface Entry {
 
 interface ToolUse { id: string; command: string; cwd: string }
 
-const TURN_LABELS = new Set([LABEL_ON_OWNER, LABEL_PARKED]);
 /** The status command Claude is told to run; it sits next to this hook's folder. */
 const PR_STATUS_SCRIPT = join(import.meta.dirname, '..', 'cli', 'pr-status.ts');
 const VALUE_FLAGS = new Set(['-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--title', '-a', '--assignee', '-l', '--label', '-m', '--milestone', '-B', '--base', '-H', '--head', '-r', '--reviewer', '-p', '--project']);
@@ -216,47 +215,20 @@ async function touchedBy(use: ToolUse, entries: Entry[], deps: HookDeps, cache: 
   return found;
 }
 
-async function checkedRefs(home: string): Promise<{ ref: string; at: number }[]> {
-  let text: string;
+type Standing = 'ok' | 'no-record' | 'stale';
+
+/** Asks the board whether this item's status was written or confirmed since the turn started. */
+async function standing(item: Touched, turnStart: number, deps: HookDeps): Promise<Standing> {
   try {
-    text = await readFile(join(home, '.pr-board', 'checked.jsonl'), 'utf8');
+    const { record } = await boardCall<{ record: { writtenAt: string; confirmedAt: string | null } }>(
+      deps.board, 'GET', `/api/work?repo=${encodeURIComponent(`${item.owner}/${item.repo}`)}&number=${item.n}`,
+    );
+    const latest = Math.max(Date.parse(record.writtenAt), record.confirmedAt ? Date.parse(record.confirmedAt) : 0);
+    return latest >= turnStart ? 'ok' : 'stale';
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if (e instanceof BoardError && e.status === 404) return 'no-record';
     throw e;
   }
-  return text.split('\n').filter(Boolean).map((l) => {
-    const o = JSON.parse(l) as { ref: string; at: string };
-    return { ref: o.ref, at: Date.parse(o.at) };
-  });
-}
-
-async function isUpdated(item: Touched, turnStart: number, deps: HookDeps, checked: { ref: string; at: number }[]): Promise<boolean> {
-  const ref = refString(item);
-  if (checked.some((c) => c.ref === ref && c.at >= turnStart)) return true;
-
-  const base = `repos/${item.owner}/${item.repo}/issues/${item.n}`;
-  const events = flattenPages(await deps.gh(['api', `${base}/events?per_page=100`, '--paginate', '--slurp'])) as {
-    event: string; label?: { name: string }; created_at: string;
-  }[];
-  if (events.some((e) => (e.event === 'labeled' || e.event === 'unlabeled') && e.label && TURN_LABELS.has(e.label.name) && Date.parse(e.created_at) >= turnStart)) {
-    return true;
-  }
-
-  let kind = item.kind;
-  if (kind === 'unknown') {
-    const meta = JSON.parse(await deps.gh(['api', base])) as { pull_request?: unknown };
-    kind = meta.pull_request ? 'pr' : 'issue';
-  }
-  if (kind === 'pr') {
-    const query = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){lastEditedAt body}}}';
-    const res = JSON.parse(await deps.gh(['api', 'graphql', '-f', `query=${query}`, '-F', `o=${item.owner}`, '-F', `r=${item.repo}`, '-F', `n=${item.n}`])) as {
-      data: { repository: { pullRequest: { lastEditedAt: string | null; body: string } } };
-    };
-    const pr = res.data.repository.pullRequest;
-    return pr.lastEditedAt !== null && Date.parse(pr.lastEditedAt) >= turnStart && hasStatusSection(pr.body);
-  }
-  const comments = flattenPages(await deps.gh(['api', `${base}/comments?per_page=100`, '--paginate', '--slurp'])) as { body: string; updated_at: string }[];
-  return comments.some((c) => hasStatusSection(c.body) && Date.parse(c.updated_at) >= turnStart);
 }
 
 export async function main(deps: HookDeps): Promise<number> {
@@ -301,16 +273,32 @@ export async function main(deps: HookDeps): Promise<number> {
     }
     if (touched.size === 0) return 0;
 
-    const checked = await checkedRefs(deps.home);
-    const missing: string[] = [];
-    for (const [ref, item] of touched) {
-      if (!(await isUpdated(item, turnStart, deps, checked))) missing.push(ref);
+    const stale: string[] = [];
+    const noRecord: string[] = [];
+    try {
+      for (const [ref, item] of touched) {
+        const s = await standing(item, turnStart, deps);
+        if (s === 'stale') stale.push(ref);
+        else if (s === 'no-record') noRecord.push(ref);
+      }
+    } catch (e) {
+      // The board is down or won't accept us. Say so once; the retry (stop_hook_active) is let through above.
+      if (e instanceof BoardError) {
+        out(JSON.stringify({ decision: 'block', reason: e.message }));
+        return 0;
+      }
+      throw e;
     }
-    if (missing.length === 0) return 0;
+
+    const command = `node ${PR_STATUS_SCRIPT} set <ref> --gate … --state …`;
+    const lines: string[] = [];
+    for (const ref of noRecord) lines.push(`${ref} has no status on the board; run pr-status set.`);
+    if (stale.length > 0) lines.push(`You changed ${stale.join(', ')} this turn but didn't update the status on the board.`);
+    if (lines.length === 0) return 0;
 
     out(JSON.stringify({
       decision: 'block',
-      reason: `You changed ${missing.join(', ')} this turn but didn't update their status. Run: node ${PR_STATUS_SCRIPT} set <ref> --waiting … (or "ok <ref>" if the status is still right).`,
+      reason: `${lines.join(' ')} Run: ${command} (or "ok <ref>" if the status is still right).`,
     }));
     return 0;
   } catch (e) {
@@ -323,5 +311,8 @@ if (import.meta.main) {
   const { homedir } = await import('node:os');
   let stdin = '';
   for await (const chunk of process.stdin) stdin += chunk;
-  process.exitCode = await main({ gh, git, home: homedir(), stdin });
+  process.exitCode = await main({
+    gh, git, stdin,
+    board: { fetch, readFile: (p) => readFileSync(p, 'utf8'), env: process.env, home: homedir() },
+  });
 }

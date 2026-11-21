@@ -1,114 +1,108 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { main } from '../hooks/status-check.ts';
 import type { Gh } from '../cli/gh.ts';
 
 const FIXTURES = join(import.meta.dirname, 'fixtures', 'transcripts');
-const MARKER_BODY = '<!-- status -->\n**Waiting on:** Sam\n**Ask:** x\n<!-- /status -->\n\nbody';
 
 interface Setup {
-  lastEditedAt?: string | null;
-  body?: string;
-  events?: { event: string; label: { name: string }; created_at: string }[];
-  comments?: { body: string; updated_at: string }[];
+  /** What the board has on record for every item: null means no record (404). */
+  record?: { writtenAt?: string; confirmedAt?: string | null } | null;
+  boardDown?: boolean;
   throwOn?: string;
-  issueIsPr?: boolean;
   headPrs?: number[];
   branch?: string;
 }
 
 function fake(setup: Setup = {}) {
-  const calls: string[][] = [];
+  const asked: string[] = [];
   const gh: Gh = async (args, opts) => {
-    calls.push(args);
     const line = args.join(' ');
     if (setup.throwOn && line.includes(setup.throwOn)) throw new Error('boom');
     if (args[0] === 'repo' && args[1] === 'view') {
       return opts?.cwd?.endsWith('torahmap') ? 'danyelf/torahmap\n' : 'other/repo\n';
     }
-    if (args[0] === 'api' && args[1] === 'graphql') {
-      return JSON.stringify({ data: { repository: { pullRequest: { lastEditedAt: setup.lastEditedAt ?? null, body: setup.body ?? '' } } } });
-    }
-    if (/^api repos\/[^/]+\/[^/]+\/issues\/\d+\/events/.test(line)) return JSON.stringify([setup.events ?? []]);
-    if (/^api repos\/[^/]+\/[^/]+\/issues\/\d+\/comments/.test(line)) return JSON.stringify([setup.comments ?? []]);
-    if (/^api repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(line)) return JSON.stringify(setup.issueIsPr ? { pull_request: {} } : {});
     if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify((setup.headPrs ?? []).map((number) => ({ number })));
     if (args[0] === 'pr' && args[1] === 'view') return '574\n';
     throw new Error(`unexpected gh call: ${line}`);
   };
   const git: Gh = async () => `${setup.branch ?? 'feature-x'}\n`;
-  return { gh, git, calls };
+  const fakeFetch = (async (url: string) => {
+    asked.push(String(url));
+    if (setup.boardDown) throw new Error('network down');
+    if (setup.record === null || setup.record === undefined) {
+      return new Response(JSON.stringify({ error: 'no record' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+    }
+    const record = { writtenAt: '2026-11-05T09:00:00Z', confirmedAt: null, ...setup.record };
+    return new Response(JSON.stringify({ record, answers: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as unknown as typeof fetch;
+  const board = {
+    fetch: fakeFetch,
+    readFile: () => JSON.stringify({ clientId: 'id', clientSecret: 'secret' }),
+    env: {},
+    home: '/home',
+  };
+  return { gh, git, board, asked };
 }
 
-async function run(fixture: string, setup: Setup = {}, input: Record<string, unknown> = {}, checked?: string) {
-  const { gh, git } = fake(setup);
-  const home = await mkdtemp(join(tmpdir(), 'pr-board-'));
-  if (checked) {
-    await mkdir(join(home, '.pr-board'));
-    await writeFile(join(home, '.pr-board', 'checked.jsonl'), checked);
-  }
+async function run(fixture: string, setup: Setup = {}, input: Record<string, unknown> = {}) {
+  const { gh, git, board, asked } = fake(setup);
   const out: string[] = [];
   const errors: string[] = [];
   const stdin = JSON.stringify({
     session_id: 's', transcript_path: join(FIXTURES, fixture), cwd: '/Users/danyel/code/MISC/torahmap', stop_hook_active: false, hook_event_name: 'Stop', ...input,
   });
-  const code = await main({ gh, git, home, stdin, out: (l) => out.push(l), err: (l) => errors.push(l) });
-  return { code, out, errors, block: out.length ? (JSON.parse(out.join('')) as { decision: string; reason: string }) : null };
+  const code = await main({ gh, git, board, stdin, out: (l) => out.push(l), err: (l) => errors.push(l) });
+  return { code, out, errors, asked, block: out.length ? (JSON.parse(out.join('')) as { decision: string; reason: string }) : null };
 }
 
 describe('status-check hook', () => {
-  it('blocks when a commented PR has an old description', async () => {
-    const r = await run('pr-comment.jsonl', { lastEditedAt: '2026-11-05T09:30:00Z', body: MARKER_BODY });
+  it('passes when the status was written this turn', async () => {
+    const r = await run('pr-comment.jsonl', { record: { writtenAt: '2026-11-05T10:30:00Z' } });
+    expect(r.out).toEqual([]);
+    expect(r.asked[0]).toContain('/api/work?repo=danyelf%2Ftorahmap&number=574');
+  });
+
+  it('passes when the status was confirmed this turn', async () => {
+    const r = await run('pr-comment.jsonl', { record: { writtenAt: '2026-11-05T09:00:00Z', confirmedAt: '2026-11-05T10:40:00Z' } });
+    expect(r.out).toEqual([]);
+  });
+
+  it('blocks when the status was written and confirmed before the turn', async () => {
+    const r = await run('pr-comment.jsonl', { record: { writtenAt: '2026-11-05T09:30:00Z', confirmedAt: '2026-11-05T09:40:00Z' } });
     expect(r.code).toBe(0);
     expect(r.block?.decision).toBe('block');
     expect(r.block?.reason).toContain('danyelf/torahmap#574');
-    expect(r.block?.reason).toContain(`node ${join(import.meta.dirname, '..', 'cli', 'pr-status.ts')} set <ref> --waiting`);
+    expect(r.block?.reason).toContain(`node ${join(import.meta.dirname, '..', 'cli', 'pr-status.ts')} set <ref> --gate`);
   });
 
-  it('is satisfied by a description edited this turn that has the status marker', async () => {
-    const r = await run('pr-comment.jsonl', { lastEditedAt: '2026-11-05T10:30:00Z', body: MARKER_BODY });
+  it('blocks when the board has no record', async () => {
+    const r = await run('pr-comment.jsonl', { record: null });
+    expect(r.block?.reason).toContain('danyelf/torahmap#574 has no status on the board; run pr-status set');
+  });
+
+  it('blocks once with the warning when the board cannot be reached', async () => {
+    const r = await run('pr-comment.jsonl', { boardDown: true });
+    expect(r.block?.reason).toContain('⚠️');
+    expect(r.block?.reason).toContain("Couldn't reach the board");
+    expect(r.errors).toEqual([]);
+  });
+
+  it('lets the stop through when the hook already blocked once and the board is down', async () => {
+    const r = await run('pr-comment.jsonl', { boardDown: true }, { stop_hook_active: true });
     expect(r.out).toEqual([]);
-  });
-
-  it('is not satisfied by a recent edit with no status marker', async () => {
-    const r = await run('pr-comment.jsonl', { lastEditedAt: '2026-11-05T10:30:00Z', body: 'no marker' });
-    expect(r.block?.reason).toContain('#574');
-  });
-
-  it('is satisfied by a label change this turn', async () => {
-    const r = await run('pr-comment.jsonl', { events: [{ event: 'labeled', label: { name: 'on sam' }, created_at: '2026-11-05T10:20:00Z' }] });
-    expect(r.out).toEqual([]);
-  });
-
-  it('ignores label changes from before the turn and unrelated labels', async () => {
-    const r = await run('pr-comment.jsonl', {
-      events: [
-        { event: 'labeled', label: { name: 'parked' }, created_at: '2026-11-05T09:00:00Z' },
-        { event: 'labeled', label: { name: 'bug' }, created_at: '2026-11-05T10:20:00Z' },
-      ],
-    });
-    expect(r.block).not.toBeNull();
-  });
-
-  it('is satisfied by an "ok" line this turn, not by an older one', async () => {
-    const fresh = await run('pr-comment.jsonl', {}, {}, '{"ref":"danyelf/torahmap#574","at":"2026-11-05T10:40:00Z"}\n');
-    expect(fresh.out).toEqual([]);
-    const stale = await run('pr-comment.jsonl', {}, {}, '{"ref":"danyelf/torahmap#574","at":"2026-11-05T09:40:00Z"}\n');
-    expect(stale.block).not.toBeNull();
-  });
-
-  it('does nothing when no GitHub commands ran', async () => {
-    expect((await run('no-github.jsonl')).out).toEqual([]);
   });
 
   it('does nothing when the stop hook is already active', async () => {
     expect((await run('pr-comment.jsonl', {}, { stop_hook_active: true })).out).toEqual([]);
   });
 
+  it('does nothing when no GitHub commands ran', async () => {
+    expect((await run('no-github.jsonl')).out).toEqual([]);
+  });
+
   it('prints nothing and one stderr line when gh fails', async () => {
-    const r = await run('pr-comment.jsonl', { throwOn: 'graphql' });
+    const r = await run('pr-comment.jsonl', { throwOn: 'repo view' });
     expect(r.code).toBe(0);
     expect(r.out).toEqual([]);
     expect(r.errors).toHaveLength(1);
@@ -144,10 +138,10 @@ describe('status-check hook', () => {
     expect(r.block?.reason).toContain('danyelf/torahmap#31');
   });
 
-  it('checks the status comment on an issue', async () => {
-    const stale = await run('issue-comment.jsonl', { comments: [{ body: MARKER_BODY, updated_at: '2026-11-05T09:00:00Z' }] });
+  it('checks an issue the same way', async () => {
+    const stale = await run('issue-comment.jsonl', { record: { writtenAt: '2026-11-05T09:00:00Z' } });
     expect(stale.block?.reason).toContain('danyelf/torahmap#12');
-    const fresh = await run('issue-comment.jsonl', { comments: [{ body: MARKER_BODY, updated_at: '2026-11-05T10:30:00Z' }] });
+    const fresh = await run('issue-comment.jsonl', { record: { writtenAt: '2026-11-05T10:30:00Z' } });
     expect(fresh.out).toEqual([]);
   });
 
