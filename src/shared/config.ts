@@ -7,7 +7,7 @@ function setting(key: 'ownerName' | 'ownerLogin' | 'boardUrl', meaning: string):
   return value.trim();
 }
 
-/** The person the board is for, as the status section and the labels spell them. */
+/** The person the board is for, as the labels and the Mac service's messages spell them. */
 export const OWNER_NAME = setting('ownerName', 'the name of the person the board is for');
 
 /** That person's GitHub login: the one asked to review a PR handed to them. */

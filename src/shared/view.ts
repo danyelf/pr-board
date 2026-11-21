@@ -3,7 +3,7 @@
 import type { Facts } from './facts.ts';
 import { DAY_MS, PICKUP_GRACE_MS, WORKING_STALLS_MS } from './names.ts';
 import { APPROVAL_CHOICES, GATES, gatesOf, turnOf, type AnswerRow, type Gate, type WorkRecord } from './work.ts';
-import { labelChanges, wantedLabels } from '../worker/labels.ts';
+import { labelChanges, wantedLabels } from './labels.ts';
 
 export type BoxLook = 'approved' | 'working' | 'paused' | 'complete' | 'ready' | 'blocked' | 'parked' | 'on-hold' | 'todo';
 

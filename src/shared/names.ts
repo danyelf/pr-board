@@ -43,30 +43,15 @@ export const CLAUDE_BOT_KEY = 'claude.bot';
 /** The Worker and the label setup both cover repos pushed to within this many days. */
 export const REPO_WINDOW_DAYS = 60;
 
-/** Who a status can be waiting on. `role` is the code's name; `spelling` is how the status section writes it. */
-export const WAITING_ON = [
-  { role: 'owner', spelling: OWNER_NAME },
-  { role: 'claude', spelling: 'Claude' },
-  { role: 'nobody', spelling: 'nobody' },
-] as const;
-
-export type WaitingOn = (typeof WAITING_ON)[number]['role'];
-
 /**
  * Text that other tools write, and that the board looks for. If one of them changes its wording,
  * the board stops seeing it, so the wording is kept here, together, with who writes it.
  */
 export const WRITTEN_ELSEWHERE = {
-  /** Claude's code-review comment on a PR. The capture is the commit the review covered. */
-  reviewedUpTo: /Reviewed up to `([0-9a-f]{7,40})`/,
-  /** Claude's prep-for-merge comment on a PR. */
-  prepForMerge: '🤖 Claude: prep for merge',
   /** Cloudflare's preview comment on a PR. The capture is the preview address. */
   previewLink: /href='(https:\/\/[^']+)'>Branch Preview URL/,
   /** A line in a PR description, written by Claude, naming the issue the PR is about. */
   refsIssue: /Refs #(\d+)/,
   /** A line in a PR description, written by Claude, naming the PR this one is built on. */
   stackedOn: /Stacked on #(\d+)/i,
-  /** The heading Claude puts in a PR description above the steps for trying the change. */
-  toLookAt: '**To look at on the preview:**',
 };

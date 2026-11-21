@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fetchFacts, setLabels } from '../src/worker/github.ts';
-import { MANAGED_LABELS, labelChanges, wantedLabels } from '../src/worker/labels.ts';
+import { MANAGED_LABELS, labelChanges, wantedLabels } from '../src/shared/labels.ts';
 import { answerFacts, recordedFacts } from './github-fake.ts';
 
 const NOW = new Date('2026-11-20T22:00:00Z');

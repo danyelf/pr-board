@@ -1,7 +1,7 @@
 import {
   LABEL_GATE_DESIGN, LABEL_GATE_IMPLEMENTATION, LABEL_GATE_PREP, LABEL_ON_OWNER, LABEL_PARKED, LABEL_READY_TO_MERGE,
-} from '../shared/names.ts';
-import type { Gate } from '../shared/work.ts';
+} from './names.ts';
+import type { Gate } from './work.ts';
 
 /** The labels the board writes on GitHub. It never touches any other label, `in-progress` included. */
 export const MANAGED_LABELS: readonly string[] = [

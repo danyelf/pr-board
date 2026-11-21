@@ -3,7 +3,7 @@ import {
   DAY_MS, LABEL_GATE_DESIGN, LABEL_GATE_IMPLEMENTATION, LABEL_GATE_PREP, LABEL_IN_PROGRESS, LABEL_ON_OWNER, LABEL_PARKED,
   LABEL_READY_TO_MERGE, REPO_WINDOW_DAYS,
 } from '../src/shared/names.ts';
-import { MANAGED_LABELS } from '../src/worker/labels.ts';
+import { MANAGED_LABELS } from '../src/shared/labels.ts';
 import { flattenPages, gh } from './gh.ts';
 import type { Deps as BaseDeps } from './gh.ts';
 
