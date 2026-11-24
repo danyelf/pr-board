@@ -104,6 +104,9 @@ export const APPROVAL_CHOICES: Record<'design' | 'implementation', readonly [str
 
 export const GATE_NAMES: Record<Gate, string> = { design: 'Design', implementation: 'Implementation', prep: 'Prep for merge' };
 
+/** The names the board's page shows. */
+export const GATE_SHORT_NAMES: Record<Gate, string> = { design: 'Design', implementation: 'Build', prep: 'Prep' };
+
 /** The item a record is known by: its PR when it has one, otherwise its issue. */
 export function recordNumber(r: Pick<WorkRecord, 'pr' | 'issue'>): number {
   return r.pr ?? r.issue!;

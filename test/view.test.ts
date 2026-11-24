@@ -32,11 +32,11 @@ describe('the cards sketched in the design', () => {
     const c = v.waiting[0]!;
     expect(c.key).toBe('acme/torahmap#626');
     expect(c.title).toBe('Tools state');
-    expect(c.tag).toBe('Ready to merge');
-    expect(looks(c)).toEqual(['approved', 'approved', 'ready']);
-    expect(c.boxes[2]!.text).toBe('ready for merge');
+    expect(c.tag).toBe('ready to merge');
+    expect(c.tone).toBe('ready');
+    expect(looks(c)).toEqual(['approved', 'approved', 'now']);
     expect(c.links.merge).toBe(toolsState.facts.url);
-    expect(c.noteLabel).toBe('needs changes');
+    expect(c.noteLabel).toBe('Needs changes? Say what');
     expect(c.approval).toBeNull();
     expect(c.turn).toBe('owner');
     expect(c.labels).toEqual({ add: ['gate: prep', 'on sam', 'ready to merge'], remove: [] });
@@ -45,9 +45,9 @@ describe('the cards sketched in the design', () => {
   it('#573 is paused with one question', () => {
     const v = view([pinnedVerses.record], [], [pinnedVerses.facts]);
     const c = v.waiting[0]!;
-    expect(c.tag).toBe('1 question for you');
-    expect(looks(c)).toEqual(['approved', 'paused', 'todo']);
-    expect(c.boxes[1]!.badge).toBe('1 question');
+    expect(c.tag).toBe('1 question');
+    expect(c.tone).toBe('owner');
+    expect(looks(c)).toEqual(['approved', 'now', 'todo']);
     expect(c.questions).toEqual(pinnedVerses.record.questions.map((q) => ({ ...q, choices: [...q.choices, 'file an issue'] })));
     expect(c.approval).toBeNull();
     expect(c.noteLabel).toBe('Note');
@@ -58,8 +58,8 @@ describe('the cards sketched in the design', () => {
     const v = view([searchBox.record], [], [searchBox.facts]);
     const c = v.waiting[0]!;
     expect(c.kind).toBe('issue');
-    expect(c.tag).toBe('Design ready for your approval');
-    expect(looks(c)).toEqual(['complete', 'todo', 'todo']);
+    expect(c.tag).toBe('approve design?');
+    expect(looks(c)).toEqual(['now', 'todo', 'todo']);
     expect(c.boxes[0]!.round).toBe(2);
     expect(c.approval).toEqual({ choices: ['approve, build it', 'needs changes'], defaultChoice: 'approve, build it' });
     expect(c.waitingSince).toBe(searchBox.record.turnSince);
@@ -80,10 +80,10 @@ describe('the cards sketched in the design', () => {
   it('#564 is reopened, with Implementation on hold', () => {
     const v = view([layout.record], [], [layout.facts]);
     const c = v.onClaude[0]!;
-    expect(c.tag).toBe('Claude designing');
-    expect(looks(c)).toEqual(['working', 'on-hold', 'todo']);
+    expect(c.tag).toBe('working');
+    expect(c.tone).toBe('claude');
+    expect(looks(c)).toEqual(['now', 'on-hold', 'todo']);
     expect(c.boxes[0]!.round).toBe(2);
-    expect(c.boxes[1]!.text).toBe('on hold');
     expect(c.backReason).toBe("the grid can't hold long titles");
     expect(c.turn).toBe('claude');
   });
@@ -136,15 +136,16 @@ describe('boxes', () => {
   it('has no design box without a design step', () => {
     const c = only([record({ hasDesign: false, approved: {} })], [], [facts()]);
     expect(c.boxes.map((b) => b.gate)).toEqual(['implementation', 'prep']);
-    expect(looks(c)).toEqual(['working', 'todo']);
+    expect(looks(c)).toEqual(['now', 'todo']);
   });
 
   it('shows prep complete and not mergeable as blocked, with the reason', () => {
     const r = { ...toolsState.record };
     const f = { ...toolsState.facts, mergeState: 'DIRTY' };
     const c = only([r], [], [f]);
-    expect(c.boxes[2]).toMatchObject({ look: 'blocked', text: 'conflicts' });
-    expect(c.tag).toBe("Can't merge yet: conflicts");
+    expect(c.boxes[2]!.look).toBe('now');
+    expect(c.tag).toBe("can't merge: conflicts");
+    expect(c.tone).toBe('blocked');
     expect(c.links.merge).toBeNull();
     expect(c.labels.add).not.toContain('ready to merge');
   });
@@ -153,25 +154,26 @@ describe('boxes', () => {
     const r = record({ gate: 'implementation', state: 'complete', toTest: 'try it', approved: { design: ago(900), implementation: ago(1) }, rounds: { design: 1, implementation: 1, prep: 0 } });
     const a = answer({ approval: 'looks good, prep for merge', at: ago(1) });
     const c = only([r], [a], [facts()]);
-    expect(looks(c)).toEqual(['approved', 'approved', 'working']);
-    expect(c.boxes[2]!.text).toBe('Answered, waiting for Claude to pick it up');
-    expect(c.boxes.map((b) => b.current)).toEqual([false, false, true]);
+    expect(looks(c)).toEqual(['approved', 'approved', 'now']);
+    expect(c.tag).toBe('sent');
+    expect(c.tone).toBe('claude');
     expect(c.approval).toBeNull();
     expect(c.turn).toBe('claude');
   });
 
-  it('colours the box after an approved gate as needing the owner, and gives the turn back, once the answer is not picked up', () => {
+  it('gives the turn back to the owner once the answer to an approval is not picked up', () => {
     const r = record({ gate: 'implementation', state: 'complete', toTest: 'try it', approved: { design: ago(900), implementation: ago(20) }, rounds: { design: 1, implementation: 1, prep: 0 } });
     const c = only([r], [answer({ approval: 'looks good, prep for merge', at: ago(20) })], [facts()]);
     expect(c.answerState).toBe('not-picked-up');
-    expect(looks(c)).toEqual(['approved', 'approved', 'attention']);
+    expect(looks(c)).toEqual(['approved', 'approved', 'now']);
     expect(c.turn).toBe('owner');
+    expect(c.tone).toBe('owner');
   });
 
-  it('marks the box of the gate Claude is in now as current, and none when nothing is in progress', () => {
-    expect(only([layout.record], [], [layout.facts]).boxes.map((b) => b.current)).toEqual([true, false, false]);
+  it('marks the gate the work is at, and none when the owner approved it and has not answered', () => {
+    expect(looks(only([layout.record], [], [layout.facts]))).toEqual(['now', 'on-hold', 'todo']);
     const approved = record({ gate: 'implementation', state: 'complete', toTest: 'x', approved: { design: ago(900), implementation: ago(1) } });
-    expect(only([approved], [], [facts()]).boxes.map((b) => b.current)).toEqual([false, false, false]);
+    expect(looks(only([approved], [], [facts()]))).toEqual(['approved', 'approved', 'todo']);
   });
 
   it('shows the round only from 2', () => {
@@ -181,17 +183,17 @@ describe('boxes', () => {
     expect(working.boxes[1]!.round).toBe(2);
   });
 
-  it('counts questions on the paused badge', () => {
+  it('counts the questions of a paused gate', () => {
     const qs = [1, 2].map((n) => ({ n, text: `Q${n}?`, choices: ['a', 'b'], defaultChoice: 'a' }));
     const c = only([record({ state: 'paused', questions: qs })], [], [facts()]);
-    expect(c.boxes[1]!.badge).toBe('2 questions');
-    expect(c.tag).toBe('2 questions for you');
+    expect(c.tag).toBe('2 questions');
   });
 
   it('shows parked in grey', () => {
     const c = only([record({ state: 'parked', ask: 'Waiting on the API' })], [], [facts()]);
-    expect(looks(c)).toEqual(['approved', 'parked', 'todo']);
-    expect(c.tag).toBe('Parked');
+    expect(looks(c)).toEqual(['approved', 'now', 'todo']);
+    expect(c.tag).toBe('parked');
+    expect(c.tone).toBe('nobody');
     expect(c.turn).toBe('nobody');
     expect(c.labels.add).toEqual(['gate: implementation', 'parked']);
   });
@@ -199,17 +201,17 @@ describe('boxes', () => {
 
 describe('tags', () => {
   const tag = (over: Partial<WorkRecord>) => only([record(over)], [], [facts()]).tag;
-  it('follows the gate for working', () => {
-    expect(tag({ gate: 'design', reached: 'design', approved: {} })).toBe('Claude designing');
-    expect(tag({ gate: 'implementation' })).toBe('Claude building');
-    expect(tag({ gate: 'prep', reached: 'prep', approved: { design: ago(9), implementation: ago(9) } })).toBe('Claude prepping');
+  it('says working at every gate, since the gate line names the gate', () => {
+    expect(tag({ gate: 'design', reached: 'design', approved: {} })).toBe('working');
+    expect(tag({ gate: 'prep', reached: 'prep', approved: { design: ago(9), implementation: ago(9) } })).toBe('working');
   });
-  it('says Implementation complete is ready for a look', () => {
-    expect(tag({ state: 'complete', toTest: 'try it' })).toBe('Ready for your look');
+  it('asks for approval of a complete build', () => {
+    expect(tag({ state: 'complete', toTest: 'try it' })).toBe('approve build?');
   });
-  it('says No status written for an open PR with no record', () => {
+  it('says no status for an open PR with no record', () => {
     const v = view([], [], [facts({ number: 77 })]);
-    expect(v.waiting.map((c) => c.tag)).toEqual(['No status written']);
+    expect(v.waiting.map((c) => c.tag)).toEqual(['no status']);
+    expect(v.waiting[0]!.tone).toBe('owner');
     expect(v.waiting[0]!.version).toBeNull();
     expect(v.waiting[0]!.labels).toEqual({ add: [], remove: [] });
   });
@@ -225,7 +227,8 @@ describe('answer state', () => {
   it('is waiting for pickup while an answer is new', () => {
     const c = state([answer({ at: ago(5) })]);
     expect(c.answerState).toBe('awaiting-pickup');
-    expect(c.tag).toBe('Answered, waiting for Claude to pick it up');
+    expect(c.tag).toBe('sent');
+    expect(c.tone).toBe('claude');
     expect(c.lastAnswer).toEqual({ at: ago(5), note: 'a note', choices: {} });
   });
 
@@ -233,7 +236,8 @@ describe('answer state', () => {
     const at = new Date(NOW.getTime() - PICKUP_GRACE_MS).toISOString();
     const c = state([answer({ at })]);
     expect(c.answerState).toBe('not-picked-up');
-    expect(c.tag).toBe('Answered, not picked up');
+    expect(c.tag).toBe('sent, not picked up');
+    expect(c.tone).toBe('owner');
     expect(c.waitingSince).toBe(at);
   });
 
@@ -241,18 +245,18 @@ describe('answer state', () => {
     const r = record({ state: 'working', ask: 'A Mac session is working on your answers' });
     const c = state([answer({ at: ago(30), claimedAt: ago(25), claimedBy: 'service' })], r);
     expect(c.answerState).toBe('service-working');
-    expect(c.tag).toBe('Mac session working on it');
+    expect(c.tag).toBe('working');
   });
 
   it('is picked up when a session claimed it, and stalled once the claim is old', () => {
     const r = record({ state: 'working', ask: 'Working on your answers' });
     const fresh = state([answer({ at: ago(30), claimedAt: ago(20), claimedBy: 'session' })], r);
     expect(fresh.answerState).toBe('picked-up');
-    expect(fresh.tag).toBe('Claude is working on your answers');
+    expect(fresh.tag).toBe('working');
     const claimedAt = new Date(NOW.getTime() - WORKING_STALLS_MS).toISOString();
     const old = state([answer({ at: ago(70), claimedAt, claimedBy: 'session' })], r);
     expect(old.answerState).toBe('stalled');
-    expect(old.tag).toBe('Picked up, but nothing since');
+    expect(old.tag).toBe('picked up, nothing since');
     expect(old.waitingSince).toBe(claimedAt);
   });
 
@@ -265,7 +269,7 @@ describe('answer state', () => {
     const r = record({ state: 'paused', questions: paused.questions, ask: 'A Mac session gave up on your answers', turnSince: ago(5) });
     const c = state([answer({ at: ago(90), claimedAt: ago(85), claimedBy: 'service', gaveUpAt: ago(5) })], r);
     expect(c.answerState).toBe('gave-up');
-    expect(c.tag).toBe('A session tried and gave up');
+    expect(c.tag).toBe('Claude gave up');
     expect(c.waitingSince).toBe(ago(85));
     expect(c.lastAnswer?.at).toBe(ago(90));
   });
@@ -278,11 +282,9 @@ describe('answer state', () => {
     expect(state([answer({ at: ago(2) })]).gaveUpHint).toBeNull();
   });
 
-  it('shows no question badge on a paused gate with no questions, as after a give-up from working', () => {
-    const r = record({ state: 'paused', questions: [], ask: 'A Mac session gave up on your answers', turnSince: ago(5) });
-    const c = state([answer({ at: ago(90), claimedAt: ago(85), claimedBy: 'service', gaveUpAt: ago(5) })], r);
-    expect(c.boxes.find((b) => b.look === 'paused')?.badge).toBeNull();
-    expect(state([], record({ state: 'paused', questions: paused.questions })).boxes.find((b) => b.look === 'paused')?.badge).toBe('1 question');
+  it('says paused, not 0 questions, for a paused gate with no questions, as after a give-up from working', () => {
+    expect(state([], record({ state: 'paused', questions: [] })).tag).toBe('paused');
+    expect(state([], record({ state: 'paused', questions: paused.questions })).tag).toBe('1 question');
   });
 
   it('ignores a given-up answer to an older version', () => {

@@ -3,23 +3,24 @@
 import type { Facts } from './facts.ts';
 import { newest } from './helpers.ts';
 import { DAY_MS, FILE_AN_ISSUE, PICKUP_GRACE_MS, WORKING_STALLS_MS } from './names.ts';
-import { APPROVAL_CHOICES, GATES, NEEDS_CHANGES, gatesOf, itemKey, recordNumber, turnOf, type AnswerRow, type Gate, type WorkRecord } from './work.ts';
+import { APPROVAL_CHOICES, GATES, gatesOf, itemKey, recordNumber, turnOf, type AnswerRow, type Gate, type WorkRecord } from './work.ts';
 import { labelChanges, wantedLabels } from './labels.ts';
 
-/** How a gate's box is coloured. 'attention' is the box after an approved gate when the owner's answer has come back to them. */
-export type BoxLook = 'approved' | 'working' | 'paused' | 'complete' | 'ready' | 'blocked' | 'parked' | 'on-hold' | 'todo' | 'attention';
+/**
+ * Where a gate stands. 'now' is the gate the work is at; once the owner has approved it and answered,
+ * that is the next gate. 'on-hold' is a later gate that had been started before a move back.
+ */
+export type GateLook = 'approved' | 'now' | 'on-hold' | 'todo';
 
 export interface GateBox {
   gate: Gate;
-  look: BoxLook;
-  text: string;
+  look: GateLook;
   /** Shown from the second round on; null otherwise. */
   round: number | null;
-  /** For example "1 question". */
-  badge: string | null;
-  /** The box of the gate Claude is in now, which carries the reason for the last move back. */
-  current: boolean;
 }
+
+/** The colour of a card's status: whose turn it is, or, once prep is complete, whether it can merge. */
+export type Tone = 'owner' | 'claude' | 'ready' | 'blocked' | 'nobody';
 
 /**
  * Where the owner's answers to the record's current version have got to.
@@ -42,7 +43,9 @@ export interface CardView {
   /** The record's version, sent back with an answer; null for a PR with no record. */
   version: number | null;
   boxes: GateBox[];
+  /** The card's status in a few words, such as "approve design?" or "working". */
   tag: string;
+  tone: Tone;
   /** Whose turn the card shows. Once the owner has answered, it is Claude's until the answer comes back to the owner. */
   turn: 'owner' | 'claude' | 'nobody';
   waitingSince: string | null;
@@ -52,7 +55,7 @@ export interface CardView {
   backReason: string | null;
   questions: { n: number; text: string; choices: string[]; defaultChoice: string }[];
   approval: { choices: string[]; defaultChoice: string } | null;
-  /** "needs changes" when Prep is complete, since there is nothing to approve there; otherwise "Note". */
+  /** The note box's placeholder. When Prep is complete there is nothing to approve, so a note there means it needs changes. */
   noteLabel: string;
   answerState: AnswerState | null;
   lastAnswer: { at: string; note: string; choices: Record<string, string> } | null;
@@ -77,20 +80,23 @@ export interface BoardView {
 const QUIET_AFTER = 3 * DAY_MS;
 
 const ANSWER_TAG: Record<AnswerState, string> = {
-  'awaiting-pickup': 'Answered, waiting for Claude to pick it up',
-  'not-picked-up': 'Answered, not picked up',
-  'picked-up': 'Claude is working on your answers',
-  stalled: 'Picked up, but nothing since',
-  'service-working': 'Mac session working on it',
-  'gave-up': 'A session tried and gave up',
+  'awaiting-pickup': 'sent',
+  'not-picked-up': 'sent, not picked up',
+  'picked-up': 'working',
+  stalled: 'picked up, nothing since',
+  'service-working': 'working',
+  'gave-up': 'Claude gave up',
 };
 
 /** The answer states that put a card back in front of the owner. */
 const BACK_WITH_OWNER: ReadonlySet<AnswerState> = new Set(['not-picked-up', 'stalled', 'gave-up']);
 
-const WORKING_TAG: Record<Gate, string> = { design: 'Claude designing', implementation: 'Claude building', prep: 'Claude prepping' };
+const APPROVE_TAG: Record<'design' | 'implementation', string> = { design: 'approve design?', implementation: 'approve build?' };
 
-const NO_STATUS_TAG = 'No status written';
+const NO_STATUS_TAG = 'no status';
+
+const NOTE_PLACEHOLDER = 'Note';
+const PREP_NOTE_PLACEHOLDER = 'Needs changes? Say what';
 
 /** Whether the PR can be merged as prep left it; when it can't, the first reason, in a fixed order. */
 export function readyToMerge(r: WorkRecord, f: Facts | undefined): { ready: true } | { ready: false; reason: string } {
@@ -149,52 +155,45 @@ function answerStateOf(
     : { state: 'picked-up', answer: last, since: null };
 }
 
-function boxesOf(r: WorkRecord, ready: ReturnType<typeof readyToMerge> | null, answerState: AnswerState | null): GateBox[] {
+function boxesOf(r: WorkRecord, answerState: AnswerState | null): GateBox[] {
   const current = GATES.indexOf(r.gate);
   const reached = GATES.indexOf(r.reached);
   const approvedHere = r.gate !== 'prep' && r.approved[r.gate] !== undefined;
   const gates = gatesOf(r);
-  const box = (gate: Gate, look: BoxLook, text: string, round: number | null = null, badge: string | null = null): GateBox =>
-    ({ gate, look, text, round: round !== null && round >= 2 ? round : null, badge, current: false });
-  const here = (b: GateBox): GateBox => ({ ...b, current: true });
+  const box = (gate: Gate, look: GateLook, round: number | null = null): GateBox =>
+    ({ gate, look, round: round !== null && round >= 2 ? round : null });
 
   return gates.map((gate, i) => {
     const at = GATES.indexOf(gate);
-    if (at < current) return box(gate, 'approved', '✓ approved');
+    if (at < current) return box(gate, 'approved');
     if (at === current) {
-      if (approvedHere) return box(gate, 'approved', '✓ approved');
-      const handed = r.rounds[gate];
-      if (r.state === 'complete') {
-        if (gate === 'prep') return here(ready?.ready ? box(gate, 'ready', 'ready for merge', handed) : box(gate, 'blocked', ready?.reason ?? 'no PR', handed));
-        return here(box(gate, 'complete', 'complete: your approval', handed));
-      }
+      if (approvedHere) return box(gate, 'approved');
       // A gate that isn't complete is in its next round.
-      if (r.state === 'working') return here(box(gate, 'working', 'Claude working', handed + 1));
-      // A give-up from working hands the record back paused with no questions; it then has no badge.
-      if (r.state === 'paused') return here(box(gate, 'paused', 'Claude paused', handed + 1, r.questions.length > 0 ? plural(r.questions.length, 'question') : null));
-      return here(box(gate, 'parked', 'parked', handed + 1));
+      return box(gate, 'now', r.rounds[gate] + (r.state === 'complete' ? 0 : 1));
     }
-    // Once the owner has approved the current gate, the next one carries the line saying where the answer is,
-    // coloured as needing the owner when the answer has come back to them.
-    if (approvedHere && answerState !== null && gates[i - 1] === r.gate) {
-      return here(box(gate, BACK_WITH_OWNER.has(answerState) ? 'attention' : 'working', ANSWER_TAG[answerState]));
-    }
-    if (at <= reached) return box(gate, 'on-hold', 'on hold');
-    return box(gate, 'todo', '');
+    // Once the owner has approved the current gate and answered, the work is at the next one.
+    if (approvedHere && answerState !== null && gates[i - 1] === r.gate) return box(gate, 'now');
+    if (at <= reached) return box(gate, 'on-hold');
+    return box(gate, 'todo');
   });
 }
 
 function tagOf(r: WorkRecord, ready: ReturnType<typeof readyToMerge> | null, answerState: AnswerState | null): string {
   if (answerState !== null) return ANSWER_TAG[answerState];
   switch (r.state) {
-    case 'working': return WORKING_TAG[r.gate];
-    case 'parked': return 'Parked';
-    case 'paused': return `${plural(r.questions.length, 'question')} for you`;
+    case 'working': return 'working';
+    case 'parked': return 'parked';
+    // A give-up from working hands the record back paused with no questions.
+    case 'paused': return r.questions.length > 0 ? plural(r.questions.length, 'question') : 'paused';
     case 'complete':
-      if (r.gate === 'design') return 'Design ready for your approval';
-      if (r.gate === 'implementation') return 'Ready for your look';
-      return ready?.ready ? 'Ready to merge' : `Can't merge yet: ${ready?.reason ?? 'no PR'}`;
+      if (r.gate !== 'prep') return APPROVE_TAG[r.gate];
+      return ready?.ready ? 'ready to merge' : `can't merge: ${ready?.reason ?? 'no PR'}`;
   }
+}
+
+function toneOf(shownTurn: CardView['turn'], ready: ReturnType<typeof readyToMerge> | null, answerState: AnswerState | null): Tone {
+  if (ready !== null && answerState === null) return ready.ready ? 'ready' : 'blocked';
+  return shownTurn;
 }
 
 function issueUrl(repo: string, n: number): string {
@@ -231,8 +230,9 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
     url,
     kind,
     version: r.version,
-    boxes: boxesOf(r, ready, answerState),
+    boxes: boxesOf(r, answerState),
     tag: tagOf(r, ready, answerState),
+    tone: toneOf(shownTurn, ready, answerState),
     turn: shownTurn,
     waitingSince: found?.since ?? r.turnSince,
     startedAt: r.startedAt,
@@ -245,7 +245,7 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
       ? r.questions.map((q) => ({ ...q, choices: [...q.choices.filter((c) => c !== FILE_AN_ISSUE), FILE_AN_ISSUE] }))
       : [],
     approval: approvalGate !== null ? { choices: [...APPROVAL_CHOICES[approvalGate]], defaultChoice: APPROVAL_CHOICES[approvalGate][0] } : null,
-    noteLabel: prepDone ? NEEDS_CHANGES : 'Note',
+    noteLabel: prepDone ? PREP_NOTE_PLACEHOLDER : NOTE_PLACEHOLDER,
     answerState,
     lastAnswer: found ? { at: found.answer.at, note: found.answer.note, choices: found.answer.choices } : null,
     gaveUpHint: found?.state === 'gave-up' ? found.answer.giveUpHint : null,
@@ -273,8 +273,8 @@ function noRecordCard(f: Facts): Placed {
   return {
     card: {
       key: itemKey(f.repo, f.number), repo: f.repo, number: f.number, title: f.title, url: f.url, kind: f.kind,
-      version: null, boxes: [], tag: NO_STATUS_TAG, turn: 'owner', waitingSince: null, startedAt: f.createdAt,
-      ask: '', toTest: null, backReason: null, questions: [], approval: null, noteLabel: 'Note',
+      version: null, boxes: [], tag: NO_STATUS_TAG, tone: 'owner', turn: 'owner', waitingSince: null, startedAt: f.createdAt,
+      ask: '', toTest: null, backReason: null, questions: [], approval: null, noteLabel: NOTE_PLACEHOLDER,
       answerState: null, lastAnswer: null, gaveUpHint: null,
       links: { pr: f.url, issue: f.linkedIssue !== null ? issueUrl(f.repo, f.linkedIssue) : null, preview: f.previewUrl, merge: null },
       screenshots: f.screenshots,

@@ -64,7 +64,7 @@ function fakeDoc(): { fake: FakeDocument; doc: Document } {
 function card(over: Partial<CardView> = {}): CardView {
   return {
     key: 'o/r#5', repo: 'o/r', number: 5, title: 'Item 5', url: 'https://github.com/o/r/pull/5', kind: 'pr', version: 3,
-    boxes: [], tag: '1 question for you', turn: 'owner', waitingSince: null, startedAt: '2026-11-19T00:00:00.000Z',
+    boxes: [], tag: '1 question', tone: 'owner', turn: 'owner', waitingSince: null, startedAt: '2026-11-19T00:00:00.000Z',
     ask: 'One thing', toTest: null, backReason: null,
     questions: [
       { n: 1, text: 'Pin colour?', choices: ['gold', 'grey'], defaultChoice: 'gold' },
@@ -163,7 +163,7 @@ describe('the answer form', () => {
 
   it('offers the whole form again, with defaults, after a session gave up, and shows where its output is', () => {
     const c = card({
-      answerState: 'gave-up', tag: 'A session tried and gave up', gaveUpHint: 'Its output is the newest o-r-5-*.log',
+      answerState: 'gave-up', tag: 'Claude gave up', gaveUpHint: 'Its output is the newest o-r-5-*.log',
       approval: { choices: ['approve, build it', 'needs changes'], defaultChoice: 'approve, build it' },
       lastAnswer: { at: '2026-11-20T11:00:00.000Z', note: '', choices: { '1': 'grey' } },
     });
@@ -179,16 +179,17 @@ describe('the answer form', () => {
     expect(walk(node).filter((e) => e.attrs['data-role'] === 'gave-up-hint').map(textOf)).toEqual(['Its output is the newest o-r-5-*.log']);
   });
 
-  it('draws each box as the card says, with the reason for the move back in the current box, and the tag in the card\'s turn', () => {
-    const box = (gate: 'design' | 'implementation' | 'prep', look: 'working' | 'on-hold' | 'todo' | 'attention', current: boolean) =>
-      ({ gate, look, text: look, round: null, badge: null, current });
-    const c = card({ turn: 'claude', backReason: 'too slow', boxes: [box('design', 'on-hold', false), box('implementation', 'attention', true), box('prep', 'todo', false)] });
+  it('draws the gate line as the card says, with the round and the reason for the move back after the gate the work is at, and the tag in the card\'s tone', () => {
+    const c = card({
+      tone: 'claude', backReason: 'too slow',
+      boxes: [{ gate: 'design', look: 'approved', round: null }, { gate: 'implementation', look: 'now', round: 2 }, { gate: 'prep', look: 'on-hold', round: null }],
+    });
     const { doc } = fakeDoc();
     const node = drawCard(doc, c, initialForm(c), { send: () => {}, changed: () => {}, reload: () => {} }, new Date('2026-11-20T12:00:00.000Z')) as unknown as FakeElement;
-    const boxes = walk(node).filter((e) => (e.attrs.class ?? '').startsWith('box '));
-    expect(boxes.map((b) => b.attrs.class)).toEqual(['box look-on-hold', 'box look-attention', 'box look-todo']);
-    expect(boxes.map((b) => textOf(b).includes('reopened: "too slow"'))).toEqual([false, true, false]);
-    expect(walk(node).find((e) => (e.attrs.class ?? '').startsWith('tag '))?.attrs.class).toBe('tag turn-claude');
+    const line = walk(node).find((e) => e.attrs.class === 'gates')!;
+    expect(textOf(line)).toBe('Design ✓ › Build (round 2, reopened: too slow) › Prep');
+    expect(walk(line).filter((e) => (e.attrs.class ?? '').startsWith('gate ')).map((e) => e.attrs.class)).toEqual(['gate look-approved', 'gate look-now', 'gate look-on-hold']);
+    expect(walk(node).find((e) => (e.attrs.class ?? '').startsWith('tag '))?.attrs.class).toBe('tag tone-claude');
     expect(node.attrs.class).toBe('card');
   });
 
@@ -217,7 +218,7 @@ describe('the answer form', () => {
 describe('what a refresh replaces', () => {
   it('leaves a card being answered alone', () => {
     const old = card();
-    const changed = card({ tag: 'Ready for your look', version: 4 });
+    const changed = card({ tag: 'approve build?', version: 4 });
     const p = plan(new Map([[old.key, old]]), board([changed]), new Set([old.key]));
     expect(p.flagChanged).toEqual([old.key]);
     expect(p.redraw).toEqual([]);

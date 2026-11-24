@@ -2,7 +2,7 @@
 // from GitHub or from Claude is always shown as text.
 import { NOTE_MAX } from '../shared/names.ts';
 import type { CardView } from '../shared/view.ts';
-import { GATE_NAMES, NEEDS_CHANGES } from '../shared/work.ts';
+import { GATE_SHORT_NAMES, NEEDS_CHANGES } from '../shared/work.ts';
 import { el } from './el.ts';
 import { canAnswer, offersQuestions, type FormState } from './form.ts';
 
@@ -37,29 +37,33 @@ function link(doc: Document, href: string, text: string, cls?: string): HTMLElem
   }
 }
 
-function strip(doc: Document, c: CardView): HTMLElement {
-  return el(doc, 'div', { class: 'strip' }, ...c.boxes.map((b) => el(doc, 'div', { class: `box look-${b.look}` },
-    el(doc, 'div', { class: 'gate' }, GATE_NAMES[b.gate]),
-    el(doc, 'div', { class: 'state' }, b.text === '' ? '·' : b.text, b.badge ? el(doc, 'span', { class: 'badge' }, b.badge) : null),
-    b.round !== null ? el(doc, 'div', { class: 'round' }, `round ${b.round}`) : null,
-    b.current && c.backReason ? el(doc, 'div', { class: 'reason' }, `reopened: "${c.backReason}"`) : null,
-  )));
+/** "Design ✓ › Build › Prep", with the gate the work is at in bold, and its round and reopening reason after it. */
+function gateLine(doc: Document, c: CardView): HTMLElement {
+  const parts: (HTMLElement | string)[] = [];
+  c.boxes.forEach((b, i) => {
+    if (i > 0) parts.push(' › ');
+    parts.push(el(doc, 'span', { class: `gate look-${b.look}` }, GATE_SHORT_NAMES[b.gate], b.look === 'approved' ? ' ✓' : ''));
+    if (b.look !== 'now') return;
+    const notes = [b.round !== null ? `round ${b.round}` : null, c.backReason ? `reopened: ${c.backReason}` : null].filter((n) => n !== null);
+    if (notes.length > 0) parts.push(el(doc, 'span', { class: 'gate-note' }, ` (${notes.join(', ')})`));
+  });
+  return el(doc, 'div', { class: 'gates' }, ...parts);
 }
 
 function header(doc: Document, c: CardView, now: Date): HTMLElement {
   return el(doc, 'header', { class: 'card-head' },
     el(doc, 'span', { class: 'title' }, link(doc, c.url, `#${c.number} ${c.title}`), ' ', el(doc, 'span', { class: 'repo' }, c.repo)),
-    el(doc, 'span', { class: `tag turn-${c.turn}` }, c.tag, c.waitingSince ? ` · ${age(c.waitingSince, now)}` : ''),
+    el(doc, 'span', { class: `tag tone-${c.tone}` }, c.tag, c.waitingSince ? ` · ${age(c.waitingSince, now)}` : ''),
   );
 }
 
 function links(doc: Document, c: CardView): HTMLElement | null {
   const items: HTMLElement[] = [];
-  if (c.links.merge) items.push(link(doc, c.links.merge, 'Merge on GitHub →', 'merge'));
+  if (c.links.merge) items.push(link(doc, c.links.merge, 'Merge on GitHub', 'merge'));
   if (c.links.pr && c.kind !== 'pr') items.push(link(doc, c.links.pr, 'PR'));
   if (c.links.issue) items.push(link(doc, c.links.issue, 'Issue'));
   if (c.links.preview) items.push(link(doc, c.links.preview, 'Preview'));
-  return items.length > 0 ? el(doc, 'div', { class: 'links' }, ...items) : null;
+  return items.length > 0 ? el(doc, 'span', { class: 'links' }, ...items) : null;
 }
 
 function screenshots(doc: Document, c: CardView): HTMLElement | null {
@@ -85,29 +89,29 @@ function sent(doc: Document, c: CardView): HTMLElement | null {
   }
   if (a.note !== '') lines.push(el(doc, 'li', {}, `Note: ${a.note}`));
   return el(doc, 'div', { class: 'sent' },
-    el(doc, 'div', {}, `You answered at ${clock(new Date(a.at))}.`),
+    el(doc, 'div', {}, `You answered at ${clock(new Date(a.at))}`),
     lines.length > 0 ? el(doc, 'ul', {}, ...lines) : null,
   );
 }
 
+/** A choice for each option, the default in bold. A group with no legend is the approval, named for screen readers only. */
 function radioGroup(
   doc: Document,
   name: string,
-  legend: string,
+  legend: string | null,
   choices: string[],
   defaultChoice: string,
   chosen: string | undefined,
   onPick: (choice: string) => void,
 ): HTMLElement {
-  return el(doc, 'fieldset', { class: 'question' },
-    el(doc, 'legend', {}, legend),
+  return el(doc, 'fieldset', { class: 'question', ...(legend === null ? { 'aria-label': 'Approval' } : {}) },
+    legend !== null ? el(doc, 'legend', {}, legend) : null,
     ...choices.map((choice) => {
-      const isDefault = choice === defaultChoice;
       const input = el(doc, 'input', { type: 'radio', name, value: choice, ...(chosen === choice ? { checked: '' } : {}) }) as HTMLInputElement;
       input.addEventListener('change', () => {
         if (input.checked) onPick(choice);
       });
-      return el(doc, 'label', { class: isDefault ? 'choice default' : 'choice' }, input, ' ', choice, isDefault ? el(doc, 'span', { class: 'default-mark' }, ' (default)') : null);
+      return el(doc, 'label', { class: choice === defaultChoice ? 'choice default' : 'choice' }, input, ' ', choice);
     }),
   );
 }
@@ -124,16 +128,15 @@ function form(doc: Document, c: CardView, s: FormState, h: CardHandlers): HTMLEl
       }));
     }
   }
-  const noteRequired = el(doc, 'span', { class: 'required', hidden: '' }, ` (required with "${NEEDS_CHANGES}")`);
-  const note = el(doc, 'textarea', { rows: '2', maxlength: String(NOTE_MAX), 'data-role': 'note' }) as HTMLTextAreaElement;
+  const note = el(doc, 'textarea', { rows: '1', maxlength: String(NOTE_MAX), 'aria-label': 'Note', 'data-role': 'note' }) as HTMLTextAreaElement;
   note.value = s.note;
   const showRequired = () => {
     const needed = offered && c.approval !== null && s.approval === NEEDS_CHANGES;
-    noteRequired.hidden = !needed;
     note.required = needed;
+    note.setAttribute('placeholder', needed ? 'What needs changing?' : c.noteLabel);
   };
   if (offered && c.approval) {
-    parts.push(radioGroup(doc, `${c.key}-approval`, 'Your decision', c.approval.choices, c.approval.defaultChoice, s.approval ?? undefined, (choice) => {
+    parts.push(radioGroup(doc, `${c.key}-approval`, null, c.approval.choices, c.approval.defaultChoice, s.approval ?? undefined, (choice) => {
       s.approval = choice;
       s.touched = true;
       showRequired();
@@ -146,34 +149,31 @@ function form(doc: Document, c: CardView, s: FormState, h: CardHandlers): HTMLEl
     if (s.note !== '') s.touched = true;
     h.changed(c.key);
   });
-  parts.push(el(doc, 'label', { class: 'note' }, el(doc, 'span', {}, c.noteLabel, noteRequired), note));
-
-  const offersAnything = offered && (c.questions.length > 0 || c.approval !== null);
-  const button = el(doc, 'button', { type: 'button', 'data-role': 'send', 'data-label': offersAnything ? 'Send answers' : 'Send note' }, offersAnything ? 'Send answers' : 'Send note');
+  const button = el(doc, 'button', { type: 'button', title: 'Ctrl+Enter', 'data-role': 'send' }, 'Send');
   button.addEventListener('click', () => h.send(c.key));
-  parts.push(el(doc, 'div', { class: 'actions' }, button, el(doc, 'span', { class: 'hint' }, 'Ctrl+Enter or Cmd+Enter sends')));
+  parts.push(el(doc, 'div', { class: 'note-row' }, note, button));
   return el(doc, 'div', { class: 'form' }, ...parts);
 }
 
 export function drawCard(doc: Document, c: CardView, s: FormState, h: CardHandlers, now: Date): HTMLElement {
-  const changed = el(doc, 'div', { class: 'changed', 'data-role': 'changed', hidden: '' }, 'This changed since you started answering. ');
-  const reload = el(doc, 'button', { type: 'button', class: 'linkish' }, 'Reload it');
+  const changed = el(doc, 'div', { class: 'changed', 'data-role': 'changed', hidden: '' }, 'Changed since you started. ');
+  const reload = el(doc, 'button', { type: 'button', class: 'linkish' }, 'Reload');
   reload.addEventListener('click', () => h.reload(c.key));
   changed.appendChild(reload);
-  changed.appendChild(doc.createTextNode(' (what you typed here will be lost)'));
+  changed.appendChild(doc.createTextNode(' (loses what you typed)'));
 
+  const linkLine = links(doc, c);
   const node = el(doc, 'article', { class: 'card', 'data-key': c.key },
     header(doc, c, now),
     changed,
-    c.boxes.length > 0 ? strip(doc, c) : null,
-    c.ask !== '' ? el(doc, 'p', { class: 'ask' }, c.ask) : null,
+    c.boxes.length > 0 ? gateLine(doc, c) : null,
+    c.ask !== '' || linkLine ? el(doc, 'p', { class: 'ask' }, c.ask, linkLine) : null,
     c.toTest ? el(doc, 'p', { class: 'to-test' }, el(doc, 'strong', {}, 'To test: '), c.toTest) : null,
-    links(doc, c),
     screenshots(doc, c),
     offersQuestions(c) && c.answerState !== 'gave-up' ? null : sent(doc, c),
     c.gaveUpHint ? el(doc, 'p', { class: 'gave-up-hint', 'data-role': 'gave-up-hint' }, c.gaveUpHint) : null,
     el(doc, 'p', { class: 'error', 'data-role': 'error', hidden: '' }),
-    canAnswer(c) ? form(doc, c, s, h) : el(doc, 'p', { class: 'muted' }, 'No status written yet, so there is nothing to answer here.'),
+    canAnswer(c) ? form(doc, c, s, h) : null,
   );
   node.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && canAnswer(c)) {
@@ -199,7 +199,7 @@ export function showSending(node: HTMLElement, sending: boolean): void {
   const b = part(node, 'send') as HTMLButtonElement | null;
   if (!b) return;
   b.disabled = sending;
-  b.textContent = sending ? 'Sending…' : (b.getAttribute('data-label') ?? 'Send');
+  b.textContent = sending ? 'Sending…' : 'Send';
 }
 
 export function showChanged(node: HTMLElement, changed: boolean): void {

@@ -125,21 +125,21 @@ async function send(key: string): Promise<void> {
 const root = doc.getElementById('board')!;
 const statusLine = el(doc, 'p', { class: 'status', role: 'status' });
 const errors = el(doc, 'div', { class: 'errors', hidden: '' });
-const turnButton = el(doc, 'button', { type: 'button' }, 'By whose turn');
-const everythingButton = el(doc, 'button', { type: 'button' }, 'Everything');
-const sections: Record<'waiting' | 'onClaude' | 'quiet' | 'everything', { wrap: HTMLElement; list: HTMLElement; empty: HTMLElement; count: HTMLElement }> = {
-  waiting: section('Waiting on you'),
-  onClaude: section('On Claude'),
+const turnButton = el(doc, 'button', { type: 'button' }, 'By turn');
+const everythingButton = el(doc, 'button', { type: 'button' }, 'All');
+const sections: Record<'waiting' | 'onClaude' | 'quiet' | 'everything', { wrap: HTMLElement; list: HTMLElement; count: HTMLElement | null }> = {
+  waiting: section('Your turn'),
+  onClaude: section("Claude's turn"),
   quiet: section('Quiet'),
-  everything: section('Everything, newest first'),
+  // The switch already says this is everything, newest first.
+  everything: section(null),
 };
 
-function section(title: string): { wrap: HTMLElement; list: HTMLElement; empty: HTMLElement; count: HTMLElement } {
-  const count = el(doc, 'span', { class: 'count' });
+function section(title: string | null): { wrap: HTMLElement; list: HTMLElement; count: HTMLElement | null } {
+  const count = title !== null ? el(doc, 'span', { class: 'count' }) : null;
   const list = el(doc, 'div', { class: 'cards' });
-  const empty = el(doc, 'p', { class: 'muted', hidden: '' }, 'Nothing here.');
-  const wrap = el(doc, 'section', {}, el(doc, 'h2', {}, title, ' ', count), empty, list);
-  return { wrap, list, empty, count };
+  const wrap = el(doc, 'section', {}, title !== null && count ? el(doc, 'h2', {}, title, count) : null, list);
+  return { wrap, list, count };
 }
 
 function setViewButtons(): void {
@@ -175,13 +175,15 @@ function layout(): void {
   if (!board) return;
   const shown: (keyof typeof sections)[] = view === 'turn' ? ['waiting', 'onClaude', 'quiet'] : ['everything'];
   for (const [name, s] of Object.entries(sections) as [keyof typeof sections, (typeof sections)[keyof typeof sections]][]) {
-    const on = shown.includes(name);
-    s.wrap.hidden = !on;
-    if (!on) continue;
+    if (!shown.includes(name)) {
+      s.wrap.hidden = true;
+      continue;
+    }
     const cards = board[name];
+    // An empty section is left out.
+    s.wrap.hidden = cards.length === 0;
     arrange(s.list, cards.map((c) => nodes.get(c.key)).filter((n): n is HTMLElement => n !== undefined));
-    s.count.textContent = `(${cards.length})`;
-    s.empty.hidden = cards.length > 0;
+    if (s.count) s.count.textContent = ` · ${cards.length}`;
   }
   // Nodes of cards that are in no shown section are dropped from the page but kept, so a view switch brings them back as they were.
   for (const name of Object.keys(sections) as (keyof typeof sections)[]) {
