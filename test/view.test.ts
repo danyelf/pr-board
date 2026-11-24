@@ -352,10 +352,11 @@ describe('sections', () => {
     };
     const gone = quietFor(120);
     expect(sectionOf(gone, 'o/r#5')).toBe('waiting');
-    expect(gone.waiting[0]).toMatchObject({ tag: 'working, nothing since', tone: 'owner', turn: 'owner', waitingSince: ago(120) });
+    expect(gone.waiting[0]).toMatchObject({ tag: 'working, nothing since', tone: 'owner', turn: 'owner', waitingSince: ago(120), sessionGone: true });
     const alive = quietFor(119);
     expect(sectionOf(alive, 'o/r#5')).toBe('onClaude');
     expect(alive.onClaude[0]!.tag).toBe('working');
+    expect(alive.onClaude[0]!.sessionGone).toBe(false);
   });
 
   it('keeps the owner\'s turn in Waiting however long it has waited', () => {

@@ -130,7 +130,7 @@ const everythingButton = el(doc, 'button', { type: 'button' }, 'All');
 const sections: Record<'waiting' | 'onClaude' | 'quiet' | 'everything', { wrap: HTMLElement; list: HTMLElement; count: HTMLElement | null }> = {
   waiting: section('Your turn'),
   onClaude: section("Claude's turn"),
-  quiet: section('Quiet'),
+  quiet: section('Parked'),
   // The switch's "All" already names this list, so it has no heading.
   everything: section(null),
 };

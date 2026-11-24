@@ -20,9 +20,12 @@ export function offersQuestions(c: CardView): boolean {
   return c.answerState === null || c.answerState === 'gave-up';
 }
 
-/** Whether the card can be answered at all: a PR with no status written has no record to answer. */
+/**
+ * Whether the card can be answered at all: a PR with no status written has no record to answer, and a
+ * note to a session that seems to be gone would wait for nobody.
+ */
 export function canAnswer(c: CardView): boolean {
-  return c.version !== null;
+  return c.version !== null && !c.sessionGone;
 }
 
 export function initialForm(c: CardView): FormState {

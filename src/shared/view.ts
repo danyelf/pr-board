@@ -46,6 +46,11 @@ export interface CardView {
   /** The card's status in a few words, such as "approve design?" or "working". */
   tag: string;
   tone: Tone;
+  /**
+   * True when work marked as working has had nothing written, confirmed or pushed for a while, so its
+   * session seems to be gone. A note would wait for that session, so the card offers none.
+   */
+  sessionGone: boolean;
   /** Whose turn the card shows. Once the owner has answered, it is Claude's until the answer comes back to the owner. */
   turn: 'owner' | 'claude' | 'nobody';
   waitingSince: string | null;
@@ -239,6 +244,7 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
     boxes: boxesOf(r, answerState),
     tag: tagOf(r, ready, answerState, silent),
     tone: toneOf(shownTurn, ready, answerState),
+    sessionGone: silent,
     turn: shownTurn,
     waitingSince: silent ? activity : (found?.since ?? r.turnSince),
     startedAt: r.startedAt,
@@ -273,7 +279,7 @@ function noRecordCard(f: Facts): Placed {
   return {
     card: {
       key: itemKey(f.repo, f.number), repo: f.repo, number: f.number, title: f.title, url: f.url, kind: f.kind,
-      version: null, boxes: [], tag: NO_STATUS_TAG, tone: 'owner', turn: 'owner', waitingSince: null, startedAt: f.createdAt,
+      version: null, boxes: [], tag: NO_STATUS_TAG, tone: 'owner', sessionGone: false, turn: 'owner', waitingSince: null, startedAt: f.createdAt,
       ask: '', toTest: null, backReason: null, questions: [], approval: null, noteLabel: NOTE_PLACEHOLDER,
       answerState: null, lastAnswer: null, gaveUpHint: null,
       links: { pr: f.url, issue: f.linkedIssue !== null ? issueUrl(f.repo, f.linkedIssue) : null, preview: f.previewUrl, merge: null },

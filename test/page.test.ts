@@ -64,7 +64,7 @@ function fakeDoc(): { fake: FakeDocument; doc: Document } {
 function card(over: Partial<CardView> = {}): CardView {
   return {
     key: 'o/r#5', repo: 'o/r', number: 5, title: 'Item 5', url: 'https://github.com/o/r/pull/5', kind: 'pr', version: 3,
-    boxes: [], tag: '1 question', tone: 'owner', turn: 'owner', waitingSince: null, startedAt: '2026-11-19T00:00:00.000Z',
+    boxes: [], tag: '1 question', tone: 'owner', sessionGone: false, turn: 'owner', waitingSince: null, startedAt: '2026-11-19T00:00:00.000Z',
     ask: 'One thing', toTest: null, backReason: null,
     questions: [
       { n: 1, text: 'Pin colour?', choices: ['gold', 'grey'], defaultChoice: 'gold' },
@@ -193,6 +193,14 @@ describe('the answer form', () => {
     // The status is in the box, so the header shows no tag.
     expect(walk(node).some((e) => (e.attrs.class ?? '').startsWith('tag '))).toBe(false);
     expect(node.attrs.class).toBe('card');
+  });
+
+  it('offers no note box when the session seems to be gone, since a note would wait for nobody', () => {
+    const c = card({ questions: [], sessionGone: true, tag: 'working, nothing since' });
+    const { doc } = fakeDoc();
+    const node = drawCard(doc, c, initialForm(c), { send: () => {}, changed: () => {}, reload: () => {} }, new Date('2026-11-20T12:00:00.000Z')) as unknown as FakeElement;
+    expect(walk(node).some((e) => e.tag === 'textarea')).toBe(false);
+    expect(walk(node).some((e) => e.attrs['data-role'] === 'send')).toBe(false);
   });
 
   it('asks for a note with "needs changes"', () => {
