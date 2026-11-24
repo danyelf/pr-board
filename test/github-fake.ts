@@ -8,16 +8,24 @@ import { readFileSync } from 'node:fs';
  */
 export interface RepoWorld { pullRequests: { nodes: any[] }; issues: { nodes: any[] } }
 
+/** The torahmap repo as recorded for the facts query: open, merged and closed PRs, and some issues. */
+export function recordedFacts(): RepoWorld {
+  return JSON.parse(readFileSync(new URL('./fixtures/graphql-items.json', import.meta.url), 'utf8')).data.r0;
+}
+
 /**
- * The recorded torahmap repo, as it stood just before #573, #574 and #578 merged. The recording was
- * made a few minutes after; only open PRs are read, so the tests need them open.
+ * Answers the facts query for one repo: the connections as answerRepo does, plus each
+ * `iN: issueOrPullRequest(number: N)` the query asks for, found by number among the recorded PRs and issues.
  */
-export function recordedRepo(): RepoWorld {
-  const data = JSON.parse(readFileSync(new URL('./fixtures/graphql-items.json', import.meta.url), 'utf8')).data.r0;
-  for (const pr of data.pullRequests.nodes) {
-    if ([573, 574, 578].includes(pr.number)) Object.assign(pr, { merged: false, mergedAt: null, closedAt: null });
+export function answerFacts(query: string, world: RepoWorld): Record<string, unknown> {
+  const out = answerRepo(query, world);
+  for (const m of query.matchAll(/(i\d+): issueOrPullRequest\(number: (\d+)\)/g)) {
+    const [, alias, number] = m as unknown as [string, string, string];
+    const pr = world.pullRequests.nodes.find((n) => n.number === Number(number));
+    const issue = world.issues.nodes.find((n) => n.number === Number(number));
+    out[alias] = pr ? { __typename: 'PullRequest', ...pr } : issue ? { __typename: 'Issue', ...issue } : null;
   }
-  return data;
+  return out;
 }
 
 interface Connection {
