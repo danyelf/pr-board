@@ -37,23 +37,31 @@ function link(doc: Document, href: string, text: string, cls?: string): HTMLElem
   }
 }
 
-/** "Design ✓ › Build › Prep", with the gate the work is at in bold, and its round and reopening reason after it. */
-function gateLine(doc: Document, c: CardView): HTMLElement {
-  const parts: (HTMLElement | string)[] = [];
-  c.boxes.forEach((b, i) => {
-    if (i > 0) parts.push(' › ');
-    parts.push(el(doc, 'span', { class: `gate look-${b.look}` }, GATE_SHORT_NAMES[b.gate], b.look === 'approved' ? ' ✓' : ''));
-    if (b.look !== 'now') return;
-    const notes = [b.round !== null ? `round ${b.round}` : null, c.backReason ? `reopened: ${c.backReason}` : null].filter((n) => n !== null);
-    if (notes.length > 0) parts.push(el(doc, 'span', { class: 'gate-note' }, ` (${notes.join(', ')})`));
-  });
-  return el(doc, 'div', { class: 'gates' }, ...parts);
+/** Whether one of the card's boxes is the gate the work is at, which then carries the card's status. */
+function hasCurrentBox(c: CardView): boolean {
+  return c.boxes.some((b) => b.look === 'now');
 }
 
+/** A box per gate. The one the work is at is coloured and holds the status; an approved one has a ✓. */
+function strip(doc: Document, c: CardView): HTMLElement {
+  return el(doc, 'div', { class: 'strip' }, ...c.boxes.map((b) => {
+    const now = b.look === 'now';
+    return el(doc, 'div', { class: now ? `box look-now tone-${c.tone}` : `box look-${b.look}` },
+      el(doc, 'span', { class: 'gate' }, GATE_SHORT_NAMES[b.gate], b.look === 'approved' ? ' ✓' : ''),
+      now ? el(doc, 'span', { class: 'state' }, c.tag) : null,
+      now && b.round !== null ? el(doc, 'span', { class: 'round' }, `round ${b.round}`) : null,
+    );
+  }));
+}
+
+/** The title and how long the card has waited; the status too when no box carries it. */
 function header(doc: Document, c: CardView, now: Date): HTMLElement {
+  const wait = c.waitingSince ? age(c.waitingSince, now) : '';
   return el(doc, 'header', { class: 'card-head' },
     el(doc, 'span', { class: 'title' }, link(doc, c.url, `#${c.number} ${c.title}`), ' ', el(doc, 'span', { class: 'repo' }, c.repo)),
-    el(doc, 'span', { class: `tag tone-${c.tone}` }, c.tag, c.waitingSince ? ` · ${age(c.waitingSince, now)}` : ''),
+    hasCurrentBox(c)
+      ? el(doc, 'span', { class: 'age' }, wait)
+      : el(doc, 'span', { class: `tag tone-${c.tone}` }, c.tag, wait ? ` · ${wait}` : ''),
   );
 }
 
@@ -167,8 +175,9 @@ export function drawCard(doc: Document, c: CardView, s: FormState, h: CardHandle
   const node = el(doc, 'article', { class: 'card', 'data-key': c.key },
     header(doc, c, now),
     changed,
-    c.boxes.length > 0 ? gateLine(doc, c) : null,
+    c.boxes.length > 0 ? strip(doc, c) : null,
     c.ask !== '' || linkLine ? el(doc, 'p', { class: 'ask' }, c.ask, linkLine) : null,
+    c.backReason ? el(doc, 'p', { class: 'reopened' }, el(doc, 'strong', {}, 'Reopened: '), c.backReason) : null,
     c.toTest ? el(doc, 'p', { class: 'to-test' }, el(doc, 'strong', {}, 'To test: '), c.toTest) : null,
     screenshots(doc, c),
     offersQuestions(c) && c.answerState !== 'gave-up' ? null : sent(doc, c),

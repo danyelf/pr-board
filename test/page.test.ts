@@ -179,17 +179,19 @@ describe('the answer form', () => {
     expect(walk(node).filter((e) => e.attrs['data-role'] === 'gave-up-hint').map(textOf)).toEqual(['Its output is the newest o-r-5-*.log']);
   });
 
-  it('draws the gate line as the card says, with the round and the reason for the move back after the gate the work is at, and the tag in the card\'s tone', () => {
+  it('draws a box per gate, the current one in the card\'s tone holding the status and round, and the reason for the move back on its own line', () => {
     const c = card({
       tone: 'claude', backReason: 'too slow',
       boxes: [{ gate: 'design', look: 'approved', round: null }, { gate: 'implementation', look: 'now', round: 2 }, { gate: 'prep', look: 'on-hold', round: null }],
     });
     const { doc } = fakeDoc();
     const node = drawCard(doc, c, initialForm(c), { send: () => {}, changed: () => {}, reload: () => {} }, new Date('2026-11-20T12:00:00.000Z')) as unknown as FakeElement;
-    const line = walk(node).find((e) => e.attrs.class === 'gates')!;
-    expect(textOf(line)).toBe('Design ✓ › Build (round 2, reopened: too slow) › Prep');
-    expect(walk(line).filter((e) => (e.attrs.class ?? '').startsWith('gate ')).map((e) => e.attrs.class)).toEqual(['gate look-approved', 'gate look-now', 'gate look-on-hold']);
-    expect(walk(node).find((e) => (e.attrs.class ?? '').startsWith('tag '))?.attrs.class).toBe('tag tone-claude');
+    const boxes = walk(node).filter((e) => (e.attrs.class ?? '').startsWith('box '));
+    expect(boxes.map((b) => b.attrs.class)).toEqual(['box look-approved', 'box look-now tone-claude', 'box look-on-hold']);
+    expect(boxes.map(textOf)).toEqual(['Design ✓', 'Build1 questionround 2', 'Prep']);
+    expect(walk(node).filter((e) => e.attrs.class === 'reopened').map(textOf)).toEqual(['Reopened: too slow']);
+    // The status is in the box, so the header shows no tag.
+    expect(walk(node).some((e) => (e.attrs.class ?? '').startsWith('tag '))).toBe(false);
     expect(node.attrs.class).toBe('card');
   });
 

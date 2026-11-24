@@ -89,11 +89,19 @@ section h2 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 18p
 .tone-blocked { background: var(--blocked-bg); color: var(--blocked); }
 .tone-nobody { background: var(--nobody-bg); color: var(--nobody); }
 
-.gates { font-size: 13px; color: var(--muted); margin: 3px 0 6px; }
-.gates .look-now { color: var(--text); font-weight: 600; }
+.age { font-size: 13px; color: var(--muted); }
+
+.strip { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; margin: 8px 0 6px; }
+.box { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.box.look-now { border-color: transparent; }
+.box.look-now .gate { color: inherit; opacity: 0.8; }
+.box .state { font-size: 14px; font-weight: 600; }
+.box .round { font-size: 12px; opacity: 0.8; }
+.box.look-on-hold { opacity: 0.55; border-style: dashed; }
+@media (max-width: 560px) { .strip { grid-auto-flow: row; } }
 
 .ask { margin: 6px 0; }
-.to-test { margin: 6px 0; font-size: 14px; }
+.to-test, .reopened { margin: 6px 0; font-size: 14px; }
 .links { display: inline-flex; flex-wrap: wrap; gap: 14px; margin-left: 10px; font-size: 14px; }
 .links .merge { font-weight: 600; }
 .shots { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
