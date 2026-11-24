@@ -2,7 +2,7 @@
 // Nothing here writes anything: the label changes it lists are for the Worker to make.
 import type { Facts } from './facts.ts';
 import { newest } from './helpers.ts';
-import { DAY_MS, FILE_AN_ISSUE, PICKUP_GRACE_MS, WORKING_STALLS_MS } from './names.ts';
+import { FILE_AN_ISSUE, PICKUP_GRACE_MS, WORKING_GOES_SILENT_MS, WORKING_STALLS_MS } from './names.ts';
 import { APPROVAL_CHOICES, GATES, gatesOf, itemKey, recordNumber, turnOf, type AnswerRow, type Gate, type WorkRecord } from './work.ts';
 import { labelChanges, wantedLabels } from './labels.ts';
 
@@ -76,8 +76,6 @@ export interface BoardView {
   errors: string[];
   generatedAt: string;
 }
-
-const QUIET_AFTER = 3 * DAY_MS;
 
 const ANSWER_TAG: Record<AnswerState, string> = {
   'awaiting-pickup': 'sent',
@@ -182,10 +180,10 @@ function boxesOf(r: WorkRecord, answerState: AnswerState | null): GateBox[] {
   });
 }
 
-function tagOf(r: WorkRecord, ready: ReturnType<typeof readyToMerge> | null, answerState: AnswerState | null): string {
+function tagOf(r: WorkRecord, ready: ReturnType<typeof readyToMerge> | null, answerState: AnswerState | null, silent: boolean): string {
   if (answerState !== null) return ANSWER_TAG[answerState];
   switch (r.state) {
-    case 'working': return 'working';
+    case 'working': return silent ? 'working, nothing since' : 'working';
     case 'parked': return 'parked';
     // A give-up from working hands the record back paused with no questions.
     case 'paused': return r.questions.length > 0 ? plural(r.questions.length, 'question') : 'paused';
@@ -221,8 +219,11 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
   const found = answerStateOf(r, answers, now);
   const answerState = found?.state ?? null;
   const turn = turnOf(r.state);
+  const activity = newest([main?.lastActivityAt, r.writtenAt, r.confirmedAt].filter((t): t is string => t != null));
+  // Work marked as working with nothing written, confirmed or pushed for a while: the session seems to be gone.
+  const silent = answerState === null && r.state === 'working' && now.getTime() - time(activity) >= WORKING_GOES_SILENT_MS;
   // Once answered, the card is with Claude until the answer comes back to the owner, whatever the record's state says.
-  const shownTurn = answerState === null ? turn : BACK_WITH_OWNER.has(answerState) ? 'owner' : 'claude';
+  const shownTurn = silent ? 'owner' : answerState === null ? turn : BACK_WITH_OWNER.has(answerState) ? 'owner' : 'claude';
   const gate = r.gate;
   const approvalGate = gate !== 'prep' && r.state === 'complete' && r.approved[gate] === undefined ? gate : null;
   const url = main?.url ?? (kind === 'pr' ? `https://github.com/${r.repo}/pull/${number}` : issueUrl(r.repo, number));
@@ -236,10 +237,10 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
     kind,
     version: r.version,
     boxes: boxesOf(r, answerState),
-    tag: tagOf(r, ready, answerState),
+    tag: tagOf(r, ready, answerState, silent),
     tone: toneOf(shownTurn, ready, answerState),
     turn: shownTurn,
-    waitingSince: found?.since ?? r.turnSince,
+    waitingSince: silent ? activity : (found?.since ?? r.turnSince),
     startedAt: r.startedAt,
     ask: r.ask,
     toTest: r.toTest,
@@ -264,13 +265,7 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
     labels: labelChanges(main?.labels ?? [], wantedLabels({ gate: r.gate, turn, ready: ready?.ready === true })),
   };
 
-  const activity = newest([main?.lastActivityAt, r.writtenAt, r.confirmedAt].filter((t): t is string => t != null));
-  const stale = now.getTime() - time(activity) > QUIET_AFTER;
-  let section: Placed['section'];
-  if (answerState !== null) section = shownTurn === 'owner' ? 'waiting' : 'onClaude';
-  else if (turn === 'owner') section = 'waiting';
-  else if (turn === 'nobody' || stale) section = 'quiet';
-  else section = 'onClaude';
+  const section: Placed['section'] = shownTurn === 'owner' ? 'waiting' : shownTurn === 'nobody' ? 'quiet' : 'onClaude';
   return { card, section, activity };
 }
 

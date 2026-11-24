@@ -37,6 +37,12 @@ export const SESSION_LIMIT_MS = 60 * 60 * 1000;
  */
 export const WORKING_STALLS_MS = SESSION_LIMIT_MS;
 
+/**
+ * How long work Claude marked as working may go with nothing written, confirmed or pushed before the board
+ * treats the session as gone and hands the card back to the owner.
+ */
+export const WORKING_GOES_SILENT_MS = 2 * 60 * 60 * 1000;
+
 /** How long the Mac service waits before starting a session for an answer. It must stay below PICKUP_GRACE_MS. */
 export const SERVICE_GRACE_MS = 5 * 60 * 1000;
 

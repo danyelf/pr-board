@@ -340,12 +340,22 @@ describe('sections', () => {
     expect(sectionOf(view([layout.record], [], [layout.facts]), 'acme/torahmap#564')).toBe('onClaude');
   });
 
-  it('puts parked and long-quiet cards in Quiet', () => {
+  it('puts parked cards in Quiet', () => {
     const parked = record({ id: 1, pr: 1, state: 'parked', ask: 'Waiting on the API' });
-    const still = record({ id: 2, pr: 2, writtenAt: ago(5 * 24 * 60) });
-    const v = view([parked, still], [], [facts({ number: 1 }), facts({ number: 2, lastActivityAt: ago(4 * 24 * 60) })]);
-    expect(sectionOf(v, 'o/r#1')).toBe('quiet');
-    expect(sectionOf(v, 'o/r#2')).toBe('quiet');
+    expect(sectionOf(view([parked], [], [facts({ number: 1 })]), 'o/r#1')).toBe('quiet');
+  });
+
+  it('hands working cards back to the owner once nothing has been written, confirmed or pushed for two hours', () => {
+    const quietFor = (minutes: number) => {
+      const r = record({ state: 'working', writtenAt: ago(minutes), confirmedAt: null });
+      return view([r], [], [facts({ lastActivityAt: ago(minutes) })]);
+    };
+    const gone = quietFor(120);
+    expect(sectionOf(gone, 'o/r#5')).toBe('waiting');
+    expect(gone.waiting[0]).toMatchObject({ tag: 'working, nothing since', tone: 'owner', turn: 'owner', waitingSince: ago(120) });
+    const alive = quietFor(119);
+    expect(sectionOf(alive, 'o/r#5')).toBe('onClaude');
+    expect(alive.onClaude[0]!.tag).toBe('working');
   });
 
   it('keeps the owner\'s turn in Waiting however long it has waited', () => {
