@@ -58,7 +58,7 @@ export interface CardView {
   /** The note box's placeholder. When Prep is complete there is nothing to approve, so a note there means it needs changes. */
   noteLabel: string;
   answerState: AnswerState | null;
-  lastAnswer: { at: string; note: string; choices: Record<string, string> } | null;
+  lastAnswer: { at: string; note: string; choices: Record<string, string>; approval: string | null } | null;
   /** When a session gave up on the answer, where its output is. */
   gaveUpHint: string | null;
   links: { pr: string | null; issue: string | null; preview: string | null; merge: string | null };
@@ -96,11 +96,15 @@ const APPROVE_TAG: Record<'design' | 'implementation', string> = { design: 'appr
 const NO_STATUS_TAG = 'no status';
 
 const NOTE_PLACEHOLDER = 'Note';
-const PREP_NOTE_PLACEHOLDER = 'Needs changes? Say what';
+/** The note box's placeholder wherever a note means the work needs changes. */
+export const NEEDS_CHANGES_PLACEHOLDER = 'What needs changing?';
 
-/** Whether the PR can be merged as prep left it; when it can't, the first reason, in a fixed order. */
-export function readyToMerge(r: WorkRecord, f: Facts | undefined): { ready: true } | { ready: false; reason: string } {
-  const no = (reason: string) => ({ ready: false as const, reason });
+/**
+ * Whether the PR can be merged as prep left it; when it can't, the first reason, in a fixed order.
+ * `waiting` is true when GitHub hasn't finished checking, so the answer may soon be yes.
+ */
+export function readyToMerge(r: WorkRecord, f: Facts | undefined): { ready: true } | { ready: false; reason: string; waiting: boolean } {
+  const no = (reason: string, waiting = false) => ({ ready: false as const, reason, waiting });
   if (r.pr === null || !f || f.kind !== 'pr') return no('no PR');
   if (f.isDraft) return no('draft');
   if (f.stackedOn !== null && f.stackedOnOpen) return no(`after #${f.stackedOn}`);
@@ -108,12 +112,12 @@ export function readyToMerge(r: WorkRecord, f: Facts | undefined): { ready: true
   if (f.mergeState === 'DIRTY') return no('conflicts');
   if (f.mergeState === 'BEHIND' || f.behindBase) return no('rebase first');
   if (f.mergeState === 'UNSTABLE' || f.checks === 'FAILURE' || f.checks === 'ERROR') return no('checks failing');
-  if (f.checks === 'PENDING' || f.checks === 'EXPECTED') return no('checks still running');
-  if (f.mergeState === 'UNKNOWN' || f.mergeState === null) return no('GitHub still checking');
+  if (f.checks === 'PENDING' || f.checks === 'EXPECTED') return no('checks running', true);
+  if (f.mergeState === 'UNKNOWN' || f.mergeState === null) return no('GitHub checking', true);
   if (f.mergeState === 'CLEAN' || f.mergeState === 'HAS_HOOKS') return { ready: true };
   // The owner supplies a required review when merging, so that alone doesn't hold the PR back.
   if (f.mergeState === 'BLOCKED' && f.reviewDecision === 'REVIEW_REQUIRED' && (f.checks === 'SUCCESS' || f.checks === null)) return { ready: true };
-  return no('GitHub is blocking the merge');
+  return no('blocked by GitHub');
 }
 
 function time(iso: string): number {
@@ -192,7 +196,8 @@ function tagOf(r: WorkRecord, ready: ReturnType<typeof readyToMerge> | null, ans
 }
 
 function toneOf(shownTurn: CardView['turn'], ready: ReturnType<typeof readyToMerge> | null, answerState: AnswerState | null): Tone {
-  if (ready !== null && answerState === null) return ready.ready ? 'ready' : 'blocked';
+  // While GitHub is still checking, the card is nobody's to act on yet.
+  if (ready !== null && answerState === null) return ready.ready ? 'ready' : ready.waiting ? 'nobody' : 'blocked';
   return shownTurn;
 }
 
@@ -245,9 +250,9 @@ function recordCard(r: WorkRecord, answers: AnswerRow[], factsOf: (n: number | n
       ? r.questions.map((q) => ({ ...q, choices: [...q.choices.filter((c) => c !== FILE_AN_ISSUE), FILE_AN_ISSUE] }))
       : [],
     approval: approvalGate !== null ? { choices: [...APPROVAL_CHOICES[approvalGate]], defaultChoice: APPROVAL_CHOICES[approvalGate][0] } : null,
-    noteLabel: prepDone ? PREP_NOTE_PLACEHOLDER : NOTE_PLACEHOLDER,
+    noteLabel: prepDone ? NEEDS_CHANGES_PLACEHOLDER : NOTE_PLACEHOLDER,
     answerState,
-    lastAnswer: found ? { at: found.answer.at, note: found.answer.note, choices: found.answer.choices } : null,
+    lastAnswer: found ? { at: found.answer.at, note: found.answer.note, choices: found.answer.choices, approval: found.answer.approval } : null,
     gaveUpHint: found?.state === 'gave-up' ? found.answer.giveUpHint : null,
     links: {
       pr: r.pr !== null ? (pr?.url ?? url) : null,

@@ -1,7 +1,7 @@
 // Cards, gate strips and sections, drawn from the board's JSON. Every element comes from `el`, so text
 // from GitHub or from Claude is always shown as text.
 import { NOTE_MAX } from '../shared/names.ts';
-import type { CardView } from '../shared/view.ts';
+import { NEEDS_CHANGES_PLACEHOLDER, type CardView } from '../shared/view.ts';
 import { GATE_SHORT_NAMES, NEEDS_CHANGES } from '../shared/work.ts';
 import { el } from './el.ts';
 import { canAnswer, offersQuestions, type FormState } from './form.ts';
@@ -83,6 +83,7 @@ function sent(doc: Document, c: CardView): HTMLElement | null {
   const a = c.lastAnswer;
   if (!a) return null;
   const lines: HTMLElement[] = [];
+  if (a.approval !== null) lines.push(el(doc, 'li', {}, a.approval));
   for (const [n, choice] of Object.entries(a.choices)) {
     const q = c.questions.find((x) => String(x.n) === n);
     lines.push(el(doc, 'li', {}, q ? `${n}. ${q.text}: ${choice}` : `${n}. ${choice}`));
@@ -133,7 +134,7 @@ function form(doc: Document, c: CardView, s: FormState, h: CardHandlers): HTMLEl
   const showRequired = () => {
     const needed = offered && c.approval !== null && s.approval === NEEDS_CHANGES;
     note.required = needed;
-    note.setAttribute('placeholder', needed ? 'What needs changing?' : c.noteLabel);
+    note.setAttribute('placeholder', needed ? NEEDS_CHANGES_PLACEHOLDER : c.noteLabel);
   };
   if (offered && c.approval) {
     parts.push(radioGroup(doc, `${c.key}-approval`, null, c.approval.choices, c.approval.defaultChoice, s.approval ?? undefined, (choice) => {

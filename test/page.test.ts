@@ -155,7 +155,7 @@ describe('the answer form', () => {
   });
 
   it('sends only the note once the questions have been answered', () => {
-    const c = card({ answerState: 'awaiting-pickup', lastAnswer: { at: '2026-11-20T11:59:00.000Z', note: '', choices: { '1': 'gold' } } });
+    const c = card({ answerState: 'awaiting-pickup', lastAnswer: { at: '2026-11-20T11:59:00.000Z', note: '', choices: { '1': 'gold' }, approval: null } });
     expect(offersQuestions(c)).toBe(false);
     const s = { choices: { '1': 'grey' }, approval: null, note: 'and also this', touched: true };
     expect(toAnswer(c, s)).toEqual({ version: 3, choices: {}, approval: null, note: 'and also this' });
@@ -165,7 +165,7 @@ describe('the answer form', () => {
     const c = card({
       answerState: 'gave-up', tag: 'Claude gave up', gaveUpHint: 'Its output is the newest o-r-5-*.log',
       approval: { choices: ['approve, build it', 'needs changes'], defaultChoice: 'approve, build it' },
-      lastAnswer: { at: '2026-11-20T11:00:00.000Z', note: '', choices: { '1': 'grey' } },
+      lastAnswer: { at: '2026-11-20T11:00:00.000Z', note: '', choices: { '1': 'grey' }, approval: null },
     });
     expect(offersQuestions(c)).toBe(true);
     const s = initialForm(c);
@@ -195,7 +195,7 @@ describe('the answer form', () => {
 
   it('asks for a note with "needs changes"', () => {
     const c = card({ approval: { choices: ['approve, build it', 'needs changes'], defaultChoice: 'approve, build it' } });
-    expect(formProblem(c, { ...initialForm(c), approval: 'needs changes' })).toMatch(/note/);
+    expect(formProblem(c, { ...initialForm(c), approval: 'needs changes' })).toBe('Say what needs changing.');
     expect(formProblem(c, { ...initialForm(c), approval: 'needs changes', note: 'redo it' })).toBeNull();
     expect(formProblem(c, initialForm(c))).toBeNull();
   });

@@ -36,7 +36,7 @@ describe('the cards sketched in the design', () => {
     expect(c.tone).toBe('ready');
     expect(looks(c)).toEqual(['approved', 'approved', 'now']);
     expect(c.links.merge).toBe(toolsState.facts.url);
-    expect(c.noteLabel).toBe('Needs changes? Say what');
+    expect(c.noteLabel).toBe('What needs changing?');
     expect(c.approval).toBeNull();
     expect(c.turn).toBe('owner');
     expect(c.labels).toEqual({ add: ['gate: prep', 'on sam', 'ready to merge'], remove: [] });
@@ -97,8 +97,8 @@ describe('readyToMerge', () => {
   };
 
   it('needs a PR', () => {
-    expect(readyToMerge(record({ pr: null, issue: 5 }), facts({ kind: 'issue' }))).toEqual({ ready: false, reason: 'no PR' });
-    expect(readyToMerge(r, undefined)).toEqual({ ready: false, reason: 'no PR' });
+    expect(readyToMerge(record({ pr: null, issue: 5 }), facts({ kind: 'issue' }))).toEqual({ ready: false, reason: 'no PR', waiting: false });
+    expect(readyToMerge(r, undefined)).toEqual({ ready: false, reason: 'no PR', waiting: false });
   });
   it('gives each reason, in order', () => {
     expect(reason({ isDraft: true, mergeState: 'DIRTY' })).toBe('draft');
@@ -111,10 +111,10 @@ describe('readyToMerge', () => {
     expect(reason({ mergeState: 'UNSTABLE' })).toBe('checks failing');
     expect(reason({ checks: 'FAILURE' })).toBe('checks failing');
     expect(reason({ checks: 'ERROR' })).toBe('checks failing');
-    expect(reason({ checks: 'PENDING', mergeState: 'UNKNOWN' })).toBe('checks still running');
-    expect(reason({ checks: 'EXPECTED' })).toBe('checks still running');
-    expect(reason({ mergeState: 'UNKNOWN' })).toBe('GitHub still checking');
-    expect(reason({ mergeState: 'BLOCKED', reviewDecision: null })).toBe('GitHub is blocking the merge');
+    expect(reason({ checks: 'PENDING', mergeState: 'UNKNOWN' })).toBe('checks running');
+    expect(reason({ checks: 'EXPECTED' })).toBe('checks running');
+    expect(reason({ mergeState: 'UNKNOWN' })).toBe('GitHub checking');
+    expect(reason({ mergeState: 'BLOCKED', reviewDecision: null })).toBe('blocked by GitHub');
   });
   it('treats clean and hooks as ready', () => {
     expect(reason({ mergeState: 'CLEAN' })).toBe('ready');
@@ -128,7 +128,7 @@ describe('readyToMerge', () => {
     expect(reason({ mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED', checks: 'FAILURE' })).toBe('checks failing');
   });
   it('says GitHub is blocking when changes were requested', () => {
-    expect(reason({ mergeState: 'BLOCKED', reviewDecision: 'CHANGES_REQUESTED', checks: 'SUCCESS' })).toBe('GitHub is blocking the merge');
+    expect(reason({ mergeState: 'BLOCKED', reviewDecision: 'CHANGES_REQUESTED', checks: 'SUCCESS' })).toBe('blocked by GitHub');
   });
 });
 
@@ -148,6 +148,18 @@ describe('boxes', () => {
     expect(c.tone).toBe('blocked');
     expect(c.links.merge).toBeNull();
     expect(c.labels.add).not.toContain('ready to merge');
+  });
+
+  it('shows prep complete in grey, not red, while GitHub is still checking', () => {
+    const c = only([{ ...toolsState.record }], [], [{ ...toolsState.facts, checks: 'PENDING' }]);
+    expect(c.tag).toBe("can't merge: checks running");
+    expect(c.tone).toBe('nobody');
+  });
+
+  it('carries the owner\'s approval in the answer it shows as sent', () => {
+    const r = record({ gate: 'implementation', state: 'complete', toTest: 'try it', approved: { design: ago(900), implementation: ago(1) }, rounds: { design: 1, implementation: 1, prep: 0 } });
+    const c = only([r], [answer({ approval: 'looks good, prep for merge', at: ago(1) })], [facts()]);
+    expect(c.lastAnswer?.approval).toBe('looks good, prep for merge');
   });
 
   it('shows the current gate approved once the owner approved it and Claude has not moved on', () => {
@@ -229,7 +241,7 @@ describe('answer state', () => {
     expect(c.answerState).toBe('awaiting-pickup');
     expect(c.tag).toBe('sent');
     expect(c.tone).toBe('claude');
-    expect(c.lastAnswer).toEqual({ at: ago(5), note: 'a note', choices: {} });
+    expect(c.lastAnswer).toEqual({ at: ago(5), note: 'a note', choices: {}, approval: null });
   });
 
   it('is not picked up once the grace period has passed', () => {

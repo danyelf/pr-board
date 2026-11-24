@@ -1,5 +1,5 @@
-/* PR Board. Each colour means one thing: amber is your turn, blue is Claude's, green is approved or ready
-   to merge, red is can't merge or an error, grey is parked. Buttons, the switch and links have no colour. */
+/* PR Board. Each colour means one thing: amber is your turn, blue is Claude's, green is ready to merge,
+   red is can't merge or an error, grey is nobody's turn yet. Controls and links have no colour. */
 
 :root {
   --bg: #f6f7f9;
@@ -57,6 +57,7 @@ a { color: var(--text); text-decoration: underline; text-decoration-color: var(-
 [hidden] { display: none !important; }
 
 button { font: inherit; cursor: pointer; }
+input { accent-color: var(--text); }
 
 .top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 8px; }
 .top h1 { font-size: 20px; margin: 0; }
@@ -81,7 +82,7 @@ section h2 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 18p
 .card-head .title a:hover { text-decoration: underline; }
 .card-head .repo { color: var(--muted); font-weight: normal; font-size: 13px; }
 
-.tag { font-size: 13px; font-weight: 600; padding: 1px 9px; border-radius: 999px; white-space: nowrap; }
+.tag { font-size: 13px; font-weight: 600; padding: 1px 9px; border-radius: 999px; }
 .tone-owner { background: var(--owner-bg); color: var(--owner); }
 .tone-claude { background: var(--claude-bg); color: var(--claude); }
 .tone-ready { background: var(--ready-bg); color: var(--ready); }
@@ -89,14 +90,12 @@ section h2 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 18p
 .tone-nobody { background: var(--nobody-bg); color: var(--nobody); }
 
 .gates { font-size: 13px; color: var(--muted); margin: 3px 0 6px; }
-.gates .look-approved { color: var(--ready); }
 .gates .look-now { color: var(--text); font-weight: 600; }
-.gates .look-on-hold { text-decoration: line-through; }
 
 .ask { margin: 6px 0; }
 .to-test { margin: 6px 0; font-size: 14px; }
 .links { display: inline-flex; flex-wrap: wrap; gap: 14px; margin-left: 10px; font-size: 14px; }
-.links .merge { font-weight: 600; color: var(--ready); text-decoration-color: var(--ready); }
+.links .merge { font-weight: 600; }
 .shots { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .shots img { max-height: 120px; max-width: 220px; border: 1px solid var(--line); border-radius: 6px; }
 

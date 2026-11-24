@@ -95,7 +95,7 @@ export class Refused extends Error {}
 export const NEEDS_CHANGES = 'needs changes';
 
 /** What the board says when "needs changes" comes without a note. */
-export const NEEDS_A_NOTE = `Say what needs changing: "${NEEDS_CHANGES}" must come with a note`;
+export const NEEDS_A_NOTE = 'Say what needs changing';
 
 export const APPROVAL_CHOICES: Record<'design' | 'implementation', readonly [string, string]> = {
   design: ['approve, build it', NEEDS_CHANGES],

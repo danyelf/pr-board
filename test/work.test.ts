@@ -178,7 +178,7 @@ describe('checkAnswer', () => {
     expect(checkAnswer(asked, { ...ok, approval: 'approve, build it' })).not.toBeNull();
   });
   it('refuses needs changes with no note', () => {
-    expect(checkAnswer(asked, { ...ok, approval: 'needs changes', note: '  ' })).toMatch(/note/i);
+    expect(checkAnswer(asked, { ...ok, approval: 'needs changes', note: '  ' })).toBe('Say what needs changing');
     expect(checkAnswer(asked, { ...ok, approval: 'needs changes', note: 'fix it' })).toBeNull();
   });
   it('refuses a note over the limit', () => {
