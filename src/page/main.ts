@@ -131,7 +131,7 @@ const sections: Record<'waiting' | 'onClaude' | 'quiet' | 'everything', { wrap: 
   waiting: section('Your turn'),
   onClaude: section("Claude's turn"),
   quiet: section('Quiet'),
-  // The switch already says this is everything, newest first.
+  // The switch's "All" already names this list, so it has no heading.
   everything: section(null),
 };
 

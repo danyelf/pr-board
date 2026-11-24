@@ -100,9 +100,9 @@ section h2 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 18p
 .box.look-on-hold { opacity: 0.55; border-style: dashed; }
 @media (max-width: 560px) { .strip { grid-auto-flow: row; } }
 
-.ask { margin: 6px 0; }
+.ask { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 6px 0; }
 .to-test, .reopened { margin: 6px 0; font-size: 14px; }
-.links { display: inline-flex; flex-wrap: wrap; gap: 14px; margin-left: 10px; font-size: 14px; }
+.links { display: inline-flex; flex-wrap: wrap; gap: 14px; font-size: 14px; }
 .links .merge { font-weight: 600; }
 .shots { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .shots img { max-height: 120px; max-width: 220px; border: 1px solid var(--line); border-radius: 6px; }
