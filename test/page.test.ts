@@ -3,7 +3,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { drawBacklog, drawProposal, initialProposalForm } from '../src/page/backlog.ts';
 import { drawCard } from '../src/page/draw.ts';
+import type { ProposalCard } from '../src/shared/backlog-view.ts';
 import { el } from '../src/page/el.ts';
 import { afterRefusal, formProblem, initialForm, offersQuestions, toAnswer } from '../src/page/form.ts';
 import { plan } from '../src/page/merge.ts';
@@ -254,5 +256,55 @@ describe('what a refresh replaces', () => {
     const p = plan(new Map([[a.key, a]]), board([b]), new Set());
     expect(p.add).toEqual([b.key]);
     expect(p.remove).toEqual([a.key]);
+  });
+});
+
+describe('the backlog on the page', () => {
+  const handlers = { findMore: () => undefined, answer: () => undefined, act: () => undefined };
+  const NOW_D = new Date('2026-11-20T12:00:00.000Z');
+  const proposal = (over: Partial<ProposalCard> = {}): ProposalCard => ({
+    key: 'o/r proposal 1', id: 1, repo: 'o/r', title: 'Next from the r backlog', tag: '1 question', section: 'waiting', since: '2026-11-20T11:40:00.000Z',
+    questions: [{ issue: 25, title: 'Stop hook <b>x</b>', url: 'https://github.com/o/r/issues/25', reason: 'small', choices: ['pick up', 'later', 'close'], defaultChoice: 'later' }],
+    answerable: true, failure: null, canRetry: false, canDismiss: false, sent: null, ...over,
+  });
+
+  it('draws a question per issue with its reason, the suggestion chosen, and a note box saying a note starts a session', () => {
+    const { doc } = fakeDoc();
+    const c = proposal();
+    const node = drawProposal(doc, c, initialProposalForm(c), handlers, NOW_D) as unknown as FakeElement;
+    const text = textOf(node);
+    expect(text).toContain('#25 Stop hook <b>x</b>');
+    expect(text).toContain('small');
+    const checked = walk(node).filter((e) => e.tag === 'input' && 'checked' in e.attrs).map((e) => e.attrs.value);
+    expect(checked).toEqual(['later']);
+    expect(walk(node).find((e) => e.tag === 'textarea')!.attrs.placeholder).toMatch(/a note starts a short session/);
+  });
+
+  it('shows what went wrong on a failed proposal, with Try again only when its list was never written', () => {
+    const { doc } = fakeDoc();
+    const c = proposal({ answerable: false, failure: 'The session ended without writing a list.', canRetry: true, canDismiss: true, questions: [] });
+    const node = drawProposal(doc, c, initialProposalForm(c), handlers, NOW_D) as unknown as FakeElement;
+    expect(textOf(node)).toContain('What went wrong: The session ended without writing a list.');
+    expect(walk(node).filter((e) => e.tag === 'button').map(textOf)).toEqual(['Try again', 'Dismiss']);
+  });
+
+  it('draws the session count and a Find some more button only on a repo with nothing under way', () => {
+    const { doc } = fakeDoc();
+    const nodes = drawBacklog(doc, {
+      sessions: { running: 1, max: 4, at: '2026-11-20T11:59:00.000Z', stale: false },
+      repos: [{ repo: 'o/r', name: 'r', open: 6, atLeast: false, busy: null }, { repo: 'o/s', name: 's', open: 3, atLeast: true, busy: 'looking through the backlog…' }],
+      proposals: [], pickups: [],
+    }, handlers, NOW_D) as unknown as FakeElement[];
+    expect(textOf(nodes[0]!)).toContain('1 of 4 sessions on the Mac running');
+    expect(textOf(nodes[1]!)).toContain('6 open issues nobody has picked up');
+    expect(walk(nodes[1]!).some((e) => e.tag === 'button')).toBe(true);
+    expect(textOf(nodes[2]!)).toContain('looking through the backlog…');
+    expect(walk(nodes[2]!).some((e) => e.tag === 'button')).toBe(false);
+  });
+
+  it('says so when the Mac service has never reported', () => {
+    const { doc } = fakeDoc();
+    const nodes = drawBacklog(doc, { sessions: null, repos: [], proposals: [], pickups: [] }, handlers, NOW_D) as unknown as FakeElement[];
+    expect(textOf(nodes[0]!)).toContain("hasn't reported in yet");
   });
 });

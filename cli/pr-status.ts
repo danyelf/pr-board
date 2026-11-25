@@ -1,5 +1,7 @@
+import { itemsProblem, parseItem } from '../src/shared/backlog.ts';
 import { OWNER_LOGIN } from '../src/shared/config.ts';
 import { BoardError, boardCall, realBoardDeps, where, workPath, type BoardDeps } from './board.ts';
+import { pickUp } from './pickup.ts';
 import { gh, parseRef, refString } from './gh.ts';
 import { message } from '../src/shared/helpers.ts';
 import type { Deps as BaseDeps, Gh, Ref } from './gh.ts';
@@ -10,6 +12,35 @@ export interface Deps extends BaseDeps {
 
 const USAGE = 'Usage: pr-status set <owner/repo#N | #N> --gate design|implementation|prep --state working|paused|complete|parked [--ask <text>] [--question "Q? (**default** | other)"]… [--to-test <text>] [--reason <text>] [--no-design] [--replaces <N>] [--issue <N>]';
 const OTHER_USAGE = 'Usage: pr-status ok|show <owner/repo#N | #N>   or   pr-status import <owner/repo#N | #N> --json <file>   (import is for the switch-over to the board only; don\'t use it otherwise)';
+
+const BACKLOG_COMMANDS = ['propose', 'pick-up', 'proposal-done'];
+const BACKLOG_USAGE = 'For backlog sessions: pr-status propose <owner/repo> [--item "#N | pick up|later|close | reason"]…   pr-status pick-up <owner/repo#N>   pr-status proposal-done <owner/repo> [--problem <text>]';
+
+/** The commands a backlog session runs, which name a repo rather than an item. */
+async function backlogCommand(deps: Deps, command: 'propose' | 'proposal-done', repo: string, rest: string[], out: (l: string) => void): Promise<number> {
+  if (!/^[^/\s#]+\/[^/\s#]+$/.test(repo)) throw new Error(`${command} needs the repo as owner/name, not "${repo}"`);
+  const flag = command === 'propose' ? '--item' : '--problem';
+  const values: string[] = [];
+  for (let i = 0; i < rest.length; i += 2) {
+    if (rest[i] !== flag) throw new Error(`Unknown option ${rest[i]}. ${BACKLOG_USAGE}`);
+    const value = rest[i + 1];
+    if (value === undefined) throw new Error(`${flag} needs a value`);
+    values.push(value);
+  }
+  if (command === 'propose') {
+    const items = values.map(parseItem);
+    const problem = itemsProblem(items);
+    if (problem) throw new Error(problem);
+    await boardCall(deps.board, 'POST', '/api/proposal-write', { repo, items });
+    out(`Wrote the proposal for ${repo} to the board, with ${items.length} ${items.length === 1 ? 'issue' : 'issues'}.`);
+    return 0;
+  }
+  if (values.length > 1) throw new Error('Give --problem once');
+  if (values[0] !== undefined && /[\r\n]/.test(values[0])) throw new Error('--problem must be one line');
+  await boardCall(deps.board, 'POST', '/api/proposal-done', { repo, problem: values[0] ?? '' });
+  out(values[0] ? `Handed the proposal for ${repo} back with what couldn't be done.` : `Marked the proposal for ${repo} done.`);
+  return 0;
+}
 
 interface SetOptions {
   gate: string;
@@ -101,9 +132,16 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
   const err = deps.err ?? ((l) => console.error(l));
   try {
     const [command, refText, ...rest] = argv;
-    if (!command || !refText || !['set', 'ok', 'show', 'import'].includes(command)) {
-      err(`${USAGE}\n${OTHER_USAGE}`);
+    if (!command || !refText || !['set', 'ok', 'show', 'import', ...BACKLOG_COMMANDS].includes(command)) {
+      err(`${USAGE}\n${OTHER_USAGE}\n${BACKLOG_USAGE}`);
       return 1;
+    }
+    if (command === 'propose' || command === 'proposal-done') return await backlogCommand(deps, command, refText, rest, out);
+    if (command === 'pick-up') {
+      const ref = await parseRef(refText, deps.gh);
+      await pickUp(deps.gh, deps.board, ref, null);
+      out(`Picked up ${refString(ref)}: it has the in-progress label and waits on the board for a free session.`);
+      return 0;
     }
     const opts = command === 'set' ? parseSetArgs(rest) : null;
     const ref = await parseRef(refText, deps.gh);

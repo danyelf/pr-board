@@ -29,6 +29,7 @@ function fakeGh(world: World) {
       return '{}';
     }
     if (line === 'repo view --json nameWithOwner -q .nameWithOwner') return 'acme/x\n';
+    if (line === 'issue edit 5 -R acme/x --add-label in-progress') return '';
     throw new Error(`unexpected gh call: ${line}`);
   };
   return { gh, calls };
@@ -213,5 +214,38 @@ describe('pr-status ok, show and import', () => {
 
   it('a BoardError is exported for callers', () => {
     expect(new BoardError('⚠️ x').message).toBe('⚠️ x');
+  });
+});
+
+describe('pr-status and the backlog', () => {
+  it('propose sends the items as the board takes them, and refuses a bad one before sending anything', async () => {
+    const r = await run(world(), ['propose', 'acme/x', '--item', '#25 | pick up | small', '--item', '#11 | close | done by #20'], () => ({ body: { proposal: {} } }));
+    expect(r.code).toBe(0);
+    expect(r.sent).toEqual([{ method: 'POST', path: '/api/proposal-write', body: { repo: 'acme/x', items: [{ issue: 25, suggestion: 'pick up', reason: 'small' }, { issue: 11, suggestion: 'close', reason: 'done by #20' }] } }]);
+    const bad = await run(world(), ['propose', 'acme/x', '--item', '#25 | maybe | small']);
+    expect(bad.code).toBe(1);
+    expect(bad.errors.join('\n')).toContain('"maybe" isn\'t pick up, later or close');
+    expect(bad.sent).toEqual([]);
+  });
+
+  it('propose with no items writes an empty list', async () => {
+    const r = await run(world(), ['propose', 'acme/x'], () => ({ body: { proposal: {} } }));
+    expect(r.code).toBe(0);
+    expect(r.sent[0]!.body).toEqual({ repo: 'acme/x', items: [] });
+  });
+
+  it('pick-up labels the issue and adds it to the board', async () => {
+    const r = await run(world({ kind: 'issue' }), ['pick-up', 'acme/x#5'], () => ({ body: { pickup: {} } }));
+    expect(r.code).toBe(0);
+    expect(r.calls.map((c) => c.join(' '))).toEqual(['issue edit 5 -R acme/x --add-label in-progress']);
+    expect(r.sent).toEqual([{ method: 'POST', path: '/api/pickup-add', body: { repo: 'acme/x', number: 5, proposalId: null } }]);
+  });
+
+  it('proposal-done finishes the repo’s proposal, or hands it back with --problem', async () => {
+    const ok = await run(world(), ['proposal-done', 'acme/x'], () => ({ body: {} }));
+    expect(ok.sent[0]!.body).toEqual({ repo: 'acme/x', problem: '' });
+    const back = await run(world(), ['proposal-done', 'acme/x', '--problem', "#19 doesn't exist"], () => ({ body: {} }));
+    expect(back.sent[0]!.body).toEqual({ repo: 'acme/x', problem: "#19 doesn't exist" });
+    expect((await run(world(), ['proposal-done', 'acme/x#5'])).code).toBe(1);
   });
 });
