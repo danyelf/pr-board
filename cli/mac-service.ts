@@ -12,8 +12,12 @@ import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { OWNER_NAME } from '../src/shared/config.ts';
 import { CLAUDE_BOT_KEY, GAVE_UP_ASK, PICKUP_GRACE_MS, SERVICE_GRACE_MS, SERVICE_WORKING_ASK, SESSION_LIMIT_MS } from '../src/shared/names.ts';
-import { itemKey, recordNumber, type Found, type WorkRecord } from '../src/shared/work.ts';
+import { CLOSE, PICK_UP, isUnderWay, type Pickup, type Proposal, type Skip } from '../src/shared/backlog.ts';
+import { LABEL_IN_PROGRESS } from '../src/shared/names.ts';
+import { Refused, itemKey, recordNumber, type Found, type WorkRecord } from '../src/shared/work.ts';
 import { describe } from './answers.ts';
+import { notePrompt, pickupPrompt, proposalPrompt } from './backlog-prompts.ts';
+import { closeComment, pickUp } from './pickup.ts';
 import { BoardError, boardCall, realBoardDeps, where, type BoardDeps } from './board.ts';
 import { OwnerError, gh as realGh, git as realGit, ps as realPs, refString, refuseOwner } from './gh.ts';
 import type { Gh, Ref } from './gh.ts';
@@ -130,7 +134,7 @@ export function loadConfig(text: string, home: string, path: string): Config {
   return {
     repos,
     graceMs: num('graceMinutes', SERVICE_GRACE_MS / MIN, (n) => n >= 0, 'a number of minutes, 0 or more') * MIN,
-    maxSessions: num('maxSessions', 2, (n) => Number.isInteger(n) && n >= 1, 'a whole number, 1 or more'),
+    maxSessions: num('maxSessions', 4, (n) => Number.isInteger(n) && n >= 1, 'a whole number, 1 or more'),
     pollMs: num('pollSeconds', POLL_MS / 1000, (n) => n >= 1, 'a number of seconds, 1 or more') * 1000,
     sessionMs: num('sessionMinutes', SESSION_LIMIT_MS / MIN, (n) => n > 0, 'a number of minutes, more than 0') * MIN,
     logDir: d.logDir === undefined ? join(home, '.pr-board', 'logs') : absolute(d.logDir, 'logDir'),
@@ -143,6 +147,10 @@ export function loadConfig(text: string, home: string, path: string): Config {
 
 /** The name a session is started with, which is how the process list tells which item it is for. */
 const sessionName = (ref: Ref): string => `${refString(ref)} answers`;
+/** A session that starts a picked-up issue goes by the issue, as an answers session does, so the two never run side by side. */
+const pickupSessionName = (repo: string, n: number): string => `${itemKey(repo, n)} pick-up`;
+/** A session for a repo's proposal (reading its backlog, or acting on the note), and how the process list knows it. */
+export const backlogKey = (repo: string): string => `${repo} backlog`;
 
 /** ps's elapsed time, [[dd-]hh:]mm:ss, in ms; null when it can't be read. */
 function elapsedMs(etime: string): number | null {
@@ -153,8 +161,9 @@ function elapsedMs(etime: string): number | null {
 }
 
 /**
- * This service's sessions in `ps -axww -o pid=,etime=,args=`, by item: the processes running
- * `claude` with `--name "<owner/repo#N> answers"` first, as the service starts them.
+ * This service's sessions in `ps -axww -o pid=,etime=,args=`: the processes running `claude` with
+ * `--name "<owner/repo#N> answers"` or `"<owner/repo#N> pick-up"` first, by item, and those with
+ * `--name "<owner/repo> backlog"`, by that name.
  */
 export function runningSessions(psOutput: string, claude: string): Map<string, Running> {
   const found = new Map<string, Running>();
@@ -162,9 +171,12 @@ export function runningSessions(psOutput: string, claude: string): Map<string, R
   for (const line of psOutput.split('\n')) {
     const m = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(line);
     if (!m || !m[3]!.startsWith(start)) continue;
-    const name = /^(\S+#\d+) answers -p(?: |$)/.exec(m[3]!.slice(start.length));
+    const rest = m[3]!.slice(start.length);
+    const item = /^(\S+#\d+) (?:answers|pick-up) -p(?: |$)/.exec(rest);
+    const backlog = /^([^\s#/]+\/[^\s#/]+) backlog -p(?: |$)/.exec(rest);
+    const key = item ? item[1]! : backlog ? backlogKey(backlog[1]!) : null;
     const elapsed = elapsedMs(m[2]!);
-    if (name && elapsed !== null) found.set(name[1]!, { pid: Number(m[1]), elapsedMs: elapsed });
+    if (key && elapsed !== null) found.set(key, { pid: Number(m[1]), elapsedMs: elapsed });
   }
   return found;
 }
@@ -282,6 +294,15 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     lastSaid.set(ref, line);
     say(ref, line);
   };
+  /** The same for the backlog, kept apart since the answers' list forgets every item that has no answers waiting. */
+  const backlogSaid = new Map<string, string>();
+  const sayOnceAbout = (key: string, ref: string, line: string) => {
+    if (backlogSaid.get(key) === line) return;
+    backlogSaid.set(key, line);
+    say(ref, line);
+  };
+  /** What a failed gh call says, without the command it ran. */
+  const ghWhy = (e: unknown) => message(e).replace(/^gh [\s\S]*? failed: /, '');
 
   /** A failure as a log line says it: the board's own ⚠️ words, or what went wrong and while doing what. */
   const failure = (e: unknown, doing: string): string => (e instanceof BoardError ? `${e.message} (${doing})` : `couldn't ${doing}: ${message(e)}`);
@@ -418,28 +439,39 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
    * same step sets the ask to say a Mac session is working on them, and starts the session. If the
    * session can't start, the claim is given back.
    */
-  async function startSession(repo: RepoConfig, ref: Ref, waiting: Found): Promise<void> {
-    const name = refString(ref);
-    const isPr = waiting.record.pr !== null;
+  /**
+   * The environment a session in this repo runs in: Claude's own GitHub token, and its Claude token when the
+   * config names one. Null, with a line saying why, when the repo isn't marked or a token is missing.
+   */
+  async function sessionEnv(repo: RepoConfig, name: string): Promise<NodeJS.ProcessEnv | null> {
     const unmarked = await markProblem(repo);
     if (unmarked) {
       warn(name, `not starting a session: ${unmarked}`);
-      return;
+      return null;
     }
     const token = readToken();
     if (!token) {
       warn(name, `not starting a session: ${config.tokenFile} is missing or empty, so the session couldn't act as Claude's own GitHub account.`);
-      return;
+      return null;
     }
     const claudeToken = config.claudeTokenFile === null ? null : readSecret(config.claudeTokenFile);
     if (config.claudeTokenFile !== null && !claudeToken) {
       warn(name, `not starting a session: ${config.claudeTokenFile} is missing or empty, so the session couldn't sign in to Claude.`);
-      return;
+      return null;
     }
-    const env = { ...deps.env, GH_TOKEN: token, ...(claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken } : {}) };
+    return { ...deps.env, GH_TOKEN: token, ...(claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken } : {}) };
+  }
+
+  const logPathFor = (base: string) => join(config.logDir, `${base}-${new Date(deps.now()).toISOString().replace(/[:.]/g, '-')}.log`);
+
+  async function startSession(repo: RepoConfig, ref: Ref, waiting: Found): Promise<void> {
+    const name = refString(ref);
+    const isPr = waiting.record.pr !== null;
+    const env = await sessionEnv(repo, name);
+    if (!env) return;
     const branch = isPr ? await prBranch(ref) : `issue-${ref.n}`;
     const cwd = await worktreeFor(repo, ref, isPr, branch);
-    const logPath = join(config.logDir, `${ref.owner}-${ref.repo}-${ref.n}-${new Date(deps.now()).toISOString().replace(/[:.]/g, '-')}.log`);
+    const logPath = logPathFor(`${ref.owner}-${ref.repo}-${ref.n}`);
     // The name comes first, so the process list shows it before the long prompt.
     const argsFor = (prompt: string) => ['--name', sessionName(ref), '-p', prompt, ...config.claudeArgs];
     const prompt = promptFor(ref, cwd, describe(waiting.record, waiting.answers));
@@ -524,6 +556,258 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     return ripe;
   }
 
+  // ---------------------------------------------------------------------------
+  // The backlog: proposals, the owner's answers to them, and picked-up issues.
+  // ---------------------------------------------------------------------------
+
+  const repoConfig = (name: string): RepoConfig | undefined => repos.find((r) => `${r.owner}/${r.repo}` === name);
+  const refIn = (repo: string, n: number): Ref => {
+    const [owner = '', name = ''] = repo.split('/');
+    return { owner, repo: name, n };
+  };
+  const slotFree = (live: Map<string, Running>) => live.size + planned < config.maxSessions;
+  const backlogLogHint = (repo: string) => `Its output is the newest ${repo.replace('/', '-')}-backlog-*.log in ${config.logDir}.`;
+
+  /**
+   * The detached checkout of the default branch that proposal and note sessions read in, at
+   * <clone>/.claude/worktrees/backlog. Brought up to date each time; they make no commits there.
+   */
+  async function backlogWorktree(repo: RepoConfig): Promise<string> {
+    const path = join(repo.clone, '.claude', 'worktrees', 'backlog');
+    const name = `${repo.owner}/${repo.repo}`;
+    if (dryRun) {
+      say(name, `would bring ${path} up to date with the default branch.`);
+      return path;
+    }
+    const base = (await gh(['api', `repos/${name}`, '-q', '.default_branch'])).trim();
+    await deps.git(['-C', repo.clone, 'fetch', '--', 'origin', base]);
+    if (deps.files.isDirectory(path)) await deps.git(['-C', path, 'checkout', '--detach', `origin/${base}`]);
+    else await deps.git(['-C', repo.clone, 'worktree', 'add', '--detach', '--', path, `origin/${base}`]);
+    return path;
+  }
+
+  /**
+   * Starts a session that has been claimed on the board. If it can't start, `giveBack` returns the claim, so the
+   * next look tries again. Returns whether it started.
+   */
+  async function launch(name: string, sessionLabel: string, prompt: string, cwd: string, env: NodeJS.ProcessEnv, logPath: string, giveBack: () => Promise<unknown>): Promise<boolean> {
+    let session: Session;
+    try {
+      session = deps.spawn(config.claude, ['--name', sessionLabel, '-p', prompt, ...config.claudeArgs], { cwd, env, logPath });
+      await session.spawned;
+    } catch (e) {
+      const why = `Couldn't start a session (${message(e)}).`;
+      try {
+        await giveBack();
+        warn(name, `${why} Gave it back on the board, so the next look tries again.`);
+      } catch (u) {
+        warn(name, `${why} And couldn't give it back on the board: ${message(u)} The next look hands it back to ${OWNER_NAME}.`);
+      }
+      return false;
+    }
+    planned++;
+    say(name, `started a session (process ${session.pid ?? 'unknown'}) in ${cwd}; its output goes to ${logPath}.`);
+    void session.exited.then((code) => say(name, `the session finished (exit code ${code ?? 'unknown'}).`));
+    return true;
+  }
+
+  /** Something on the backlog went wrong: it goes back to the owner with what it was. */
+  async function backlogFailed(name: string, path: '/api/proposal-failed' | '/api/pickup-failed', id: number, failure: string): Promise<void> {
+    if (dryRun) {
+      sayOnceAbout(`${name} failed`, name, `would hand it back to ${OWNER_NAME}: ${failure}`);
+      return;
+    }
+    try {
+      await boardCall(deps.board, 'POST', path, { id, failure });
+      warn(name, `handed back to ${OWNER_NAME}: ${failure}`);
+    } catch (e) {
+      warn(name, `${failure} And couldn't say so on the board (${message(e)}); will try again at the next look.`);
+    }
+  }
+
+  /** Sessions that ended without doing what they were started for go back to the owner. */
+  async function backlogOrphans(proposals: Proposal[], pickups: Pickup[], live: Map<string, Running>): Promise<void> {
+    for (const p of proposals.filter(isUnderWay)) {
+      if (!repoConfig(p.repo)) continue;
+      const running = live.has(backlogKey(p.repo));
+      if (p.startedAt !== null && p.writtenAt === null && !running) {
+        await backlogFailed(p.repo, '/api/proposal-failed', p.id, `The session that looks through the backlog ended without writing a list. ${backlogLogHint(p.repo)}`);
+      } else if (p.noteStartedAt !== null && !running) {
+        await backlogFailed(p.repo, '/api/proposal-failed', p.id, `The session for your note ended without saying it was done. ${backlogLogHint(p.repo)}`);
+      } else if (p.carriedAt !== null && (p.note ?? '') === '') {
+        // Answers are carried out within one look, so taken answers still open at the next look were cut short.
+        await backlogFailed(p.repo, '/api/proposal-failed', p.id, 'The Mac service stopped while carrying out your answers; some may not be done. Check the issues on GitHub.');
+      }
+    }
+    for (const u of pickups) {
+      if (!repoConfig(u.repo) || u.startedAt === null || u.failedAt !== null || u.droppedAt !== null || live.has(itemKey(u.repo, u.issue))) continue;
+      const ref = refIn(u.repo, u.issue);
+      await backlogFailed(refString(ref), '/api/pickup-failed', u.id, `The session ended without writing a first status. ${logHint(ref)}`);
+    }
+  }
+
+  /** Carries out the owner's answers to a proposal: labels and pick-ups, and closes. Needs no session. */
+  async function carryOut(p: Proposal): Promise<void> {
+    const items = p.items ?? [];
+    if (dryRun) {
+      sayOnceAbout(`${p.repo} carry`, p.repo, `would carry out the answers: ${items.map((i) => `#${i.issue} ${p.answers?.[String(i.issue)]}`).join(', ') || 'nothing to do'}${p.note ? ', then start a session for the note' : ''}.`);
+      return;
+    }
+    try {
+      await boardCall(deps.board, 'POST', '/api/proposal-carry', { id: p.id });
+    } catch (e) {
+      if (e instanceof Refused) return;
+      throw e;
+    }
+    const problems: string[] = [];
+    const done: string[] = [];
+    for (const item of items) {
+      const choice = p.answers?.[String(item.issue)];
+      const ref = refIn(p.repo, item.issue);
+      try {
+        if (choice === PICK_UP) {
+          await pickUp(gh, deps.board, ref, p.id);
+          done.push(`picked up #${item.issue}`);
+        } else if (choice === CLOSE) {
+          await gh(['issue', 'close', String(item.issue), '-R', p.repo, '--comment', closeComment(item.reason)]);
+          done.push(`closed #${item.issue}`);
+        }
+      } catch (e) {
+        problems.push(`Couldn't ${choice} #${item.issue}: ${ghWhy(e)}`);
+      }
+    }
+    say(p.repo, `carried out the answers to the proposal: ${done.join(', ') || 'nothing to do'}.`);
+    if (problems.length > 0) {
+      await backlogFailed(p.repo, '/api/proposal-failed', p.id, `${problems.join(' ')}${p.note ? ' Your note was not acted on.' : ''}`);
+    } else if (!p.note) {
+      await boardCall(deps.board, 'POST', '/api/proposal-done', { id: p.id });
+    }
+  }
+
+  async function startNoteSession(repo: RepoConfig, p: Proposal): Promise<void> {
+    const env = await sessionEnv(repo, p.repo);
+    if (!env) return;
+    const cwd = await backlogWorktree(repo);
+    const logPath = logPathFor(`${p.repo.replace('/', '-')}-backlog`);
+    if (dryRun) {
+      planned++;
+      say(p.repo, `would start a session for the note to the proposal, in ${cwd}, output to ${logPath}; prompt:\n${indent(notePrompt(p, cwd))}`);
+      return;
+    }
+    deps.files.mkdir(config.logDir);
+    await refuseOwner(gh, ownerAdvice);
+    const { proposal } = await boardCall<{ proposal: Proposal }>(deps.board, 'POST', '/api/proposal-note-started', { id: p.id });
+    await launch(p.repo, backlogKey(p.repo), notePrompt(proposal, cwd), cwd, env, logPath, () => boardCall(deps.board, 'POST', '/api/proposal-note-unstarted', { id: p.id }));
+  }
+
+  async function startProposalSession(repo: RepoConfig, p: Proposal): Promise<void> {
+    const env = await sessionEnv(repo, p.repo);
+    if (!env) return;
+    const cwd = await backlogWorktree(repo);
+    const logPath = logPathFor(`${p.repo.replace('/', '-')}-backlog`);
+    if (dryRun) {
+      planned++;
+      say(p.repo, `would claim the proposal and start a session to read the backlog, in ${cwd}, output to ${logPath}.`);
+      return;
+    }
+    deps.files.mkdir(config.logDir);
+    await refuseOwner(gh, ownerAdvice);
+    const { skip } = await boardCall<{ proposal: Proposal; skip: Skip[] }>(deps.board, 'POST', '/api/proposal-claim', { id: p.id });
+    await launch(p.repo, backlogKey(p.repo), proposalPrompt(p.repo, cwd, skip), cwd, env, logPath, () => boardCall(deps.board, 'POST', '/api/proposal-unclaim', { id: p.id }));
+  }
+
+  async function startPickupSession(repo: RepoConfig, u: Pickup, reason: string | null): Promise<void> {
+    const ref = refIn(u.repo, u.issue);
+    const name = refString(ref);
+    const env = await sessionEnv(repo, name);
+    if (!env) return;
+    const cwd = await worktreeFor(repo, ref, false, `issue-${u.issue}`);
+    const logPath = logPathFor(`${ref.owner}-${ref.repo}-${ref.n}`);
+    const prompt = pickupPrompt(u.repo, u.issue, cwd, reason);
+    if (dryRun) {
+      planned++;
+      say(name, `would claim the pick-up and start a session in ${cwd}, output to ${logPath}; prompt:\n${indent(prompt)}`);
+      return;
+    }
+    deps.files.mkdir(config.logDir);
+    await refuseOwner(gh, ownerAdvice);
+    await boardCall(deps.board, 'POST', '/api/pickup-claim', { id: u.id });
+    await launch(name, pickupSessionName(u.repo, u.issue), prompt, cwd, env, logPath, () => boardCall(deps.board, 'POST', '/api/pickup-unclaim', { id: u.id }));
+  }
+
+  /**
+   * One look at the backlog: hands back what ended badly, takes labels off dropped pick-ups, carries out answers,
+   * and then, while sessions are free, starts the sessions for notes, for proposals and for pick-ups, in that order.
+   * Answers to work already had their turn at the free sessions.
+   */
+  async function serveBacklog(live: Map<string, Running>): Promise<void> {
+    const { proposals, pickups } = await boardCall<{ proposals: Proposal[]; pickups: Pickup[] }>(deps.board, 'GET', '/api/backlog-work');
+    await backlogOrphans(proposals, pickups, live);
+    const served = (repo: string) => repoConfig(repo) !== undefined;
+
+    for (const u of pickups.filter((x) => x.droppedAt !== null && served(x.repo))) {
+      const ref = refIn(u.repo, u.issue);
+      if (dryRun) {
+        sayOnceAbout(`${refString(ref)} drop`, refString(ref), `would take the ${LABEL_IN_PROGRESS} label off; it was dropped.`);
+        continue;
+      }
+      try {
+        await gh(['issue', 'edit', String(u.issue), '-R', u.repo, '--remove-label', LABEL_IN_PROGRESS]);
+        await boardCall(deps.board, 'POST', '/api/pickup-done', { id: u.id });
+        say(refString(ref), `dropped: took the ${LABEL_IN_PROGRESS} label off.`);
+      } catch (e) {
+        warn(refString(ref), `${failure(e, `take the ${LABEL_IN_PROGRESS} label off`)}; will try again at the next look.`);
+      }
+    }
+
+    for (const p of proposals.filter((x) => isUnderWay(x) && x.answeredAt !== null && x.carriedAt === null && served(x.repo))) {
+      try {
+        await carryOut(p);
+      } catch (e) {
+        warn(p.repo, failure(e, 'carry out the answers to the proposal'));
+      }
+    }
+    // Carrying out may have finished or failed some, so the sessions are chosen from a fresh list.
+    const fresh = dryRun ? { proposals, pickups } : await boardCall<{ proposals: Proposal[]; pickups: Pickup[] }>(deps.board, 'GET', '/api/backlog-work');
+
+    type Start = { what: string; go: () => Promise<void> };
+    const starts: Start[] = [];
+    for (const p of fresh.proposals.filter((x) => isUnderWay(x) && x.carriedAt !== null && (x.note ?? '') !== '' && x.noteStartedAt === null)) {
+      const repo = repoConfig(p.repo);
+      if (repo && !live.has(backlogKey(p.repo))) starts.push({ what: `${p.repo}: a session for the note`, go: () => startNoteSession(repo, p) });
+    }
+    for (const p of fresh.proposals.filter((x) => isUnderWay(x) && x.startedAt === null)) {
+      const repo = repoConfig(p.repo);
+      if (repo && !live.has(backlogKey(p.repo))) starts.push({ what: `${p.repo}: a session to read the backlog`, go: () => startProposalSession(repo, p) });
+    }
+    for (const u of fresh.pickups.filter((x) => x.startedAt === null && x.failedAt === null && x.droppedAt === null)) {
+      const repo = repoConfig(u.repo);
+      const reason = fresh.proposals.find((p) => p.id === u.proposalId)?.items?.find((i) => i.issue === u.issue)?.reason
+        ?? proposals.find((p) => p.id === u.proposalId)?.items?.find((i) => i.issue === u.issue)?.reason ?? null;
+      if (repo && !live.has(itemKey(u.repo, u.issue))) starts.push({ what: `${itemKey(u.repo, u.issue)}: a session for the pick-up`, go: () => startPickupSession(repo, u, reason) });
+    }
+    const waiting: string[] = [];
+    for (const s of starts) {
+      if (!slotFree(live)) {
+        waiting.push(s.what);
+        continue;
+      }
+      try {
+        await s.go();
+      } catch (e) {
+        warn(s.what.split(':')[0]!, failure(e, 'start a session'));
+      }
+    }
+    if (waiting.length > 0) sayOnceAbout('backlog', 'backlog', `${config.maxSessions} sessions are running; waiting for one to finish before starting ${waiting.join('; ')}.`);
+    else backlogSaid.delete('backlog');
+  }
+
+  /** Tells the board how many sessions are running and which repos this service serves, for the page's Backlog. */
+  async function reportLook(live: Map<string, Running>): Promise<void> {
+    if (dryRun) return;
+    await boardCall(deps.board, 'POST', '/api/service-look', { running: live.size + planned, max: config.maxSessions, repos: repos.map((r) => `${r.owner}/${r.repo}`) });
+  }
+
   // A repo it can't serve is logged once and left out; the others carry on.
   const repos: RepoConfig[] = [];
   for (const r of config.repos) {
@@ -565,6 +849,8 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         // A session seen running last time whose claim is no longer listed ended after a new status moved the version on.
         const claimed = new Set(claims.flatMap((c) => [c.record.pr, c.record.issue].filter((n) => n !== null).map((n) => itemKey(c.record.repo, n))));
         for (const name of previous ?? []) {
+          // A backlog session's end is dealt with by the look at the backlog.
+          if (name.endsWith(' backlog')) continue;
           if (!live.has(name) && !claimed.has(name)) say(name, 'the session ended after a new status was written, or the item closed; nothing to do.');
         }
       } catch (e) {
@@ -578,6 +864,18 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
       } catch (e) {
         failed = true;
         err(lookFailure(e, 'ask the board for answers nobody claimed'));
+      }
+      try {
+        await serveBacklog(live);
+      } catch (e) {
+        failed = true;
+        err(lookFailure(e, "read the board's backlog"));
+      }
+      try {
+        await reportLook(live);
+      } catch (e) {
+        // The page then says the service's look is out of date; nothing else depends on it.
+        err(lookFailure(e, 'tell the board how many sessions are running'));
       }
     }
     if (once) {

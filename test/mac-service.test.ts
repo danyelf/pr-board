@@ -5,6 +5,7 @@ import type { Gh } from '../cli/gh.ts';
 import { loadConfig, main, runningSessions, type ServiceDeps, type SpawnOptions } from '../cli/mac-service.ts';
 import { GAVE_UP_ASK, SERVICE_WORKING_ASK, WORKING_ASK } from '../src/shared/names.ts';
 import type { AnswerRow, State, WorkRecord } from '../src/shared/work.ts';
+import type { Pickup, Proposal, Skip } from '../src/shared/backlog.ts';
 
 const HOME = '/home/sam';
 const CONFIG_PATH = `${HOME}/.pr-board/service.json`;
@@ -19,6 +20,17 @@ interface Item { branch: string; headRepo: string }
 interface Started { pid: number; cmd: string; args: string[]; opts: SpawnOptions; startedAt: number; alive: boolean; finish: (code: number) => void }
 interface Sent { method: string; path: string; body: Record<string, unknown> | undefined }
 type Found = { record: WorkRecord; answers: AnswerRow[] };
+
+function proposalRow(over: Partial<Proposal> & Pick<Proposal, 'id' | 'repo'>): Proposal {
+  return {
+    askedAt: '2026-11-08T10:00:00.000Z', startedAt: null, writtenAt: null, items: null, answeredAt: null, answers: null, note: null,
+    carriedAt: null, noteStartedAt: null, doneAt: null, failedAt: null, failure: null, ...over,
+  };
+}
+
+function pickupRow(over: Partial<Pickup> & Pick<Pickup, 'id' | 'repo' | 'issue'>): Pickup {
+  return { proposalId: null, askedAt: '2026-11-08T10:00:00.000Z', startedAt: null, doneAt: null, failedAt: null, failure: null, droppedAt: null, ...over };
+}
 
 /** ps's elapsed time for ms: mm:ss, hh:mm:ss or d-hh:mm:ss. */
 function etime(ms: number): string {
@@ -44,6 +56,11 @@ class Board {
   /** Answers a session's watcher claims just before the service does. */
   lostRace = new Set<number>();
   nextId = 100;
+  proposals: Proposal[] = [];
+  pickups: Pickup[] = [];
+  /** What a proposal claim tells the session to leave out. */
+  skip: Skip[] = [];
+  looks: { running: number; max: number; repos: string[] }[] = [];
 
   clock: () => number;
 
@@ -154,6 +171,48 @@ class Board {
       return answer({});
     }
     if (method === 'GET' && url.pathname === '/api/service-claims') return reply(200, this.claimsByService());
+    if (method === 'GET' && url.pathname === '/api/backlog-work') {
+      return reply(200, { proposals: structuredClone(this.proposals.filter((p) => p.doneAt === null)), pickups: structuredClone(this.pickups.filter((u) => u.doneAt === null)) });
+    }
+    if (method === 'POST' && url.pathname === '/api/service-look') {
+      this.looks.push(body as never);
+      return reply(200, {});
+    }
+    const now = new Date(this.clock()).toISOString();
+    const proposal = () => this.proposals.find((p) => p.id === body!.id) ?? this.proposals.find((p) => p.repo === body!.repo && p.doneAt === null && p.failedAt === null);
+    const pickup = () => this.pickups.find((u) => u.id === body!.id)!;
+    const refuse = (why: string) => reply(409, { error: why });
+    if (method === 'POST' && url.pathname === '/api/proposal-claim') {
+      const p = proposal()!;
+      if (p.startedAt !== null) return refuse('taken');
+      p.startedAt = now;
+      return answer({ proposal: structuredClone(p), skip: this.skip });
+    }
+    if (method === 'POST' && url.pathname === '/api/proposal-unclaim') { proposal()!.startedAt = null; return answer({}); }
+    if (method === 'POST' && url.pathname === '/api/proposal-carry') {
+      const p = proposal()!;
+      if (p.carriedAt !== null) return refuse('taken');
+      p.carriedAt = now;
+      return answer({ proposal: structuredClone(p) });
+    }
+    if (method === 'POST' && url.pathname === '/api/proposal-note-started') { const p = proposal()!; p.noteStartedAt = now; return answer({ proposal: structuredClone(p) }); }
+    if (method === 'POST' && url.pathname === '/api/proposal-note-unstarted') { proposal()!.noteStartedAt = null; return answer({}); }
+    if (method === 'POST' && url.pathname === '/api/proposal-done') { proposal()!.doneAt = now; return answer({}); }
+    if (method === 'POST' && url.pathname === '/api/proposal-failed') { const p = proposal()!; p.failedAt = now; p.failure = body!.failure as string; return answer({}); }
+    if (method === 'POST' && url.pathname === '/api/pickup-add') {
+      if (this.pickups.some((u) => u.repo === body!.repo && u.issue === body!.number && u.doneAt === null)) return refuse('already picked up');
+      this.pickups.push(pickupRow({ id: this.nextId++, repo: body!.repo as string, issue: body!.number as number, proposalId: (body!.proposalId as number | null) ?? null, askedAt: now }));
+      return answer({});
+    }
+    if (method === 'POST' && url.pathname === '/api/pickup-claim') {
+      const u = pickup();
+      if (u.startedAt !== null) return refuse('taken');
+      u.startedAt = now;
+      return answer({ pickup: structuredClone(u) });
+    }
+    if (method === 'POST' && url.pathname === '/api/pickup-unclaim') { pickup().startedAt = null; return answer({}); }
+    if (method === 'POST' && url.pathname === '/api/pickup-failed') { const u = pickup(); u.failedAt = now; u.failure = body!.failure as string; return answer({}); }
+    if (method === 'POST' && url.pathname === '/api/pickup-done') { pickup().doneAt = now; return answer({}); }
     if (method === 'GET' && url.pathname === '/api/work') {
       const r = this.find(url.searchParams.get('repo')!, Number(url.searchParams.get('number')));
       if (!r) return reply(404, { error: 'not open on the board' });
@@ -187,6 +246,8 @@ class World {
   /** Worktree paths git lists as prunable (their folder is gone). */
   prunable = new Set<string>();
   ghCalls: { line: string; token: string | undefined }[] = [];
+  /** gh calls containing any of these fail, as GitHub refusing them. */
+  ghRefuses: string[] = [];
   gitCalls: string[] = [];
   /** Every git call and board request, in order. */
   events: string[] = [];
@@ -257,6 +318,10 @@ class World {
       return `${it.headRepo}\t${it.branch}\n`;
     }
     if (/^api repos\/[^/]+\/[^/]+ -q \.default_branch$/.test(line)) return 'main\n';
+    if (/^issue (edit|close) \d+ -R /.test(line)) {
+      if (this.ghRefuses.some((r) => line.includes(r))) throw new Error(`gh ${line} failed: HTTP 403`);
+      return '';
+    }
     throw new Error(`unexpected gh call: ${line}`);
   };
 
@@ -275,6 +340,7 @@ class World {
         .map(([b, p]) => `worktree ${p}\nHEAD 0123abcd\nbranch refs/heads/${b}\n${this.prunable.has(p) ? 'prunable gitdir file points to non-existent location\n' : ''}`).join('\n');
     }
     if (rest[0] === 'fetch') return '';
+    if (rest[0] === 'checkout' && rest[1] === '--detach') return '';
     if (rest[0] === 'rev-parse') {
       if (this.localBranches.has(rest[rest.length - 1]!.replace('refs/heads/', ''))) return 'abc\n';
       throw new Error('git rev-parse failed: ');
@@ -360,7 +426,7 @@ describe('loadConfig', () => {
     const c = loadConfig(JSON.stringify({ repos: [{ repo: 'acme/x', clone: '~/code/x' }] }), HOME, CONFIG_PATH);
     expect(c).toEqual({
       repos: [{ owner: 'acme', repo: 'x', clone: `${HOME}/code/x` }],
-      graceMs: 5 * MIN, maxSessions: 2, sessionMs: 60 * MIN, pollMs: POLL,
+      graceMs: 5 * MIN, maxSessions: 4, sessionMs: 60 * MIN, pollMs: POLL,
       logDir: `${HOME}/.pr-board/logs`, tokenFile: TOKEN_PATH, claudeTokenFile: null, claude: CLAUDE, claudeArgs: [],
     });
   });
@@ -1079,5 +1145,168 @@ describe('mac-service', () => {
     const r = await run(w, ['--bogus']);
     expect(r.code).toBe(1);
     expect(r.err).toContain('Usage: mac-service');
+  });
+});
+
+describe('mac-service and the backlog', () => {
+  const BACKLOG_DIR = `${HOME}/code/x/.claude/worktrees/backlog`;
+  const written = (over: Partial<Proposal> = {}) => proposalRow({
+    id: 1, repo: 'acme/x', startedAt: '2026-11-08T10:05:00.000Z', writtenAt: '2026-11-08T10:10:00.000Z',
+    items: [
+      { issue: 25, title: 'Stop hook', suggestion: 'pick up', reason: 'small' },
+      { issue: 11, title: 'Fewer requests', suggestion: 'close', reason: 'done by #20' },
+      { issue: 3, title: 'Timeline', suggestion: 'later', reason: 'large' },
+    ],
+    answeredAt: '2026-11-08T10:20:00.000Z', answers: { 25: 'pick up', 11: 'close', 3: 'later' }, note: '', ...over,
+  });
+
+  it('tells the board at each look how many sessions run, its limit and the repos it serves', async () => {
+    const w = new World();
+    w.config();
+    await run(w, ['--once']);
+    expect(w.board.looks).toEqual([{ running: 0, max: 4, repos: ['acme/x', 'acme/y'] }]);
+  });
+
+  it('starts a session that reads the backlog in a checkout of the default branch, telling it what to leave out', async () => {
+    const w = new World();
+    w.config();
+    w.board.proposals.push(proposalRow({ id: 1, repo: 'acme/x' }));
+    w.board.skip = [{ issue: 9, why: 'it is already picked up and waiting for a session' }];
+    const r = await run(w, ['--once']);
+    expect(r.code).toBe(0);
+    expect(w.gitCalls).toContain(`-C ${HOME}/code/x worktree add --detach -- ${BACKLOG_DIR} origin/main`);
+    expect(w.board.proposals[0]!.startedAt).not.toBeNull();
+    const s = w.started[0]!;
+    expect(s.args.slice(0, 3)).toEqual(['--name', 'acme/x backlog', '-p']);
+    expect(s.opts.cwd).toBe(BACKLOG_DIR);
+    const prompt = s.args[3]!;
+    expect(prompt).toContain('Sam pressed "Find some more" for acme/x');
+    expect(prompt).toContain('#9: it is already picked up and waiting for a session');
+    expect(prompt).toContain('pr-status.ts propose acme/x --item "#25 | pick up | why this one"');
+    expect(prompt).toContain('change nothing on GitHub');
+    expect(w.board.looks).toEqual([{ running: 1, max: 4, repos: ['acme/x', 'acme/y'] }]);
+  });
+
+  it('carries out answers without a session: labels and picks up, closes with the reason, and finishes the proposal', async () => {
+    const w = new World();
+    w.config();
+    w.board.proposals.push(written());
+    await run(w, ['--once']);
+    const lines = w.ghCalls.map((c) => c.line);
+    expect(lines).toContain('issue edit 25 -R acme/x --add-label in-progress');
+    expect(lines).toContain('issue close 11 -R acme/x --comment done by #20\n\nClosed from a backlog proposal on PR Board.');
+    expect(lines.some((l) => l.includes(' 3 '))).toBe(false);
+    expect(w.board.proposals[0]!.doneAt).not.toBeNull();
+    // The picked-up issue gets its own session straight away, as one is free, on design.
+    expect(w.board.pickups).toMatchObject([{ repo: 'acme/x', issue: 25, proposalId: 1 }]);
+    const s = w.started.find((x) => x.args[1] === 'acme/x#25 pick-up')!;
+    expect(s.opts.cwd).toBe(`${HOME}/code/x/.claude/worktrees/issue-25`);
+    expect(s.args[3]).toContain('Sam picked up acme/x#25 from the backlog on PR Board, from a proposal that said: small');
+    expect(s.args[3]).toContain('--gate design --state working');
+    expect(w.ghCalls.every((c) => c.token === 'tok-123')).toBe(true);
+  });
+
+  it('hands the proposal back with what GitHub refused, and leaves the note alone then', async () => {
+    const w = new World();
+    w.config();
+    w.ghRefuses = ['issue close 11'];
+    w.board.proposals.push(written({ note: 'also #19' }));
+    await run(w, ['--once']);
+    expect(w.board.proposals[0]).toMatchObject({ doneAt: null, failure: expect.stringMatching(/^Couldn't close #11: .*HTTP 403.* Your note was not acted on\.$/) });
+    expect(w.started.some((s) => s.args[1] === 'acme/x backlog')).toBe(false);
+  });
+
+  it('with a note, carries out the choices and then starts a session for the note', async () => {
+    const w = new World();
+    w.config();
+    w.board.proposals.push(written({ note: 'also #19, and not #24 yet' }));
+    await run(w, ['--once']);
+    expect(w.board.proposals[0]).toMatchObject({ doneAt: null, noteStartedAt: expect.any(String) });
+    const s = w.started.find((x) => x.args[1] === 'acme/x backlog')!;
+    expect(s.opts.cwd).toBe(BACKLOG_DIR);
+    expect(s.args[3]).toContain('The note: also #19, and not #24 yet');
+    expect(s.args[3]).toContain('#25 Stop hook → pick up');
+    expect(s.args[3]).toContain('pr-status.ts pick-up acme/x#<N>');
+    expect(s.args[3]).toContain('pr-status.ts proposal-done acme/x');
+  });
+
+  it('hands back a proposal, a note or a pick-up whose session ended without doing its part', async () => {
+    const w = new World();
+    w.config();
+    w.board.proposals.push(proposalRow({ id: 1, repo: 'acme/x', startedAt: '2026-11-08T10:05:00.000Z' }));
+    w.board.proposals.push(written({ id: 2, repo: 'acme/y', carriedAt: '2026-11-08T10:21:00.000Z', note: 'n', noteStartedAt: '2026-11-08T10:21:00.000Z' }));
+    w.board.pickups.push(pickupRow({ id: 7, repo: 'acme/x', issue: 25, startedAt: '2026-11-08T10:22:00.000Z' }));
+    const r = await run(w, ['--once']);
+    expect(w.board.proposals[0]!.failure).toMatch(/ended without writing a list\. Its output is the newest acme-x-backlog-\*\.log/);
+    expect(w.board.proposals[1]!.failure).toMatch(/session for your note ended without saying it was done/);
+    expect(w.board.pickups[0]!.failure).toMatch(/ended without writing a first status/);
+    expect(r.err).toContain('acme/x#25: handed back to Sam');
+    expect(w.started).toEqual([]);
+  });
+
+  it('leaves alone a backlog session that is still running', async () => {
+    const w = new World();
+    w.config();
+    w.board.proposals.push(proposalRow({ id: 1, repo: 'acme/x', startedAt: '2026-11-08T10:05:00.000Z' }));
+    w.earlier.push({ pid: 900, name: 'acme/x backlog', startedAt: w.now - 3 * MIN });
+    await run(w, ['--once']);
+    expect(w.board.proposals[0]!.failedAt).toBeNull();
+  });
+
+  it('lets answers to work go first, then notes, proposals and pick-ups, while sessions are free', async () => {
+    const w = new World();
+    w.config({ maxSessions: 2 });
+    w.item('acme/x#5');
+    w.worktree(`${HOME}/code/x`, 'feature-a', `${HOME}/code/x/.claude/worktrees/feature-a`);
+    w.answer('acme/x#5', 6);
+    w.board.proposals.push(proposalRow({ id: 1, repo: 'acme/y' }));
+    w.board.pickups.push(pickupRow({ id: 7, repo: 'acme/x', issue: 25 }));
+    const r = await run(w, ['--once']);
+    expect(w.started.map((s) => s.args[1])).toEqual(['acme/x#5 answers', 'acme/y backlog']);
+    expect(w.board.pickups[0]!.startedAt).toBeNull();
+    expect(r.out).toContain('waiting for one to finish before starting acme/x#25: a session for the pick-up');
+  });
+
+  it('takes the label off a dropped pick-up and then finishes it', async () => {
+    const w = new World();
+    w.config();
+    w.board.pickups.push(pickupRow({ id: 7, repo: 'acme/x', issue: 25, droppedAt: '2026-11-08T10:22:00.000Z' }));
+    await run(w, ['--once']);
+    expect(w.ghCalls.map((c) => c.line)).toContain('issue edit 25 -R acme/x --remove-label in-progress');
+    expect(w.board.pickups[0]!.doneAt).not.toBeNull();
+    expect(w.started).toEqual([]);
+  });
+
+  it('gives a proposal back when its session can’t start', async () => {
+    const w = new World();
+    w.config();
+    w.spawnError = new Error('ENOENT');
+    w.board.proposals.push(proposalRow({ id: 1, repo: 'acme/x' }));
+    const r = await run(w, ['--once']);
+    expect(w.board.proposals[0]!.startedAt).toBeNull();
+    expect(r.err).toContain('acme/x: Couldn\'t start a session (ENOENT). Gave it back on the board');
+  });
+
+  it('with --dry-run, says what it would do with the backlog and changes nothing', async () => {
+    const w = new World();
+    w.config();
+    w.board.proposals.push(written());
+    w.board.proposals.push(proposalRow({ id: 2, repo: 'acme/y' }));
+    const r = await run(w, ['--once', '--dry-run']);
+    expect(r.out).toContain('acme/x: would carry out the answers: #25 pick up, #11 close, #3 later.');
+    expect(r.out).toContain('acme/y: would claim the proposal and start a session');
+    expect(w.board.posts().map((s) => s.path)).toEqual(['/api/unclaimed']);
+    expect(w.ghCalls.some((c) => c.line.startsWith('issue '))).toBe(false);
+  });
+});
+
+describe('runningSessions and the backlog', () => {
+  it('knows pick-up sessions by their issue and backlog sessions by their repo', () => {
+    const ps = [
+      `  101 05:07 ${CLAUDE} --name acme/x#25 pick-up -p Sam picked up`,
+      `  102 01:00 ${CLAUDE} --name acme/x backlog -p Sam pressed`,
+      `  103 01:00 ${CLAUDE} --name acme backlog -p nope`,
+    ].join('\n');
+    expect([...runningSessions(ps, CLAUDE).keys()]).toEqual(['acme/x#25', 'acme/x backlog']);
   });
 });
