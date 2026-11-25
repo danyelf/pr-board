@@ -1,7 +1,7 @@
 // The board's interface: the page (the owner) reads the board and sends answers; Claude's tools on the Mac
 // (the service token) write statuses and handle claims. Everything is JSON.
 import type { RepoIssues } from '../shared/backlog.ts';
-import { buildBacklog, type BacklogView } from '../shared/backlog-view.ts';
+import { buildBacklog, type BoardPage } from '../shared/backlog-view.ts';
 import type { Facts } from '../shared/facts.ts';
 import { buildView, type BoardView, type CardView } from '../shared/view.ts';
 import { GATES, STATES, Refused, itemKey, recordNumber, type AnswerInput, type SetInput, type StatusInput, type WorkRecord } from '../shared/work.ts';
@@ -12,8 +12,7 @@ import { endPickup, lastLook, openPickups, openProposals } from './backlog-store
 import type { setLabels } from './github.ts';
 import { addAnswer, answersFor, claim, confirm, endWork, findWork, giveUp, importWork, openWork, serviceClaims, setStatus, unclaim, unclaimedAnswers, unclaimedOlderThan, type ItemRef } from './store.ts';
 
-/** What the page reads: the board, and the backlog at its foot. */
-export type BoardPage = BoardView & { backlog: BacklogView };
+export type { BoardPage };
 
 export interface FactsResult {
   facts: Facts[];

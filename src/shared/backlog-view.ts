@@ -3,6 +3,7 @@
 import { PROPOSAL_CHOICES, type Pickup, type Proposal, type RepoIssues, type ServiceLook } from './backlog.ts';
 import type { Facts } from './facts.ts';
 import { LABEL_IN_PROGRESS } from './names.ts';
+import type { BoardView } from './view.ts';
 import { itemKey, type WorkRecord } from './work.ts';
 
 /** After this long without a look, the page says the Mac service seems to have stopped. */
@@ -65,6 +66,9 @@ export interface PickupCard {
   canRetry: boolean;
   canDrop: boolean;
 }
+
+/** What the page reads: the board, and the backlog at its foot. */
+export type BoardPage = BoardView & { backlog: BacklogView };
 
 export interface BacklogView {
   /** The Mac service's sessions at its last look; null when it has never reported. */

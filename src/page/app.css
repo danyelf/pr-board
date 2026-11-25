@@ -124,3 +124,19 @@ section h2 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 18p
 .note-row textarea::placeholder { color: var(--muted); }
 .note-row button { padding: 5px 14px; font-size: 14px; border-radius: 6px; border: 1px solid var(--text); background: var(--text); color: var(--bg); }
 .note-row button:disabled { opacity: 0.6; cursor: default; }
+
+/* The backlog: a line per repo, the proposal card's questions, and the small buttons on backlog cards. */
+.slots { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+.slots b { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 2px; vertical-align: -1px; background: var(--line); }
+.slots b.f { background: var(--claude); }
+.slots .stale { color: var(--blocked); font-weight: 600; }
+.backlog-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 12px; margin-bottom: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
+.backlog-line .n { color: var(--muted); }
+.backlog-line button { margin-left: auto; }
+.backlog-line .error { flex-basis: 100%; margin: 0; }
+button.small { padding: 3px 10px; font-size: 13px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--text); }
+.actions { display: flex; gap: 8px; margin: 8px 0 0; }
+.proposal-item { margin: 8px 0; }
+.proposal-item .reason { color: var(--muted); font-size: 14px; }
+.proposal-item .question { margin: 2px 0 0; }
+.gave-up-hint { margin: 6px 0; font-size: 14px; }

@@ -1,5 +1,7 @@
 // The page: reads the board, draws it, keeps it current, and sends the owner's answers.
-import type { BoardView, CardView } from '../shared/view.ts';
+import type { BoardPage, PickupCard, ProposalCard } from '../shared/backlog-view.ts';
+import type { CardView } from '../shared/view.ts';
+import { drawBacklog, drawPickup, drawProposal, initialProposalForm, type BacklogHandlers, type ProposalForm } from './backlog.ts';
 import { arrange, clock, drawCard, showChanged, showError, showSending, type CardHandlers } from './draw.ts';
 import { el } from './el.ts';
 import { afterRefusal, formProblem, initialForm, toAnswer, type FormState } from './form.ts';
@@ -19,7 +21,11 @@ const nodes = new Map<string, HTMLElement>();
 const forms = new Map<string, FormState>();
 const sending = new Set<string>();
 
-let board: BoardView | null = null;
+let board: BoardPage | null = null;
+
+/** The backlog's cards as drawn: the JSON each was drawn from, its node, and a proposal's form. */
+const backlogCards = new Map<string, { json: string; node: HTMLElement; form: ProposalForm | null }>();
+const backlogBusy = new Set<string>();
 let lastGood: Date | null = null;
 let refreshing = false;
 let view: View = readView();
@@ -121,6 +127,74 @@ async function send(key: string): Promise<void> {
   showError(node, `The board didn't take the answer (${res.status}${body?.error ? `: ${body.error}` : ''}). What you wrote is still here; try again.`);
 }
 
+/** Posts one backlog action; on success the board is read again, on failure the error is shown on `node`. */
+async function backlogPost(key: string, node: HTMLElement | undefined, path: string, body: unknown): Promise<void> {
+  if (backlogBusy.has(key)) return;
+  backlogBusy.add(key);
+  const showProblem = (text: string) => {
+    const p = node?.querySelector<HTMLElement>('[data-role="error"]');
+    if (p) {
+      p.textContent = text;
+      p.hidden = false;
+    }
+  };
+  try {
+    const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const reply = (await res.json().catch(() => null)) as { error?: string } | null;
+    if (!res.ok) {
+      showProblem(reply?.error ?? `The board didn't take it (${res.status}).`);
+      return;
+    }
+    // The answer is sent, so the form no longer needs keeping.
+    const kept = backlogCards.get(key);
+    if (kept?.form) kept.form.touched = false;
+  } catch {
+    showProblem("Couldn't reach the board; try again.");
+    return;
+  } finally {
+    backlogBusy.delete(key);
+  }
+  await refresh();
+}
+
+const backlogHandlers: BacklogHandlers = {
+  findMore: (repo) => void backlogPost(`find-more ${repo}`, backlogBody.querySelector<HTMLElement>(`[data-repo="${CSS.escape(repo)}"]`) ?? undefined, '/api/find-more', { repo }),
+  answer: (key) => {
+    const kept = backlogCards.get(key);
+    const c = board?.backlog.proposals.find((p) => p.key === key);
+    if (!kept?.form || !c) return;
+    void backlogPost(key, kept.node, '/api/proposal-answer', { id: c.id, answers: kept.form.answers, note: kept.form.note });
+  },
+  act: (key, path, id) => void backlogPost(key, backlogCards.get(key)?.node, path, { id }),
+};
+
+/** Draws the backlog's cards afresh where they changed, keeping a proposal the owner has started answering. */
+function drawBacklogCards(next: BoardPage): void {
+  const now = new Date();
+  const seen = new Set<string>();
+  const place = (c: ProposalCard | PickupCard, draw: (form: ProposalForm | null) => HTMLElement, form: (old: ProposalForm | null) => ProposalForm | null) => {
+    seen.add(c.key);
+    const json = JSON.stringify(c);
+    const kept = backlogCards.get(c.key);
+    if (kept && (kept.json === json || kept.form?.touched)) return;
+    const f = form(kept?.form ?? null);
+    const node = draw(f);
+    kept?.node.replaceWith(node);
+    backlogCards.set(c.key, { json, node, form: f });
+  };
+  for (const p of next.backlog.proposals) {
+    place(p, (f) => drawProposal(doc, p, f ?? initialProposalForm(p), backlogHandlers, now), () => (p.answerable ? initialProposalForm(p) : null));
+  }
+  for (const u of next.backlog.pickups) place(u, () => drawPickup(doc, u, backlogHandlers, now), () => null);
+  for (const [key, kept] of [...backlogCards]) {
+    if (!seen.has(key)) {
+      kept.node.remove();
+      backlogCards.delete(key);
+    }
+  }
+  backlogBody.replaceChildren(...drawBacklog(doc, next.backlog, backlogHandlers, now));
+}
+
 // The page's fixed parts.
 const root = doc.getElementById('board')!;
 const statusLine = el(doc, 'p', { class: 'status', role: 'status' });
@@ -134,6 +208,9 @@ const sections: Record<'waiting' | 'onClaude' | 'quiet' | 'everything', { wrap: 
   // The switch's "All" already names this list, so it has no heading.
   everything: section(null),
 };
+
+const backlogBody = el(doc, 'div', { class: 'backlog' });
+const backlogWrap = el(doc, 'section', { hidden: '' }, el(doc, 'h2', {}, 'Backlog'), backlogBody);
 
 function section(title: string | null): { wrap: HTMLElement; list: HTMLElement; count: HTMLElement | null } {
   const count = title !== null ? el(doc, 'span', { class: 'count' }) : null;
@@ -167,6 +244,7 @@ root.replaceChildren(
   sections.onClaude.wrap,
   sections.quiet.wrap,
   sections.everything.wrap,
+  backlogWrap,
 );
 setViewButtons();
 
@@ -179,12 +257,18 @@ function layout(): void {
       s.wrap.hidden = true;
       continue;
     }
-    const cards = board[name];
+    const cardNodes = board[name].map((c) => nodes.get(c.key)).filter((n): n is HTMLElement => n !== undefined);
+    // The backlog's cards follow the work's in the two turn sections.
+    const extra = name === 'waiting' || name === 'onClaude'
+      ? [...board.backlog.proposals, ...board.backlog.pickups].filter((c) => c.section === name).map((c) => backlogCards.get(c.key)?.node).filter((n): n is HTMLElement => n !== undefined)
+      : [];
+    const all = [...cardNodes, ...extra];
     // An empty section is left out.
-    s.wrap.hidden = cards.length === 0;
-    arrange(s.list, cards.map((c) => nodes.get(c.key)).filter((n): n is HTMLElement => n !== undefined));
-    if (s.count) s.count.textContent = ` · ${cards.length}`;
+    s.wrap.hidden = all.length === 0;
+    arrange(s.list, all);
+    if (s.count) s.count.textContent = ` · ${all.length}`;
   }
+  backlogWrap.hidden = view !== 'turn';
   // Nodes of cards that are in no shown section are dropped from the page but kept, so a view switch brings them back as they were.
   for (const name of Object.keys(sections) as (keyof typeof sections)[]) {
     if (!shown.includes(name)) sections[name].list.replaceChildren();
@@ -208,7 +292,7 @@ async function refresh(): Promise<void> {
   try {
     const res = await fetch('/api/board', { headers: { Accept: 'application/json' } });
     if (!res.ok) throw new Error(String(res.status));
-    const next = (await res.json()) as BoardView;
+    const next = (await res.json()) as BoardPage;
     const p = plan(drawn, next, touched());
     const byKey = new Map(next.everything.map((c) => [c.key, c]));
     for (const key of [...p.add, ...p.redraw]) replaceCard(byKey.get(key)!);
@@ -220,6 +304,7 @@ async function refresh(): Promise<void> {
       nodes.get(key)?.remove();
       for (const m of [nodes, drawn, newer, forms]) m.delete(key);
     }
+    drawBacklogCards(next);
     board = next;
     lastGood = new Date();
     showErrors(next.errors);
