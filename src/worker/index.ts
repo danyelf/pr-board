@@ -2,7 +2,7 @@ import type { JWTVerifyGetKey } from 'jose';
 import type { Facts } from '../shared/facts.ts';
 import { caller, type Env } from './access.ts';
 import { handleApi, type ApiDeps, type FactsResult } from './api.ts';
-import { fetchFacts, setLabels } from './github.ts';
+import { fetchBacklogIssues, fetchFacts, setLabels } from './github.ts';
 import type { ItemRef } from './store.ts';
 import { message } from '../shared/helpers.ts';
 import { recordNumber, type WorkRecord } from '../shared/work.ts';
@@ -98,8 +98,35 @@ export function makeFactsLoader(deps: FactsDeps): ApiDeps['facts'] {
   };
 }
 
+/** Reads each repo's open issues for the backlog, kept for CACHE_SECONDS like the facts. */
+export function makeBacklogLoader(deps: { fetchBacklogIssues: typeof fetchBacklogIssues; cache?: Cache; now: () => Date }): ApiDeps['backlogIssues'] {
+  return async (env, repos) => {
+    if (repos.length === 0) return { repos: [], errors: [] };
+    const slot = Math.floor(deps.now().getTime() / (CACHE_SECONDS * 1000));
+    const key = new Request(`https://pr-board.internal/backlog?slot=${slot}&repos=${encodeURIComponent([...repos].sort().join(' '))}`);
+    const hit = await deps.cache?.match(key);
+    if (hit) {
+      try {
+        const cached = (await hit.json()) as { repos?: unknown; errors?: unknown };
+        if (Array.isArray(cached.repos) && Array.isArray(cached.errors)) return cached as Awaited<ReturnType<ApiDeps['backlogIssues']>>;
+      } catch {
+        // An entry we can't read is as good as none; read fresh.
+      }
+    }
+    let result: Awaited<ReturnType<ApiDeps['backlogIssues']>>;
+    try {
+      result = await deps.fetchBacklogIssues(env.GITHUB_TOKEN, repos);
+    } catch (e) {
+      return { repos: [], errors: [`Couldn't read the backlogs from GitHub: ${message(e)}`] };
+    }
+    await deps.cache?.put(key, new Response(JSON.stringify(result), { headers: { 'Cache-Control': `max-age=${CACHE_SECONDS}` } }));
+    return result;
+  };
+}
+
 interface Deps {
   fetchFacts?: typeof fetchFacts;
+  fetchBacklogIssues?: typeof fetchBacklogIssues;
   setLabels?: typeof setLabels;
   cache?: Cache;
   getKey?: JWTVerifyGetKey;
@@ -109,6 +136,7 @@ interface Deps {
 export function makeHandler(deps: Deps = {}): Handler {
   const now = deps.now ?? (() => new Date());
   const loadFacts = makeFactsLoader({ fetchFacts: deps.fetchFacts ?? fetchFacts, cache: deps.cache, now });
+  const loadBacklog = makeBacklogLoader({ fetchBacklogIssues: deps.fetchBacklogIssues ?? fetchBacklogIssues, cache: deps.cache, now });
 
   return {
     async fetch(req, env, ctx) {
@@ -126,6 +154,7 @@ export function makeHandler(deps: Deps = {}): Handler {
           facts: loadFacts,
           setLabels: deps.setLabels ?? setLabels,
           waitUntil: (p) => ctx?.waitUntil(p),
+          backlogIssues: loadBacklog,
         };
         return withHeaders(await handleApi(req, env, who, apiDeps));
       }

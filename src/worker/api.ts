@@ -1,11 +1,19 @@
 // The board's interface: the page (the owner) reads the board and sends answers; Claude's tools on the Mac
 // (the service token) write statuses and handle claims. Everything is JSON.
+import type { RepoIssues } from '../shared/backlog.ts';
+import { buildBacklog, type BacklogView } from '../shared/backlog-view.ts';
 import type { Facts } from '../shared/facts.ts';
 import { buildView, type BoardView, type CardView } from '../shared/view.ts';
 import { GATES, STATES, Refused, itemKey, recordNumber, type AnswerInput, type SetInput, type StatusInput, type WorkRecord } from '../shared/work.ts';
 import type { Caller, Env } from './access.ts';
+import { BadRequest } from './bad-request.ts';
+import { BACKLOG_CLAUDE_GET, BACKLOG_CLAUDE_POST, BACKLOG_OWNER_POST, handleBacklog } from './backlog-api.ts';
+import { endPickup, lastLook, openPickups, openProposals } from './backlog-store.ts';
 import type { setLabels } from './github.ts';
 import { addAnswer, answersFor, claim, confirm, endWork, findWork, giveUp, importWork, openWork, serviceClaims, setStatus, unclaim, unclaimedAnswers, unclaimedOlderThan, type ItemRef } from './store.ts';
+
+/** What the page reads: the board, and the backlog at its foot. */
+export type BoardPage = BoardView & { backlog: BacklogView };
 
 export interface FactsResult {
   facts: Facts[];
@@ -20,11 +28,11 @@ export interface ApiDeps {
   facts: (env: Env, records: WorkRecord[], fresh: boolean, extra: ItemRef[]) => Promise<FactsResult>;
   setLabels: typeof setLabels;
   waitUntil: (p: Promise<unknown>) => void;
+  /** Each repo's open issues, for the backlog's counts; from the cache when it can. */
+  backlogIssues: (env: Env, repos: string[]) => Promise<{ repos: RepoIssues[]; errors: string[] }>;
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
-
-class BadRequest extends Error {}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -92,9 +100,9 @@ function queueLabels(env: Env, deps: ApiDeps, cards: CardView[], facts: Facts[])
  * The board built from every open record and its answers. Without facts given, it reads them for those records,
  * from the cache when it can.
  */
-async function currentView(env: Env, deps: ApiDeps, given?: FactsResult): Promise<{ view: BoardView; records: WorkRecord[]; got: FactsResult }> {
+async function currentView(env: Env, deps: ApiDeps, given?: FactsResult, extra: ItemRef[] = []): Promise<{ view: BoardView; records: WorkRecord[]; got: FactsResult }> {
   const { records, answers } = await openWork(env.DB);
-  const got = given ?? (await deps.facts(env, records, false, []));
+  const got = given ?? (await deps.facts(env, records, false, extra));
   return { view: buildView(records, answers, got.facts, got.errors, deps.now()), records, got };
 }
 
@@ -104,17 +112,27 @@ async function cardFor(env: Env, deps: ApiDeps, ref: ItemRef): Promise<CardView 
   return record ? (view.everything.find((c) => c.key === itemKey(record.repo, recordNumber(record))) ?? null) : null;
 }
 
-async function board(env: Env, deps: ApiDeps): Promise<BoardView> {
-  // The view already leaves out an item GitHub says has closed; its record is ended here too.
-  const { view, records, got } = await currentView(env, deps);
+async function board(env: Env, deps: ApiDeps): Promise<BoardPage> {
+  const now = deps.now().toISOString();
+  let pickups = await openPickups(env.DB);
+  // The picked-up issues are read too, for their titles and to see whether they have closed.
+  const { view, records, got } = await currentView(env, deps, undefined, pickups.map((u) => ({ repo: u.repo, n: u.issue })));
   const byKey = new Map(got.facts.map((f) => [keyOf(f), f]));
   for (const r of records) {
     const f = byKey.get(itemKey(r.repo, recordNumber(r)));
     // Only an item whose facts were read can be said to have closed.
-    if (f && (f.merged || f.closedAt !== null)) await endWork(env.DB, r.id, f.merged ? 'merged' : 'closed', deps.now().toISOString());
+    if (f && (f.merged || f.closedAt !== null)) await endWork(env.DB, r.id, f.merged ? 'merged' : 'closed', now);
   }
+  // A picked-up issue closed on GitHub needs no session any more.
+  const closed = pickups.filter((u) => byKey.get(itemKey(u.repo, u.issue))?.closedAt);
+  for (const u of closed) await endPickup(env.DB, u.id, now);
+  pickups = pickups.filter((u) => !closed.includes(u));
   if (!got.fromCache) queueLabels(env, deps, view.everything, got.facts);
-  return view;
+
+  const look = await lastLook(env.DB);
+  const issues = await deps.backlogIssues(env, look?.repos ?? []);
+  const backlog = buildBacklog(look, await openProposals(env.DB), pickups, records, issues.repos, got.facts, deps.now());
+  return { ...view, errors: [...view.errors, ...issues.errors], backlog };
 }
 
 function answerInput(b: Record<string, unknown>): AnswerInput {
@@ -232,9 +250,10 @@ export async function handleApi(req: Request, env: Env, who: Caller, deps: ApiDe
   const post = req.method === 'POST';
 
   const OWNER_GET = ['/api/board'];
-  const OWNER_POST = ['/api/answer'];
-  const CLAUDE_GET = ['/api/work', '/api/service-claims'];
-  const CLAUDE_POST = ['/api/status', '/api/ok', '/api/unclaimed', '/api/claim', '/api/unclaim', '/api/gave-up', '/api/import'];
+  const OWNER_POST = ['/api/answer', ...BACKLOG_OWNER_POST];
+  const CLAUDE_GET = ['/api/work', '/api/service-claims', ...BACKLOG_CLAUDE_GET];
+  const CLAUDE_POST = ['/api/status', '/api/ok', '/api/unclaimed', '/api/claim', '/api/unclaim', '/api/gave-up', '/api/import', ...BACKLOG_CLAUDE_POST];
+  const BACKLOG = [...BACKLOG_OWNER_POST, ...BACKLOG_CLAUDE_GET, ...BACKLOG_CLAUDE_POST];
   const known = [...OWNER_GET, ...OWNER_POST, ...CLAUDE_GET, ...CLAUDE_POST];
   if (!known.includes(path)) return json({ error: 'Not found' }, 404);
   const isGetRoute = OWNER_GET.includes(path) || CLAUDE_GET.includes(path);
@@ -263,7 +282,8 @@ export async function handleApi(req: Request, env: Env, who: Caller, deps: ApiDe
     }
     if (path === '/api/service-claims') return json(await serviceClaims(env.DB));
 
-    const b = await readBody(req);
+    const b = get ? {} : await readBody(req);
+    if (BACKLOG.includes(path)) return json(await handleBacklog(path, env, deps, b, now));
     switch (path) {
       case '/api/answer': {
         const ref = refOf(b);

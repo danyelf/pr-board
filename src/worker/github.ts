@@ -1,4 +1,5 @@
 import { DAY_MS, REPO_WINDOW_DAYS, WRITTEN_ELSEWHERE } from '../shared/names.ts';
+import type { RepoIssues } from '../shared/backlog.ts';
 import { CHECK_STATES, type Facts } from '../shared/facts.ts';
 import { message, newest } from '../shared/helpers.ts';
 import { itemKey } from '../shared/work.ts';
@@ -280,6 +281,47 @@ ${listed.join('\n')}
     if (e instanceof GitHubRefused) return { facts: [], errors: [e.message] };
     throw e;
   }
+}
+
+const BACKLOG_ISSUES = 100;
+const BACKLOG_LABELS = 20;
+
+/**
+ * Each repo's open issues with their labels, for the backlog's counts. A repo with more open issues than one
+ * list holds comes back marked incomplete; one that can't be read is left out, with a line in the errors.
+ */
+export async function fetchBacklogIssues(
+  token: string, repos: string[], fetchFn: typeof fetch = defaultFetch,
+): Promise<{ repos: RepoIssues[]; errors: string[] }> {
+  const errors: string[] = [];
+  const out: RepoIssues[] = [];
+  if (repos.length === 0) return { repos: out, errors };
+  const graphql = graphqlWith(token, fetchFn);
+  const valid = repos.filter((r) => /^[\w.-]+\/[\w.-]+$/.test(r));
+  for (const bad of repos.filter((r) => !valid.includes(r))) errors.push(`Couldn't read the backlog of ${bad}: not a repo name`);
+  const aliases = valid.map((name, k) => {
+    const [owner, repo] = name.split('/');
+    return `r${k}: repository(owner: "${owner}", name: "${repo}") {
+  issues(states: OPEN, first: ${BACKLOG_ISSUES}, orderBy: {field: CREATED_AT, direction: DESC}) { pageInfo { hasNextPage } nodes { number labels(first: ${BACKLOG_LABELS}) { nodes { name } } } }
+}`;
+  });
+  try {
+    const res = await graphql<Record<string, { issues: Connection<{ number: number; labels: Connection<{ name: string }> | null }> } | null>>(`query {\n${aliases.join('\n')}\n}`);
+    for (const err of res.errors ?? []) errors.push(`Couldn't read a backlog: ${err.message}`);
+    valid.forEach((name, k) => {
+      const data = res.data?.[`r${k}`];
+      if (!data) return;
+      try {
+        const { items, cutOff } = listOf(data.issues, `open issues of ${name}`);
+        out.push({ repo: name, complete: !cutOff, issues: items.map((i) => ({ number: i.number, labels: listOf(i.labels, 'labels').items.map((l) => l.name) })) });
+      } catch (e) {
+        errors.push(`Couldn't read the backlog of ${name}: ${message(e)}`);
+      }
+    });
+  } catch (e) {
+    errors.push(`Couldn't read the backlogs: ${message(e)}`);
+  }
+  return { repos: out, errors };
 }
 
 /**
