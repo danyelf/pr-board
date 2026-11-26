@@ -6,6 +6,9 @@
 
 DELETE FROM log;
 DELETE FROM answer;
+DELETE FROM pickup;
+DELETE FROM proposal;
+DELETE FROM service_look;
 DELETE FROM work;
 
 -- #626 Tools state: prep complete, both earlier gates approved.
@@ -36,3 +39,18 @@ VALUES (564, 'acme/torahmap', NULL, 564, 1, 'design', 'working', 'implementation
   '{}', '{"design":1,"implementation":0,"prep":0}', NULL, 5,
   strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-60 minutes'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-60 minutes'), NULL,
   strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-6000 minutes'));
+
+-- The backlog: the Mac service's last look (3 of 4 sessions running, two repos), a proposal waiting for answers,
+-- a proposal still being looked for, a picked-up issue waiting for a session and one its session gave up on.
+INSERT INTO service_look (id, at, running, max_sessions, repos) VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 3, 4, '["acme/torahmap","acme/notes"]');
+
+INSERT INTO proposal (id, repo, asked_at, started_at, written_at, items)
+VALUES (1, 'acme/torahmap', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 minutes'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-29 minutes'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-20 minutes'),
+  '[{"issue":25,"title":"Stop hook asks for a status on closed items","suggestion":"pick up","reason":"It blocks the end of nearly every session that files an issue; small and well understood."},{"issue":4,"title":"Make the status hook sturdier <b>not bold</b>","suggestion":"pick up","reason":"Same code as #25; doing them one after the other saves reading it twice."},{"issue":3,"title":"Bring the timeline back","suggestion":"later","reason":"Large, and its first step already exists."},{"issue":11,"title":"Read GitHub in fewer requests","suggestion":"close","reason":"The service no longer reads items from GitHub. Close as done."}]');
+
+INSERT INTO proposal (id, repo, asked_at, started_at) VALUES (2, 'acme/notes', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3 minutes'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 minutes'));
+
+INSERT INTO pickup (id, repo, issue, proposal_id, asked_at) VALUES (1, 'acme/torahmap', 40, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes'));
+INSERT INTO pickup (id, repo, issue, proposal_id, asked_at, started_at, failed_at, failure)
+VALUES (2, 'acme/torahmap', 41, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-90 minutes'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-80 minutes'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-15 minutes'),
+  'The session ended without writing a first status. Its output is the newest acme-torahmap-41-*.log in ~/.pr-board/logs.');

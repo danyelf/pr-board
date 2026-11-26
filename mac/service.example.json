@@ -4,7 +4,7 @@
     { "repo": "OWNER/OTHER-REPO", "clone": "~/path/to/OTHER-REPO" }
   ],
   "graceMinutes": 5,
-  "maxSessions": 2,
+  "maxSessions": 4,
   "sessionMinutes": 60,
   "pollSeconds": 60,
   "logDir": "~/.pr-board/logs",

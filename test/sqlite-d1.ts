@@ -1,9 +1,9 @@
 // A stand-in for the part of Cloudflare D1 the store uses, over node's built-in SQLite, so the store can be tested without Cloudflare.
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import type { Db, Stmt } from '../src/worker/store.ts';
 
-const MIGRATION = new URL('../migrations/0001_work.sql', import.meta.url);
+const MIGRATIONS = new URL('../migrations/', import.meta.url);
 
 class SqliteStmt implements Stmt {
   private readonly sqlite: DatabaseSync;
@@ -40,7 +40,7 @@ class SqliteStmt implements Stmt {
 
 export function sqliteDb(): Db {
   const sqlite = new DatabaseSync(':memory:');
-  sqlite.exec(readFileSync(MIGRATION, 'utf8'));
+  for (const file of readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql')).sort()) sqlite.exec(readFileSync(new URL(file, MIGRATIONS), 'utf8'));
   return {
     prepare: (sql) => new SqliteStmt(sqlite, sql),
     // D1 runs a batch as one transaction, and so does this.

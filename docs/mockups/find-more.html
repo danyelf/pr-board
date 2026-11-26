@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  body { margin:0; background:#fff; }
+  .pb { --bg:#fbfaf7; --ink:#1d1d1b; --mute:#6b6a65; --line:#e3e0d8; --wait:#e8a33a; --waitbg:#fdf3e1; --work:#4a7bd0;
+        background:var(--bg); color:var(--ink); font:14px/1.45 -apple-system, system-ui, sans-serif; padding:20px; width:760px; }
+  h3 { margin:0 0 4px; font-size:15px; } .cap { margin:0 0 14px; font-size:12.5px; color:var(--mute); }
+  .sec { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--mute); margin:22px 0 8px; }
+  .card { border:1px solid var(--line); border-left:5px solid var(--wait); background:#fff; border-radius:8px; padding:12px 14px; margin-bottom:10px; }
+  .card.work { border-left-color:var(--work); }
+  .row { display:flex; justify-content:space-between; align-items:baseline; gap:12px; }
+  .num { font-weight:700; margin-right:6px; }
+  .why { font-size:12px; font-weight:600; padding:2px 8px; border-radius:20px; background:var(--waitbg); color:#8a5a10; white-space:nowrap; }
+  .work .why { background:#e3ebf8; color:#2f528f; }
+  .detail { font-size:12.5px; color:#3b3a37; margin-top:8px; }
+  .q { margin:8px 0 0; padding:0; list-style:none; } .q li { margin-bottom:10px; }
+  .q .r { color:var(--mute); font-size:12px; }
+  .choices { display:flex; gap:6px; margin-top:4px; }
+  .btn { font-size:12px; padding:4px 10px; border:1px solid #cfccc3; border-radius:5px; background:#fff; }
+  .btn.on { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .actions { display:flex; gap:6px; margin-top:10px; align-items:center; }
+  .reply { flex:1; font-size:12px; padding:5px 8px; border:1px dashed #cfccc3; border-radius:5px; color:#9b998f; }
+  .send { font-size:12px; padding:5px 12px; border-radius:5px; background:var(--ink); color:#fff; }
+  .backlog { display:flex; align-items:center; gap:12px; padding:9px 12px; border:1px solid var(--line); border-radius:6px; background:#fff; margin-bottom:6px; font-size:13px; }
+  .backlog .n { color:var(--mute); } .backlog .go { margin-left:auto; }
+  .slots { font-size:12px; color:var(--mute); margin:0 0 8px; }
+  .slots b { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:2px; vertical-align:-1px; background:#e3e0d8; }
+  .slots b.f { background:var(--work); }
+</style>
+<div class="pb">
+  <h3>1 · The Backlog, at the foot of the page</h3>
+  <p class="cap">One line per repo: how many open issues have no record yet, and a <b>Find some more</b> button. Above them, how many of the 4 sessions on the Mac are running now.</p>
+  <div class="sec">Backlog</div>
+  <p class="slots"><b class="f"></b><b class="f"></b><b class="f"></b><b></b> 3 of 4 sessions on the Mac running</p>
+  <div class="backlog"><b>torahmap</b><span class="n">82 open issues nobody has picked up</span><span class="btn go">Find some more</span></div>
+  <div class="backlog"><b>pr-board</b><span class="n">6 open issues nobody has picked up</span><span class="btn go">Find some more</span></div>
+  <div class="backlog"><b>danyelfisher.info</b><span class="n">looking through the backlog…</span></div>
+
+  <h3 style="margin-top:28px">2 · What comes back: a card in Waiting on you</h3>
+  <p class="cap">A card of its own, kept in the board's database, with no GitHub issue behind it. One question per issue, the reason underneath. Ones Claude would start have <b>pick up</b> as the default; ones it thinks are stale or duplicates have <b>close</b>.</p>
+  <div class="card">
+    <div class="row"><div>Next from the pr-board backlog <span class="r" style="color:var(--mute);font-size:12px">· proposal, no issue</span></div><span class="why">5 questions for you</span></div>
+    <ol class="q">
+      <li>1. #25 Stop hook asks for a status on closed items and new backlog issues
+        <div class="r">It blocks the end of nearly every session that files an issue; small and well understood.</div>
+        <div class="choices"><span class="btn on">pick up</span><span class="btn">later</span><span class="btn">close</span></div></li>
+      <li>2. #4 Make the status hook sturdier: record touched items as they happen
+        <div class="r">Same code as #25; doing them one after the other saves reading it twice.</div>
+        <div class="choices"><span class="btn on">pick up</span><span class="btn">later</span><span class="btn">close</span></div></li>
+      <li>3. #24 A "Wake up" button for a card whose session has gone quiet
+        <div class="r">Needs a design; it overlaps #12, which is parked on the same question.</div>
+        <div class="choices"><span class="btn on">pick up</span><span class="btn">later</span><span class="btn">close</span></div></li>
+      <li>4. #3 Bring the timeline back, showing something worth seeing
+        <div class="r">Large, and its first step (a log of every change) already exists. A good one after the three above.</div>
+        <div class="choices"><span class="btn">pick up</span><span class="btn on">later</span><span class="btn">close</span></div></li>
+      <li>5. #11 Mac service: read GitHub in fewer, cheaper requests
+        <div class="r">The service no longer reads items from GitHub since the move to the board's database. Close as done.</div>
+        <div class="choices"><span class="btn">pick up</span><span class="btn">later</span><span class="btn on">close</span></div></li>
+    </ol>
+    <div class="actions"><span class="reply">Or type a note back…</span><span class="send">Send answers</span></div>
+  </div>
+
+  <h3 style="margin-top:28px">3 · After you answer: each picked-up issue gets a card of its own</h3>
+  <p class="cap">It waits for a free session, then starts on design and soon comes back to the top with questions.</p>
+  <div class="sec">On Claude</div>
+  <div class="card work"><div class="row"><div><span class="num">#25</span>Stop hook asks for a status on closed items…</div><span class="why">Claude designing</span></div></div>
+  <div class="card work"><div class="row"><div><span class="num">#4</span>Make the status hook sturdier…</div><span class="why">Picked up, waiting for a free session</span></div></div>
+</div>

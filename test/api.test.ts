@@ -44,6 +44,7 @@ function harness(): Harness {
     waitUntil: (p) => {
       h.waiting.push(p);
     },
+    backlogIssues: async () => ({ repos: [], errors: [] }),
   };
   return h;
 }

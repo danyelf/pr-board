@@ -168,6 +168,16 @@ function insertRecord(db: Db, repo: string, issue: number | null, pr: number | n
 
 const summary = (r: Pick<WorkRecord, 'gate' | 'state' | 'version'>) => ({ gate: r.gate, state: r.state, version: r.version });
 
+/** A picked-up issue is done once a status names it: its record's card takes over from the pick-up's. */
+function pickupStarted(db: Db, repo: string, issue: number | null, now: string): Stmt[] {
+  // Only once the record really holds the issue, so a write refused for a conflict leaves the pick-up alone.
+  return issue === null ? [] : [
+    db
+      .prepare('UPDATE pickup SET done_at = ? WHERE repo = ? AND issue = ? AND done_at IS NULL AND EXISTS (SELECT 1 FROM work WHERE repo = ? AND issue = ? AND ended_at IS NULL AND written_at = ?)')
+      .bind(now, repo, issue, repo, issue, now),
+  ];
+}
+
 /**
  * Writes a new status. The record it belongs to is found by the item's own number; failing that, by the PR it
  * replaces; failing that, by the issue it names (which attaches a new PR to the issue's record).
@@ -195,6 +205,7 @@ export async function setStatus(
     const results = (await db.batch([
       insertRecord(db, ref.repo, issue, pr, f, now),
       logStmt(db, 'last', now, 'status', { from: null, to: summary(f), ask: f.ask, issue, pr }, '1', []),
+      ...pickupStarted(db, ref.repo, issue, now),
     ])) as Written[];
     return { record: await recordById(db, results[0]!.results[0]!.id), handedOver };
   }
@@ -218,6 +229,7 @@ export async function setStatus(
         JSON.stringify(prev.approved),
       ),
     logStmt(db, prev.id, now, 'status', { from: summary(prev), to: summary(f), ask: f.ask, issue, pr, replaces: input.replaces, ...(reopens ? { reopened: true } : {}) }, STILL_OPEN_AT, [prev.id, f.version]),
+    ...pickupStarted(db, ref.repo, issue, now),
   ])) as Written[];
   if (results[0]!.results.length === 0) throw new Refused('This work changed while the status was being written. Try again.');
   return { record: await recordById(db, prev.id), handedOver };

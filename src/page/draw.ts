@@ -29,7 +29,7 @@ export function age(iso: string, now: Date): string {
 }
 
 /** Makes a link, or plain text when the address isn't one the page may link to. */
-function link(doc: Document, href: string, text: string, cls?: string): HTMLElement {
+export function link(doc: Document, href: string, text: string, cls?: string): HTMLElement {
   try {
     return el(doc, 'a', { href, rel: 'noreferrer', target: '_blank', ...(cls ? { class: cls } : {}) }, text);
   } catch {
@@ -103,8 +103,11 @@ function sent(doc: Document, c: CardView): HTMLElement | null {
   );
 }
 
-/** A choice for each option, the default in bold. A group with no legend is the approval, named for screen readers only. */
-function radioGroup(
+/**
+ * A choice for each option, the default in bold. A group with no legend is named for screen readers only, by
+ * `unseenName`: the approval, unless a caller says otherwise.
+ */
+export function radioGroup(
   doc: Document,
   name: string,
   legend: string | null,
@@ -112,8 +115,9 @@ function radioGroup(
   defaultChoice: string,
   chosen: string | undefined,
   onPick: (choice: string) => void,
+  unseenName = 'Approval',
 ): HTMLElement {
-  return el(doc, 'fieldset', { class: 'question', ...(legend === null ? { 'aria-label': 'Approval' } : {}) },
+  return el(doc, 'fieldset', { class: 'question', ...(legend === null ? { 'aria-label': unseenName } : {}) },
     legend !== null ? el(doc, 'legend', {}, legend) : null,
     ...choices.map((choice) => {
       const input = el(doc, 'input', { type: 'radio', name, value: choice, ...(chosen === choice ? { checked: '' } : {}) }) as HTMLInputElement;
