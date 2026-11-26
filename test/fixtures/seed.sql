@@ -41,12 +41,12 @@ VALUES (564, 'acme/torahmap', NULL, 564, 1, 'design', 'working', 'implementation
   strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-6000 minutes'));
 
 -- The backlog: the Mac service's last look (3 of 4 sessions running, two repos), a proposal waiting for answers,
--- a proposal still being looked for, a picked-up issue waiting for a session and one its session gave up on.
+-- two issues it says are waiting on other work, a proposal still being looked for, a picked-up issue waiting for a session and one its session gave up on.
 INSERT INTO service_look (id, at, running, max_sessions, repos) VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 3, 4, '["acme/torahmap","acme/notes"]');
 
 INSERT INTO proposal (id, repo, asked_at, started_at, written_at, items)
 VALUES (1, 'acme/torahmap', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 minutes'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-29 minutes'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-20 minutes'),
-  '[{"issue":25,"title":"Stop hook asks for a status on closed items","suggestion":"pick up","reason":"It blocks the end of nearly every session that files an issue; small and well understood."},{"issue":4,"title":"Make the status hook sturdier <b>not bold</b>","suggestion":"pick up","reason":"Same code as #25; doing them one after the other saves reading it twice."},{"issue":3,"title":"Bring the timeline back","suggestion":"later","reason":"Large, and its first step already exists."},{"issue":11,"title":"Read GitHub in fewer requests","suggestion":"close","reason":"The service no longer reads items from GitHub. Close as done."}]');
+  '[{"issue":25,"title":"Stop hook asks for a status on closed items","suggestion":"pick up","reason":"It blocks the end of nearly every session that files an issue; small and well understood."},{"issue":4,"title":"Make the status hook sturdier <b>not bold</b>","suggestion":"pick up","reason":"Same code as #25; doing them one after the other saves reading it twice."},{"issue":3,"title":"Bring the timeline back","suggestion":"later","reason":"Large, and its first step already exists."},{"issue":11,"title":"Read GitHub in fewer requests","suggestion":"close","reason":"The service no longer reads items from GitHub. Close as done."},{"issue":7,"title":"Colour the echoes by distance","suggestion":"waiting","reason":"Waiting on #640, which changes how distance is counted."},{"issue":9,"title":"Search inside a book","suggestion":"waiting","reason":"Waiting on #580: search by root sets up the index this would use."}]');
 
 INSERT INTO proposal (id, repo, asked_at, started_at) VALUES (2, 'acme/notes', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3 minutes'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 minutes'));
 

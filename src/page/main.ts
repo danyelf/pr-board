@@ -1,7 +1,7 @@
 // The page: reads the board, draws it, keeps it current, and sends the owner's answers.
 import type { BoardPage, PickupCard, ProposalCard } from '../shared/backlog-view.ts';
 import type { CardView } from '../shared/view.ts';
-import { drawBacklog, drawPickup, drawProposal, initialProposalForm, type BacklogHandlers, type ProposalForm } from './backlog.ts';
+import { drawBacklog, drawPickup, drawProposal, drawWaiting, initialProposalForm, type BacklogHandlers, type ProposalForm } from './backlog.ts';
 import { arrange, clock, drawCard, showChanged, showError, showSending, type CardHandlers } from './draw.ts';
 import { el } from './el.ts';
 import { afterRefusal, formProblem, initialForm, toAnswer, type FormState } from './form.ts';
@@ -189,6 +189,8 @@ function drawBacklogCards(next: BoardPage): void {
     }
   }
   backlogBody.replaceChildren(...drawBacklog(doc, next.backlog, backlogHandlers, now));
+  waitingList.replaceChildren(...drawWaiting(doc, next.backlog.waiting));
+  waitingCount.textContent = ` · ${next.backlog.waiting.length}`;
 }
 
 // The page's fixed parts.
@@ -204,6 +206,11 @@ const sections: Record<'waiting' | 'onClaude' | 'quiet' | 'everything', { wrap: 
   // The switch's "All" already names this list, so it has no heading.
   everything: section(null),
 };
+
+// Issues a proposal said can't start until other work lands; they sit after Parked, the other work on hold.
+const waitingCount = el(doc, 'span', { class: 'count' });
+const waitingList = el(doc, 'div', { class: 'waiting-list' });
+const waitingWrap = el(doc, 'section', { hidden: '' }, el(doc, 'h2', {}, 'Waiting on other work', waitingCount), waitingList);
 
 const backlogBody = el(doc, 'div', { class: 'backlog' });
 const backlogWrap = el(doc, 'section', { hidden: '' }, el(doc, 'h2', {}, 'Backlog'), backlogBody);
@@ -239,6 +246,7 @@ root.replaceChildren(
   sections.waiting.wrap,
   sections.onClaude.wrap,
   sections.quiet.wrap,
+  waitingWrap,
   sections.everything.wrap,
   backlogWrap,
 );
@@ -265,6 +273,7 @@ function layout(): void {
     if (s.count) s.count.textContent = ` · ${all.length}`;
   }
   backlogWrap.hidden = view !== 'turn';
+  waitingWrap.hidden = view !== 'turn' || board.backlog.waiting.length === 0;
   // Nodes of cards that are in no shown section are dropped from the page but kept, so a view switch brings them back as they were.
   for (const name of Object.keys(sections) as (keyof typeof sections)[]) {
     if (!shown.includes(name)) sections[name].list.replaceChildren();

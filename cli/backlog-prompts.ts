@@ -1,7 +1,7 @@
 // What the Mac service tells the sessions it starts for the backlog: one that reads a repo's backlog and proposes
 // what to do next, one that acts on the owner's note to a proposal, and one that starts on a picked-up issue.
 import { fileURLToPath } from 'node:url';
-import { MAX_PICKS, PICK_UP, type Proposal, type ProposalItem, type Skip } from '../src/shared/backlog.ts';
+import { MAX_PICKS, PICK_UP, WAITING, isAsked, type Proposal, type ProposalItem, type Skip } from '../src/shared/backlog.ts';
 import { OWNER_NAME } from '../src/shared/config.ts';
 import { LABEL_IN_PROGRESS } from '../src/shared/names.ts';
 import { itemKey } from '../src/shared/work.ts';
@@ -24,7 +24,7 @@ export function proposalPrompt(repo: string, cwd: string, skip: Skip[]): string 
     ...skip.map((s) => `   #${s.issue}: ${s.why}`),
     `2) Read what has been done lately: gh pr list -R ${repo} --state merged --limit 30 --json number,title,mergedAt,body`,
     '3) Look at the code where it helps you judge an issue.',
-    `4) Choose up to ${MAX_PICKS} issues to pick up next, each with a one-line reason: why this one, why now, what it is close to. Choose any number to close, each with a one-line reason: done by an earlier PR (name it), a duplicate of #N, or no longer wanted. Leave every other issue out of the list. An issue you would do soon but not first can be in the list as "later".`,
+    `4) Choose up to ${MAX_PICKS} issues to pick up next, each with a one-line reason: why this one, why now, what it is close to. Choose any number to close, each with a one-line reason: done by an earlier PR (name it), a duplicate of #N, or no longer wanted. Leave every other issue out of the list. An issue you would do soon but not first can be in the list as "later". An issue that can't start until other open work lands (an issue or PR that is still open; check that it is) goes in the list as "${WAITING}", never as a pick, and its reason names what it waits for: "waiting on #12, which moves the parser". Waiting issues don't count toward the ${MAX_PICKS}.`,
     '5) Write the list to the board in one command, and then stop:',
     `   ${PR_STATUS} propose ${repo} --item "#25 | ${PICK_UP} | why this one" --item "#11 | close | done by #20"`,
     `   If nothing is worth picking up or closing, run it with no --item, so ${OWNER_NAME} hears that.`,
@@ -34,7 +34,7 @@ export function proposalPrompt(repo: string, cwd: string, skip: Skip[]): string 
 }
 
 const choiceLines = (p: Proposal) =>
-  (p.items ?? []).map((i: ProposalItem) => `  #${i.issue} ${i.title} → ${p.answers?.[String(i.issue)] ?? '?'} (Claude's reason: ${i.reason})`);
+  (p.items ?? []).filter(isAsked).map((i: ProposalItem) => `  #${i.issue} ${i.title} → ${p.answers?.[String(i.issue)] ?? '?'} (Claude's reason: ${i.reason})`);
 
 export function notePrompt(p: Proposal, cwd: string): string {
   return [

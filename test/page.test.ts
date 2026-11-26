@@ -293,7 +293,7 @@ describe('the backlog on the page', () => {
     const nodes = drawBacklog(doc, {
       sessions: { running: 1, max: 4, at: '2026-11-20T11:59:00.000Z', stale: false },
       repos: [{ repo: 'o/r', name: 'r', open: 6, atLeast: false, busy: null }, { repo: 'o/s', name: 's', open: 3, atLeast: true, busy: 'looking through the backlog…' }],
-      proposals: [], pickups: [],
+      proposals: [], pickups: [], waiting: [],
     }, handlers, NOW_D) as unknown as FakeElement[];
     expect(textOf(nodes[0]!)).toContain('1 of 4 sessions on the Mac running');
     expect(textOf(nodes[1]!)).toContain('6 open issues nobody has picked up');
@@ -304,7 +304,7 @@ describe('the backlog on the page', () => {
 
   it('says so when the Mac service has never reported', () => {
     const { doc } = fakeDoc();
-    const nodes = drawBacklog(doc, { sessions: null, repos: [], proposals: [], pickups: [] }, handlers, NOW_D) as unknown as FakeElement[];
+    const nodes = drawBacklog(doc, { sessions: null, repos: [], proposals: [], pickups: [], waiting: [] }, handlers, NOW_D) as unknown as FakeElement[];
     expect(textOf(nodes[0]!)).toContain("hasn't reported in yet");
   });
 });

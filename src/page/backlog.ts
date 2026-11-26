@@ -1,6 +1,6 @@
 // The backlog on the page: the line per repo with its "Find some more" button, the proposal card, and the cards of
 // picked-up issues. Like the other cards, every element comes from `el`, so text from GitHub or Claude stays text.
-import type { BacklogView, PickupCard, ProposalCard } from '../shared/backlog-view.ts';
+import type { BacklogView, PickupCard, ProposalCard, WaitingLine } from '../shared/backlog-view.ts';
 import { NOTE_MAX } from '../shared/names.ts';
 import { age, link, radioGroup } from './draw.ts';
 import { el } from './el.ts';
@@ -90,6 +90,14 @@ export function drawPickup(doc: Document, c: PickupCard, h: BacklogHandlers, now
       : null,
     el(doc, 'p', { class: 'error', 'data-role': 'error', hidden: '' }),
   );
+}
+
+/** A line per issue a proposal said is waiting on other open work: the issue, its repo, and what it waits for. */
+export function drawWaiting(doc: Document, lines: WaitingLine[]): HTMLElement[] {
+  return lines.map((w) => el(doc, 'div', { class: 'waiting-line', 'data-key': w.key },
+    link(doc, w.url, `#${w.issue} ${w.title}`), ' ', el(doc, 'span', { class: 'repo' }, w.repo),
+    el(doc, 'div', { class: 'reason' }, w.reason),
+  ));
 }
 
 /** The Backlog section's contents: how many Mac sessions are running, and a line per repo. */

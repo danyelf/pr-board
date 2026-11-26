@@ -2,7 +2,7 @@
 // Each step that must happen once (a claim, an answer) is one UPDATE whose WHERE says the step hasn't happened yet,
 // so two at once can't both land.
 import {
-  LATER, LATER_MS, PROPOSAL_CHOICES, isUnderWay, type ItemInput, type Pickup, type Proposal, type ProposalChoice, type ProposalItem,
+  LATER, LATER_MS, PROPOSAL_CHOICES, isAsked, isUnderWay, type ItemInput, type Pickup, type Proposal, type ProposalChoice, type ProposalItem,
   type ServiceLook, type Skip,
 } from '../shared/backlog.ts';
 import { OWNER_NAME } from '../shared/config.ts';
@@ -108,6 +108,20 @@ export async function openProposals(db: Db): Promise<Proposal[]> {
   return results.map(toProposal);
 }
 
+/**
+ * What the page is drawn from: the open proposals, and each repo's newest written one even when done, since that
+ * one says which issues are waiting on other work.
+ */
+export async function pageProposals(db: Db): Promise<Proposal[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM proposal WHERE done_at IS NULL OR id IN (SELECT proposal_id FROM pickup WHERE done_at IS NULL)
+         OR id IN (SELECT max(id) FROM proposal WHERE written_at IS NOT NULL GROUP BY repo) ORDER BY id`,
+    )
+    .all<ProposalRow>();
+  return results.map(toProposal);
+}
+
 /** The service takes a proposal to start its session. */
 export async function claimProposal(db: Db, id: number, now: string): Promise<Proposal> {
   await step(db, `UPDATE proposal SET started_at = ? WHERE id = ? AND started_at IS NULL AND ${UNDER_WAY}`, [now, id], 'That proposal has already been taken');
@@ -164,7 +178,7 @@ export async function answerProposal(db: Db, id: number, answers: Record<string,
   const p = await proposalById(db, id);
   if (p.items === null || p.answeredAt !== null || !isUnderWay(p)) throw new Refused('This proposal has already been answered, or is no longer open. Reload the page.');
   if (note.length > NOTE_MAX) throw new Refused(`The note is longer than ${NOTE_MAX} characters`);
-  const listed = new Set(p.items.map((i) => String(i.issue)));
+  const listed = new Set(p.items.filter(isAsked).map((i) => String(i.issue)));
   for (const [issue, choice] of Object.entries(answers)) {
     if (!listed.has(issue)) throw new Refused(`#${issue} isn't on this proposal`);
     if (!(PROPOSAL_CHOICES as readonly string[]).includes(choice)) throw new Refused(`"${choice}" isn't one of the choices for #${issue}`);

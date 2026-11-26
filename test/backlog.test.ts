@@ -63,6 +63,9 @@ describe('parseItem', () => {
   it('reads "#N | choice | reason", keeping bars inside the reason', () => {
     expect(parseItem('#25 | pick up | small | and close to #4')).toEqual({ issue: 25, suggestion: 'pick up', reason: 'small | and close to #4' });
   });
+  it('reads an issue waiting on other work', () => {
+    expect(parseItem('#7 | waiting | waiting on #12')).toEqual({ issue: 7, suggestion: 'waiting', reason: 'waiting on #12' });
+  });
   it.each(['25 pick up', '#x | pick up | r', '#2 | maybe | r', '#2 | close | '])('refuses %s', (t) => {
     expect(() => parseItem(t)).toThrow(Refused);
   });
@@ -100,11 +103,12 @@ describe('a proposal, end to end', () => {
     await look(h);
     const id = ((await call(h, 'owner', '/api/find-more', { repo: 'o/r' })).body.proposal as { id: number }).id;
     await call(h, 'claude', '/api/proposal-claim', { id });
-    h.items = [facts({ repo: 'o/r', number: 7 }), issue(8, { closedAt: ago(5) }), ...[1, 2, 3, 4, 5, 6].map((n) => issue(n))];
+    h.items = [facts({ repo: 'o/r', number: 7 }), issue(8, { closedAt: ago(5) }), ...[1, 2, 3, 4, 5, 6, 9, 10, 11].map((n) => issue(n))];
     const write = (items: unknown[]) => call(h, 'claude', '/api/proposal-write', { repo: 'o/r', items });
     expect((await write([{ issue: 7, suggestion: 'pick up', reason: 'r' }])).body.error).toMatch(/is a pull request/);
     expect((await write([{ issue: 8, suggestion: 'pick up', reason: 'r' }])).body.error).toMatch(/already closed/);
-    expect((await write([1, 2, 3, 4, 5, 6].map((n) => ({ issue: n, suggestion: 'pick up', reason: 'r' })))).body.error).toMatch(/at most 5/);
+    expect((await write([1, 2, 3, 4, 5, 6, 9, 10, 11].map((n) => ({ issue: n, suggestion: 'pick up', reason: 'r' })))).body.error).toMatch(/at most 8/);
+    expect((await write([{ issue: 1, suggestion: 'waiting', reason: 'after the parser lands' }])).body.error).toMatch(/must name what it waits for/);
     expect((await write([{ issue: 1, suggestion: 'close', reason: 'r' }, { issue: 1, suggestion: 'later', reason: 'r' }])).body.error).toMatch(/twice/);
   });
 
@@ -129,6 +133,32 @@ describe('a proposal, end to end', () => {
       { issue: 11, why: expect.stringMatching(/said "later" to it/) },
       { issue: 25, why: 'it is already picked up and waiting for a session' },
     ]);
+  });
+
+  it('lists waiting issues without asking about them or counting them as picks, and shows them after the answer', async () => {
+    const picks = [1, 2, 3, 4, 5, 6, 9, 10].map((n) => ({ issue: n, suggestion: 'pick up', reason: 'r' }));
+    await look(h);
+    const id = ((await call(h, 'owner', '/api/find-more', { repo: 'o/r' })).body.proposal as { id: number }).id;
+    await call(h, 'claude', '/api/proposal-claim', { id });
+    h.items = [...[1, 2, 3, 4, 5, 6, 9, 10, 12].map((n) => issue(n))];
+    const w = await call(h, 'claude', '/api/proposal-write', { repo: 'o/r', items: [...picks, { issue: 12, suggestion: 'waiting', reason: 'waiting on #40' }] });
+    expect(w.status).toBe(200);
+
+    h.issues = [{ repo: 'o/r', complete: true, issues: [1, 2, 3, 4, 5, 6, 9, 10, 12].map((number) => ({ number, labels: [] })) }];
+    const board = (await call(h, 'owner', '/api/board')).body as unknown as BoardPage;
+    expect(board.backlog.proposals[0]!.questions.map((q) => q.issue)).toEqual([1, 2, 3, 4, 5, 6, 9, 10]);
+    expect(board.backlog.proposals[0]!.tag).toBe('8 questions');
+    expect(board.backlog.waiting).toEqual([{ key: 'o/r#12 waiting', repo: 'o/r', issue: 12, title: 'Issue 12', url: 'https://github.com/o/r/issues/12', reason: 'waiting on #40' }]);
+
+    const answers = Object.fromEntries(picks.map((p) => [p.issue, 'later']));
+    expect((await call(h, 'owner', '/api/proposal-answer', { id, answers, note: '' })).status).toBe(200);
+    await call(h, 'claude', '/api/proposal-carry', { id });
+    await call(h, 'claude', '/api/proposal-done', { id });
+    expect(((await call(h, 'owner', '/api/board')).body as unknown as BoardPage).backlog.waiting.map((x) => x.issue)).toEqual([12]);
+
+    // Once the issue is closed it is no longer waiting.
+    h.issues = [{ repo: 'o/r', complete: true, issues: [] }];
+    expect(((await call(h, 'owner', '/api/board')).body as unknown as BoardPage).backlog.waiting).toEqual([]);
   });
 
   it('with a note, waits for the note session, which finishes it by repo or sends back what it could not do', async () => {

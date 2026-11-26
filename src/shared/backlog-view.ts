@@ -1,6 +1,6 @@
 // The backlog part of the board the page draws: a line per repo with its "Find some more" button, the proposal cards,
 // and the cards of the issues picked up and waiting for a session. Worked out from the board's tables and what GitHub says.
-import { PROPOSAL_CHOICES, isUnderWay, pickupReason, type Pickup, type Proposal, type RepoIssues, type ServiceLook } from './backlog.ts';
+import { PROPOSAL_CHOICES, WAITING, isAsked, isUnderWay, pickupReason, type Pickup, type Proposal, type RepoIssues, type ServiceLook } from './backlog.ts';
 import type { Facts } from './facts.ts';
 import { LABEL_IN_PROGRESS } from './names.ts';
 import type { BoardView } from './view.ts';
@@ -67,6 +67,17 @@ export interface PickupCard {
   canDrop: boolean;
 }
 
+/** An issue the latest proposal for its repo said is waiting on other open work. */
+export interface WaitingLine {
+  key: string;
+  repo: string;
+  issue: number;
+  title: string;
+  url: string;
+  /** What it waits for, in the proposal's words. */
+  reason: string;
+}
+
 /** What the page reads: the board, and the backlog at its foot. */
 export type BoardPage = BoardView & { backlog: BacklogView };
 
@@ -76,6 +87,7 @@ export interface BacklogView {
   repos: BacklogLine[];
   proposals: ProposalCard[];
   pickups: PickupCard[];
+  waiting: WaitingLine[];
 }
 
 const issueUrl = (repo: string, n: number) => `https://github.com/${repo}/issues/${n}`;
@@ -89,7 +101,7 @@ function plural(n: number, word: string): string {
 function proposalCard(p: Proposal): ProposalCard | null {
   // A proposal still being looked for shows on its repo's line, not as a card.
   if (p.doneAt !== null || (p.items === null && p.failedAt === null)) return null;
-  const items = p.items ?? [];
+  const items = (p.items ?? []).filter(isAsked);
   const failed = p.failedAt !== null;
   const answered = p.answeredAt !== null;
   const tag = failed ? 'went wrong'
@@ -146,13 +158,15 @@ export function buildBacklog(
 ): BacklogView {
   const byKey = new Map(facts.map((f) => [itemKey(f.repo, f.number), f]));
   const factsOf = (repo: string, n: number) => byKey.get(itemKey(repo, n));
+  /** Issues of a repo that already have open work on the board or a pick-up. */
+  const takenIn = (repo: string) => new Set<number>([
+    ...records.filter((r) => r.repo === repo && r.endedAt === null && r.issue !== null).map((r) => r.issue!),
+    ...pickups.filter((u) => u.repo === repo && u.doneAt === null).map((u) => u.issue),
+  ]);
 
   const repos: BacklogLine[] = (look?.repos ?? []).map((repo) => {
     const list = issues.find((i) => i.repo === repo);
-    const taken = new Set<number>([
-      ...records.filter((r) => r.repo === repo && r.endedAt === null && r.issue !== null).map((r) => r.issue!),
-      ...pickups.filter((u) => u.repo === repo && u.doneAt === null).map((u) => u.issue),
-    ]);
+    const taken = takenIn(repo);
     const under = proposals.find((p) => p.repo === repo && isUnderWay(p));
     const busy = !under ? null
       : under.startedAt === null ? 'waiting for a free session to look through the backlog…'
@@ -168,10 +182,24 @@ export function buildBacklog(
     };
   });
 
+  // Each repo's newest written proposal says which issues are waiting; one since closed, or now taken, is left out.
+  const waiting: WaitingLine[] = [];
+  for (const repo of new Set(proposals.map((p) => p.repo))) {
+    const latest = proposals.filter((p) => p.repo === repo && p.writtenAt !== null).sort((a, b) => Date.parse(b.writtenAt!) - Date.parse(a.writtenAt!) || b.id - a.id)[0];
+    const list = issues.find((i) => i.repo === repo);
+    const taken = takenIn(repo);
+    for (const i of latest?.items ?? []) {
+      if (i.suggestion !== WAITING || taken.has(i.issue)) continue;
+      if (list?.complete && !list.issues.some((x) => x.number === i.issue)) continue;
+      waiting.push({ key: `${itemKey(repo, i.issue)} waiting`, repo, issue: i.issue, title: i.title, url: issueUrl(repo, i.issue), reason: i.reason });
+    }
+  }
+
   return {
     sessions: look ? { running: look.running, max: look.max, at: look.at, stale: now.getTime() - Date.parse(look.at) >= LOOK_GOES_STALE_MS } : null,
     repos,
     proposals: proposals.map(proposalCard).filter((c): c is ProposalCard => c !== null).sort((a, b) => Date.parse(a.since) - Date.parse(b.since) || a.id - b.id),
     pickups: pickups.map((u) => pickupCard(u, proposals, factsOf)).filter((c): c is PickupCard => c !== null).sort((a, b) => Date.parse(a.since) - Date.parse(b.since) || a.id - b.id),
+    waiting,
   };
 }

@@ -8,7 +8,7 @@ import { GATES, STATES, Refused, itemKey, recordNumber, type AnswerInput, type S
 import type { Caller, Env } from './access.ts';
 import { BadRequest } from './bad-request.ts';
 import { BACKLOG_CLAUDE_GET, BACKLOG_CLAUDE_POST, BACKLOG_OWNER_POST, handleBacklog } from './backlog-api.ts';
-import { endPickup, lastLook, openPickups, openProposals } from './backlog-store.ts';
+import { endPickup, lastLook, openPickups, pageProposals } from './backlog-store.ts';
 import type { setLabels } from './github.ts';
 import { addAnswer, answersFor, claim, confirm, endWork, findWork, giveUp, importWork, openWork, serviceClaims, setStatus, unclaim, unclaimedAnswers, unclaimedOlderThan, type ItemRef } from './store.ts';
 
@@ -130,7 +130,7 @@ async function board(env: Env, deps: ApiDeps): Promise<BoardPage> {
 
   const look = await lastLook(env.DB);
   const issues = await deps.backlogIssues(env, look?.repos ?? []);
-  const backlog = buildBacklog(look, await openProposals(env.DB), pickups, records, issues.repos, got.facts, deps.now());
+  const backlog = buildBacklog(look, await pageProposals(env.DB), pickups, records, issues.repos, got.facts, deps.now());
   return { ...view, errors: [...view.errors, ...issues.errors], backlog };
 }
 

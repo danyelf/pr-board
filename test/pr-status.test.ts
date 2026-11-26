@@ -224,7 +224,7 @@ describe('pr-status and the backlog', () => {
     expect(r.sent).toEqual([{ method: 'POST', path: '/api/proposal-write', body: { repo: 'acme/x', items: [{ issue: 25, suggestion: 'pick up', reason: 'small' }, { issue: 11, suggestion: 'close', reason: 'done by #20' }] } }]);
     const bad = await run(world(), ['propose', 'acme/x', '--item', '#25 | maybe | small']);
     expect(bad.code).toBe(1);
-    expect(bad.errors.join('\n')).toContain('"maybe" isn\'t pick up, later or close');
+    expect(bad.errors.join('\n')).toContain('"maybe" isn\'t pick up, later, close or waiting');
     expect(bad.sent).toEqual([]);
   });
 
