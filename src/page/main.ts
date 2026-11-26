@@ -132,11 +132,7 @@ async function backlogPost(key: string, node: HTMLElement | undefined, path: str
   if (backlogBusy.has(key)) return;
   backlogBusy.add(key);
   const showProblem = (text: string) => {
-    const p = node?.querySelector<HTMLElement>('[data-role="error"]');
-    if (p) {
-      p.textContent = text;
-      p.hidden = false;
-    }
+    if (node) showError(node, text);
   };
   try {
     const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

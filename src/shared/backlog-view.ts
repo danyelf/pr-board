@@ -1,6 +1,6 @@
 // The backlog part of the board the page draws: a line per repo with its "Find some more" button, the proposal cards,
 // and the cards of the issues picked up and waiting for a session. Worked out from the board's tables and what GitHub says.
-import { PROPOSAL_CHOICES, type Pickup, type Proposal, type RepoIssues, type ServiceLook } from './backlog.ts';
+import { PROPOSAL_CHOICES, isUnderWay, pickupReason, type Pickup, type Proposal, type RepoIssues, type ServiceLook } from './backlog.ts';
 import type { Facts } from './facts.ts';
 import { LABEL_IN_PROGRESS } from './names.ts';
 import type { BoardView } from './view.ts';
@@ -79,6 +79,8 @@ export interface BacklogView {
 }
 
 const issueUrl = (repo: string, n: number) => `https://github.com/${repo}/issues/${n}`;
+/** A repo's name without its owner. */
+const shortName = (repo: string) => repo.split('/')[1] ?? repo;
 
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -97,7 +99,7 @@ function proposalCard(p: Proposal): ProposalCard | null {
     key: `${p.repo} proposal ${p.id}`,
     id: p.id,
     repo: p.repo,
-    title: `Next from the ${p.repo.split('/')[1] ?? p.repo} backlog`,
+    title: `Next from the ${shortName(p.repo)} backlog`,
     tag,
     section: failed || !answered ? 'waiting' : 'onClaude',
     since: p.failedAt ?? p.answeredAt ?? p.writtenAt ?? p.askedAt,
@@ -116,7 +118,6 @@ function pickupCard(u: Pickup, proposals: Proposal[], factsOf: (repo: string, n:
   if (u.doneAt !== null || u.droppedAt !== null) return null;
   const f = factsOf(u.repo, u.issue);
   const failed = u.failedAt !== null;
-  const from = proposals.find((p) => p.id === u.proposalId)?.items?.find((i) => i.issue === u.issue);
   return {
     key: `${itemKey(u.repo, u.issue)} pick-up`,
     id: u.id,
@@ -127,7 +128,7 @@ function pickupCard(u: Pickup, proposals: Proposal[], factsOf: (repo: string, n:
     tag: failed ? 'Claude gave up' : u.startedAt !== null ? 'starting on design' : 'Picked up, waiting for a free session',
     section: failed ? 'waiting' : 'onClaude',
     since: u.failedAt ?? u.startedAt ?? u.askedAt,
-    reason: from?.reason ?? null,
+    reason: pickupReason(u, proposals),
     failure: u.failure,
     canRetry: failed,
     canDrop: failed || u.startedAt === null,
@@ -152,7 +153,7 @@ export function buildBacklog(
       ...records.filter((r) => r.repo === repo && r.endedAt === null && r.issue !== null).map((r) => r.issue!),
       ...pickups.filter((u) => u.repo === repo && u.doneAt === null).map((u) => u.issue),
     ]);
-    const under = proposals.find((p) => p.repo === repo && p.doneAt === null && p.failedAt === null);
+    const under = proposals.find((p) => p.repo === repo && isUnderWay(p));
     const busy = !under ? null
       : under.startedAt === null ? 'waiting for a free session to look through the backlog…'
         : under.writtenAt === null ? 'looking through the backlog…'
@@ -160,7 +161,7 @@ export function buildBacklog(
             : 'carrying out your answers…';
     return {
       repo,
-      name: repo.split('/')[1] ?? repo,
+      name: shortName(repo),
       open: list ? list.issues.filter((i) => !i.labels.includes(LABEL_IN_PROGRESS) && !taken.has(i.number)).length : null,
       atLeast: list ? !list.complete : false,
       busy,

@@ -21,6 +21,7 @@ interface ProposalRow {
   answers: string | null;
   note: string | null;
   carried_at: string | null;
+  carry_done_at: string | null;
   note_started_at: string | null;
   done_at: string | null;
   failed_at: string | null;
@@ -47,7 +48,7 @@ function toProposal(r: ProposalRow): Proposal {
     id: r.id, repo: r.repo, askedAt: r.asked_at, startedAt: r.started_at, writtenAt: r.written_at,
     items: r.items === null ? null : (JSON.parse(r.items) as ProposalItem[]), answeredAt: r.answered_at,
     answers: r.answers === null ? null : (JSON.parse(r.answers) as Record<string, ProposalChoice>), note: r.note,
-    carriedAt: r.carried_at, noteStartedAt: r.note_started_at, doneAt: r.done_at, failedAt: r.failed_at, failure: r.failure,
+    carriedAt: r.carried_at, carryDoneAt: r.carry_done_at, noteStartedAt: r.note_started_at, doneAt: r.done_at, failedAt: r.failed_at, failure: r.failure,
   };
 }
 
@@ -96,9 +97,14 @@ export async function askProposal(db: Db, repo: string, now: string): Promise<Pr
   return proposalById(db, id);
 }
 
-/** Every proposal the board still shows or the service still has to act on: not done, failed or not. */
+/**
+ * Every proposal that isn't done, including failed ones, which wait for the owner. Also the done ones an open
+ * pick-up came from, which hold the reason it was picked.
+ */
 export async function openProposals(db: Db): Promise<Proposal[]> {
-  const { results } = await db.prepare('SELECT * FROM proposal WHERE done_at IS NULL ORDER BY id').all<ProposalRow>();
+  const { results } = await db
+    .prepare('SELECT * FROM proposal WHERE done_at IS NULL OR id IN (SELECT proposal_id FROM pickup WHERE done_at IS NULL) ORDER BY id')
+    .all<ProposalRow>();
   return results.map(toProposal);
 }
 
@@ -179,11 +185,16 @@ export async function carryProposal(db: Db, id: number, now: string): Promise<Pr
   return proposalById(db, id);
 }
 
+/** Every choice is carried out; a proposal with a note now waits for the note's session. */
+export async function carryDone(db: Db, id: number, now: string): Promise<void> {
+  await step(db, `UPDATE proposal SET carry_done_at = ? WHERE id = ? AND carried_at IS NOT NULL AND carry_done_at IS NULL AND ${UNDER_WAY}`, [now, id], 'Those answers are not being carried out');
+}
+
 /** The service started a session for the note. */
 export async function noteStarted(db: Db, id: number, now: string): Promise<Proposal> {
   await step(
     db,
-    `UPDATE proposal SET note_started_at = ? WHERE id = ? AND carried_at IS NOT NULL AND note <> '' AND note_started_at IS NULL AND ${UNDER_WAY}`,
+    `UPDATE proposal SET note_started_at = ? WHERE id = ? AND carry_done_at IS NOT NULL AND note <> '' AND note_started_at IS NULL AND ${UNDER_WAY}`,
     [now, id],
     'That note already has a session',
   );
@@ -220,7 +231,7 @@ export async function retryProposal(db: Db, id: number): Promise<void> {
   await step(
     db,
     `UPDATE proposal SET started_at = NULL, failed_at = NULL, failure = NULL WHERE id = ? AND failed_at IS NOT NULL AND done_at IS NULL AND written_at IS NULL
-       AND NOT EXISTS (SELECT 1 FROM proposal o WHERE o.repo = proposal.repo AND o.done_at IS NULL AND o.failed_at IS NULL)`,
+       AND NOT EXISTS (SELECT 1 FROM proposal o WHERE o.repo = proposal.repo AND ${UNDER_WAY})`,
     [id],
     `${p.repo} already has another proposal under way`,
   );

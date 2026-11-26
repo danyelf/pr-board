@@ -10,7 +10,8 @@ import { closeComment } from './pickup.ts';
 /** The status command, beside this file, named the way the sessions run it. */
 const PR_STATUS = `node ${fileURLToPath(new URL('./pr-status.ts', import.meta.url))}`;
 
-const closeCommand = (repo: string) => `gh issue close <N> -R ${repo} --comment ${JSON.stringify(closeComment('<the reason>'))}`;
+// The comment goes in plain double quotes holding real line breaks, since a shell keeps "\n" as two characters.
+const closeCommand = (repo: string) => `gh issue close <N> -R ${repo} --comment "${closeComment('<the reason>')}"`;
 
 export function proposalPrompt(repo: string, cwd: string, skip: Skip[]): string {
   return [

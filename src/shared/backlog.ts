@@ -9,6 +9,8 @@ export const CLOSE = 'close';
 /** The choices for each issue on a proposal, in the order the card shows them. */
 export const PROPOSAL_CHOICES = [PICK_UP, LATER, CLOSE] as const;
 export type ProposalChoice = (typeof PROPOSAL_CHOICES)[number];
+/** The choices as a sentence says them: "pick up, later or close". */
+export const CHOICES_TEXT = `${PROPOSAL_CHOICES.slice(0, -1).join(', ')} or ${PROPOSAL_CHOICES.at(-1)}`;
 
 /** The most issues one proposal may suggest picking up. */
 export const MAX_PICKS = 5;
@@ -34,6 +36,8 @@ export interface Proposal {
   answers: Record<string, ProposalChoice> | null;
   note: string | null;
   carriedAt: string | null;
+  /** When every choice had been carried out; carried but not done means the service stopped partway. */
+  carryDoneAt: string | null;
   noteStartedAt: string | null;
   doneAt: string | null;
   failedAt: string | null;
@@ -86,12 +90,12 @@ export type ItemInput = Omit<ProposalItem, 'title'>;
 /** Reads "#25 | pick up | why this one", as `pr-status propose` takes each item. */
 export function parseItem(text: string): ItemInput {
   const parts = text.split('|').map((p) => p.trim());
-  const shape = 'Write each item as "#N | pick up | reason", with pick up, later or close';
+  const shape = `Write each item as "#N | ${PICK_UP} | reason", with ${CHOICES_TEXT}`;
   if (parts.length < 3) throw new Refused(`"${text}" isn't an item. ${shape}`);
   const [num, choice, ...rest] = parts;
   const m = /^#?(\d+)$/.exec(num!);
   if (!m) throw new Refused(`"${num}" isn't an issue number. ${shape}`);
-  if (!(PROPOSAL_CHOICES as readonly string[]).includes(choice!)) throw new Refused(`"${choice}" isn't pick up, later or close. ${shape}`);
+  if (!(PROPOSAL_CHOICES as readonly string[]).includes(choice!)) throw new Refused(`"${choice}" isn't ${CHOICES_TEXT}. ${shape}`);
   const reason = rest.join(' | ').trim();
   if (reason === '') throw new Refused(`#${m[1]} has no reason. ${shape}`);
   return { issue: Number(m[1]), suggestion: choice as ProposalChoice, reason };
@@ -113,4 +117,9 @@ export function itemsProblem(items: ItemInput[]): string | null {
 /** Whether a proposal is still in the board's hands, as opposed to done or failed. */
 export function isUnderWay(p: Proposal): boolean {
   return p.doneAt === null && p.failedAt === null;
+}
+
+/** Why the proposal suggested a picked-up issue, when it came from one of these proposals. */
+export function pickupReason(u: Pickup, proposals: Proposal[]): string | null {
+  return proposals.find((p) => p.id === u.proposalId)?.items?.find((i) => i.issue === u.issue)?.reason ?? null;
 }

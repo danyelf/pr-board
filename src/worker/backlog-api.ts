@@ -6,18 +6,19 @@ import type { Env } from './access.ts';
 import type { ApiDeps } from './api.ts';
 import { BadRequest } from './bad-request.ts';
 import {
-  addPickup, answerProposal, answeredProposal, askProposal, carryProposal, claimPickup, claimProposal, dismissProposal, dropPickup,
+  addPickup, answerProposal, answeredProposal, askProposal, carryDone, carryProposal, claimPickup, claimProposal, dismissProposal, dropPickup,
   failPickup, failProposal, finishPickup, finishProposal, lastLook, noteStarted, noteUnstarted, openPickups, openProposals,
   proposalById, recordLook, retryPickup, retryProposal, skipsFor, unclaimPickup, unclaimProposal, writeProposal,
 } from './backlog-store.ts';
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-function id(b: Record<string, unknown>): number {
-  const v = b.id;
-  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) throw new BadRequest('"id" must be a positive whole number');
+function positiveInt(b: Record<string, unknown>, key: string): number {
+  const v = b[key];
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) throw new BadRequest(`"${key}" must be a positive whole number`);
   return v;
 }
+const id = (b: Record<string, unknown>) => positiveInt(b, 'id');
 function repoOf(b: Record<string, unknown>): string {
   const v = b.repo;
   if (typeof v !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(v)) throw new BadRequest('"repo" must look like owner/name');
@@ -32,7 +33,7 @@ function text(b: Record<string, unknown>, key: string): string {
 export const BACKLOG_OWNER_POST = ['/api/find-more', '/api/proposal-answer', '/api/proposal-retry', '/api/proposal-dismiss', '/api/pickup-retry', '/api/pickup-drop'];
 export const BACKLOG_CLAUDE_GET = ['/api/backlog-work'];
 export const BACKLOG_CLAUDE_POST = [
-  '/api/service-look', '/api/proposal-claim', '/api/proposal-unclaim', '/api/proposal-write', '/api/proposal-carry', '/api/proposal-note-started',
+  '/api/service-look', '/api/proposal-claim', '/api/proposal-unclaim', '/api/proposal-write', '/api/proposal-carry', '/api/proposal-carry-done', '/api/proposal-note-started',
   '/api/proposal-note-unstarted', '/api/proposal-done', '/api/proposal-failed', '/api/pickup-add', '/api/pickup-claim', '/api/pickup-unclaim',
   '/api/pickup-failed', '/api/pickup-done',
 ];
@@ -76,7 +77,7 @@ export async function handleBacklog(path: string, env: Env, deps: ApiDeps, b: Re
     case '/api/proposal-answer': {
       const answers = b.answers ?? {};
       if (!isObject(answers) || Object.values(answers).some((c) => typeof c !== 'string')) throw new BadRequest('"answers" must map issue numbers to choices');
-      return { proposal: await answerProposal(db, id(b), answers as Record<string, string>, text(b, 'note'), now) };
+      return { proposal: await answerProposal(db, id(b), answers as Record<string, string>, text(b, 'note').trim(), now) };
     }
     case '/api/proposal-retry': await retryProposal(db, id(b)); return {};
     case '/api/proposal-dismiss': await dismissProposal(db, id(b), now); return {};
@@ -85,10 +86,9 @@ export async function handleBacklog(path: string, env: Env, deps: ApiDeps, b: Re
 
     case '/api/service-look': {
       const running = b.running;
-      const max = b.max;
       const repos = b.repos;
       if (typeof running !== 'number' || !Number.isInteger(running) || running < 0) throw new BadRequest('"running" must be a whole number');
-      if (typeof max !== 'number' || !Number.isInteger(max) || max < 1) throw new BadRequest('"max" must be a positive whole number');
+      const max = positiveInt(b, 'max');
       if (!Array.isArray(repos) || repos.some((r) => typeof r !== 'string')) throw new BadRequest('"repos" must be a list of repo names');
       await recordLook(db, { at: now, running, max, repos: repos as string[] });
       return {};
@@ -103,6 +103,7 @@ export async function handleBacklog(path: string, env: Env, deps: ApiDeps, b: Re
       return { proposal: await writeProposal(db, repo, await itemsWithTitles(env, deps, repo, b.items), now) };
     }
     case '/api/proposal-carry': return { proposal: await carryProposal(db, id(b), now) };
+    case '/api/proposal-carry-done': await carryDone(db, id(b), now); return {};
     case '/api/proposal-note-started': return { proposal: await noteStarted(db, id(b), now) };
     case '/api/proposal-note-unstarted': await noteUnstarted(db, id(b)); return {};
     case '/api/proposal-done': {
@@ -113,27 +114,19 @@ export async function handleBacklog(path: string, env: Env, deps: ApiDeps, b: Re
       else await finishProposal(db, pid, now);
       return { proposal: await proposalById(db, pid) };
     }
-    case '/api/proposal-failed': {
-      const failure = text(b, 'failure').trim();
-      if (failure === '') throw new BadRequest('"failure" must say what went wrong');
-      await failProposal(db, id(b), failure, now);
-      return {};
-    }
-    case '/api/pickup-add': {
-      const repo = repoOf(b);
-      const n = b.number;
-      if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) throw new BadRequest('"number" must be a positive whole number');
-      const proposalId = b.proposalId === undefined || b.proposalId === null ? null : id({ id: b.proposalId });
-      return { pickup: await addPickup(db, repo, n, proposalId, now) };
-    }
-    case '/api/pickup-claim': return { pickup: await claimPickup(db, id(b), now) };
-    case '/api/pickup-unclaim': await unclaimPickup(db, id(b)); return {};
+    case '/api/proposal-failed':
     case '/api/pickup-failed': {
       const failure = text(b, 'failure').trim();
       if (failure === '') throw new BadRequest('"failure" must say what went wrong');
-      await failPickup(db, id(b), failure, now);
+      await (path === '/api/proposal-failed' ? failProposal : failPickup)(db, id(b), failure, now);
       return {};
     }
+    case '/api/pickup-add': {
+      const proposalId = b.proposalId === undefined || b.proposalId === null ? null : positiveInt(b, 'proposalId');
+      return { pickup: await addPickup(db, repoOf(b), positiveInt(b, 'number'), proposalId, now) };
+    }
+    case '/api/pickup-claim': return { pickup: await claimPickup(db, id(b), now) };
+    case '/api/pickup-unclaim': await unclaimPickup(db, id(b)); return {};
     case '/api/pickup-done': await finishPickup(db, id(b), now); return {};
   }
   throw new BadRequest(`Unknown backlog route ${path}`);

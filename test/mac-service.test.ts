@@ -24,7 +24,7 @@ type Found = { record: WorkRecord; answers: AnswerRow[] };
 function proposalRow(over: Partial<Proposal> & Pick<Proposal, 'id' | 'repo'>): Proposal {
   return {
     askedAt: '2026-11-08T10:00:00.000Z', startedAt: null, writtenAt: null, items: null, answeredAt: null, answers: null, note: null,
-    carriedAt: null, noteStartedAt: null, doneAt: null, failedAt: null, failure: null, ...over,
+    carriedAt: null, carryDoneAt: null, noteStartedAt: null, doneAt: null, failedAt: null, failure: null, ...over,
   };
 }
 
@@ -172,7 +172,9 @@ class Board {
     }
     if (method === 'GET' && url.pathname === '/api/service-claims') return reply(200, this.claimsByService());
     if (method === 'GET' && url.pathname === '/api/backlog-work') {
-      return reply(200, { proposals: structuredClone(this.proposals.filter((p) => p.doneAt === null)), pickups: structuredClone(this.pickups.filter((u) => u.doneAt === null)) });
+      const pickups = this.pickups.filter((u) => u.doneAt === null);
+      const proposals = this.proposals.filter((p) => p.doneAt === null || pickups.some((u) => u.proposalId === p.id));
+      return reply(200, { proposals: structuredClone(proposals), pickups: structuredClone(pickups) });
     }
     if (method === 'POST' && url.pathname === '/api/service-look') {
       this.looks.push(body as never);
@@ -195,6 +197,7 @@ class Board {
       p.carriedAt = now;
       return answer({ proposal: structuredClone(p) });
     }
+    if (method === 'POST' && url.pathname === '/api/proposal-carry-done') { proposal()!.carryDoneAt = now; return answer({}); }
     if (method === 'POST' && url.pathname === '/api/proposal-note-started') { const p = proposal()!; p.noteStartedAt = now; return answer({ proposal: structuredClone(p) }); }
     if (method === 'POST' && url.pathname === '/api/proposal-note-unstarted') { proposal()!.noteStartedAt = null; return answer({}); }
     if (method === 'POST' && url.pathname === '/api/proposal-done') { proposal()!.doneAt = now; return answer({}); }
@@ -754,7 +757,7 @@ describe('mac-service', () => {
       expect(w.board.of('acme/x#5')).toMatchObject({ state: 'paused', ask: 'look' });
       expect(r.err).toContain('acme/x#5: ');
       expect(r.err).toContain('spawn claude ENOENT');
-      expect(r.err).toContain('gave its answers back on the board');
+      expect(r.err).toContain('Gave it back on the board, so the next look tries again.');
       expect(r.out).not.toContain('started a session');
     });
 
@@ -766,7 +769,7 @@ describe('mac-service', () => {
       w.board.fail.set('/api/unclaim', 1);
       const id = w.answer('acme/x#5', 6);
       const r = await run(w, [], (n, _, stop) => { if (n === 2) stop(); });
-      expect(r.err).toContain("couldn't give its answers back on the board");
+      expect(r.err).toContain("couldn't give it back on the board");
       expect(w.board.posts('/api/gave-up').map((s) => s.body?.answerIds)).toEqual([[id]]);
       expect(w.board.of('acme/x#5')).toMatchObject({ state: 'paused', ask: GAVE_UP_ASK });
     });
@@ -1228,6 +1231,36 @@ describe('mac-service and the backlog', () => {
     expect(s.args[3]).toContain('#25 Stop hook → pick up');
     expect(s.args[3]).toContain('pr-status.ts pick-up acme/x#<N>');
     expect(s.args[3]).toContain('pr-status.ts proposal-done acme/x');
+    // The close command keeps real line breaks, which a shell's double quotes pass on as they are.
+    expect(s.args[3]).toContain('--comment "<the reason>\n\nClosed from a backlog proposal on PR Board."');
+  });
+
+  it('with a note, waits for a free session once the choices are carried out', async () => {
+    const w = new World();
+    w.config();
+    w.board.proposals.push(written({ carriedAt: '2026-11-08T10:21:00.000Z', carryDoneAt: '2026-11-08T10:21:00.000Z', note: 'also #19' }));
+    await run(w, ['--once']);
+    expect(w.board.proposals[0]).toMatchObject({ failedAt: null, noteStartedAt: expect.any(String) });
+  });
+
+  it('hands back answers it stopped carrying out partway, and starts no session for the note', async () => {
+    const w = new World();
+    w.config();
+    w.board.proposals.push(written({ carriedAt: '2026-11-08T10:21:00.000Z', note: 'also #19' }));
+    await run(w, ['--once']);
+    expect(w.board.proposals[0]!.failure).toMatch(/stopped while carrying out your answers/);
+    expect(w.started).toEqual([]);
+  });
+
+  it('adds no label when the board refuses the pick-up', async () => {
+    const w = new World();
+    w.config();
+    w.board.pickups.push(pickupRow({ id: 7, repo: 'acme/x', issue: 25, startedAt: '2026-11-08T10:22:00.000Z' }));
+    w.earlier.push({ pid: 900, name: 'acme/x#25 pick-up', startedAt: w.now - 3 * MIN });
+    w.board.proposals.push(written());
+    await run(w, ['--once']);
+    expect(w.ghCalls.map((c) => c.line)).not.toContain('issue edit 25 -R acme/x --add-label in-progress');
+    expect(w.board.proposals[0]!.failure).toMatch(/^Couldn't pick up #25: /);
   });
 
   it('hands back a proposal, a note or a pick-up whose session ended without doing its part', async () => {

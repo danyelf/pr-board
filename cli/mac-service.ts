@@ -11,9 +11,8 @@ import { accessSync, appendFileSync, closeSync, constants, mkdirSync, openSync, 
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { OWNER_NAME } from '../src/shared/config.ts';
-import { CLAUDE_BOT_KEY, GAVE_UP_ASK, PICKUP_GRACE_MS, SERVICE_GRACE_MS, SERVICE_WORKING_ASK, SESSION_LIMIT_MS } from '../src/shared/names.ts';
-import { CLOSE, PICK_UP, isUnderWay, type Pickup, type Proposal, type Skip } from '../src/shared/backlog.ts';
-import { LABEL_IN_PROGRESS } from '../src/shared/names.ts';
+import { CLAUDE_BOT_KEY, GAVE_UP_ASK, LABEL_IN_PROGRESS, PICKUP_GRACE_MS, SERVICE_GRACE_MS, SERVICE_WORKING_ASK, SESSION_LIMIT_MS } from '../src/shared/names.ts';
+import { CLOSE, PICK_UP, isUnderWay, pickupReason, type Pickup, type Proposal, type Skip } from '../src/shared/backlog.ts';
 import { Refused, itemKey, recordNumber, type Found, type WorkRecord } from '../src/shared/work.ts';
 import { describe } from './answers.ts';
 import { notePrompt, pickupPrompt, proposalPrompt } from './backlog-prompts.ts';
@@ -434,12 +433,6 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   }
 
   /**
-   * Finds the worktree and writes the prompt, all before anything is claimed, so an answer this
-   * service can't serve stays free for others. Then claims the answers on the board, which in the
-   * same step sets the ask to say a Mac session is working on them, and starts the session. If the
-   * session can't start, the claim is given back.
-   */
-  /**
    * The environment a session in this repo runs in: Claude's own GitHub token, and its Claude token when the
    * config names one. Null, with a line saying why, when the repo isn't marked or a token is missing.
    */
@@ -464,6 +457,12 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
 
   const logPathFor = (base: string) => join(config.logDir, `${base}-${new Date(deps.now()).toISOString().replace(/[:.]/g, '-')}.log`);
 
+  /**
+   * Finds the worktree and writes the prompt, all before anything is claimed, so an answer this
+   * service can't serve stays free for others. Then claims the answers on the board, which in the
+   * same step sets the ask to say a Mac session is working on them, and starts the session. If the
+   * session can't start, the claim is given back.
+   */
   async function startSession(repo: RepoConfig, ref: Ref, waiting: Found): Promise<void> {
     const name = refString(ref);
     const isPr = waiting.record.pr !== null;
@@ -472,11 +471,9 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     const branch = isPr ? await prBranch(ref) : `issue-${ref.n}`;
     const cwd = await worktreeFor(repo, ref, isPr, branch);
     const logPath = logPathFor(`${ref.owner}-${ref.repo}-${ref.n}`);
-    // The name comes first, so the process list shows it before the long prompt.
-    const argsFor = (prompt: string) => ['--name', sessionName(ref), '-p', prompt, ...config.claudeArgs];
-    const prompt = promptFor(ref, cwd, describe(waiting.record, waiting.answers));
     if (dryRun) {
       planned++;
+      const prompt = promptFor(ref, cwd, describe(waiting.record, waiting.answers));
       say(name, `would claim and start: ${config.claude} --name "${sessionName(ref)}" -p <the prompt below> ${config.claudeArgs.join(' ')}\n  in ${cwd}\n  with GH_TOKEN from ${config.tokenFile}${config.claudeTokenFile ? ` and CLAUDE_CODE_OAUTH_TOKEN from ${config.claudeTokenFile}` : ''}\n  output to ${logPath}\n  prompt:\n${indent(prompt)}`);
       return;
     }
@@ -494,26 +491,10 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     const answerIds = claimed.answers.map((a) => a.id);
 
     // The claim may hold answers that came in since the list was read, so the prompt is written from what was claimed.
-    const args = argsFor(promptFor(ref, cwd, describe(claimed.record, claimed.answers)));
-    let session: Session;
-    try {
-      session = deps.spawn(config.claude, args, { cwd, env, logPath });
-      await session.spawned;
-    } catch (e) {
-      const why = `Couldn't start a session (${message(e)}).`;
-      try {
-        await boardCall(deps.board, 'POST', '/api/unclaim', { answerIds });
-        warn(name, `${why} Its claim is off: gave its answers back on the board so a session can pick them up.`);
-      } catch (u) {
-        warn(name, `${why} And couldn't give its answers back on the board: ${message(u)} The next look hands the item back to ${OWNER_NAME}.`);
-      }
-      return;
-    }
-    planned++;
+    const prompt = promptFor(ref, cwd, describe(claimed.record, claimed.answers));
+    const started = await launch(name, sessionName(ref), prompt, cwd, env, logPath, () => boardCall(deps.board, 'POST', '/api/unclaim', { answerIds }));
     // Counted as running from now, so its end is noticed even if that is before the next look.
-    previous?.add(name);
-    say(name, `started a session (process ${session.pid ?? 'unknown'}) in ${cwd} for ${answerIds.length === 1 ? 'its answer' : `its ${answerIds.length} answers`}; its output goes to ${logPath}.`);
-    void session.exited.then((code) => say(name, `the session finished (exit code ${code ?? 'unknown'}).`));
+    if (started) previous?.add(name);
   }
 
   /** Starts sessions for the answers the board says nobody claimed within the grace period. Returns how many items had some. */
@@ -540,7 +521,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         continue;
       }
       ripe++;
-      if (live.size + planned >= config.maxSessions) {
+      if (!slotFree(live)) {
         sayOnce(name, `has answers nobody picked up, but ${config.maxSessions} ${config.maxSessions === 1 ? 'session is' : 'sessions are'} already running; it waits for one to finish.`);
         continue;
       }
@@ -593,6 +574,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
   async function launch(name: string, sessionLabel: string, prompt: string, cwd: string, env: NodeJS.ProcessEnv, logPath: string, giveBack: () => Promise<unknown>): Promise<boolean> {
     let session: Session;
     try {
+      // The name comes first, so the process list shows it before the long prompt.
       session = deps.spawn(config.claude, ['--name', sessionLabel, '-p', prompt, ...config.claudeArgs], { cwd, env, logPath });
       await session.spawned;
     } catch (e) {
@@ -634,8 +616,8 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
         await backlogFailed(p.repo, '/api/proposal-failed', p.id, `The session that looks through the backlog ended without writing a list. ${backlogLogHint(p.repo)}`);
       } else if (p.noteStartedAt !== null && !running) {
         await backlogFailed(p.repo, '/api/proposal-failed', p.id, `The session for your note ended without saying it was done. ${backlogLogHint(p.repo)}`);
-      } else if (p.carriedAt !== null && (p.note ?? '') === '') {
-        // Answers are carried out within one look, so taken answers still open at the next look were cut short.
+      } else if (p.carriedAt !== null && p.carryDoneAt === null) {
+        // Answers are carried out within one look, so taken answers not done by the next look were cut short.
         await backlogFailed(p.repo, '/api/proposal-failed', p.id, 'The Mac service stopped while carrying out your answers; some may not be done. Check the issues on GitHub.');
       }
     }
@@ -679,7 +661,9 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     say(p.repo, `carried out the answers to the proposal: ${done.join(', ') || 'nothing to do'}.`);
     if (problems.length > 0) {
       await backlogFailed(p.repo, '/api/proposal-failed', p.id, `${problems.join(' ')}${p.note ? ' Your note was not acted on.' : ''}`);
-    } else if (!p.note) {
+    } else if (p.note) {
+      await boardCall(deps.board, 'POST', '/api/proposal-carry-done', { id: p.id });
+    } else {
       await boardCall(deps.board, 'POST', '/api/proposal-done', { id: p.id });
     }
   }
@@ -772,7 +756,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
 
     type Start = { what: string; go: () => Promise<void> };
     const starts: Start[] = [];
-    for (const p of fresh.proposals.filter((x) => isUnderWay(x) && x.carriedAt !== null && (x.note ?? '') !== '' && x.noteStartedAt === null)) {
+    for (const p of fresh.proposals.filter((x) => isUnderWay(x) && x.carryDoneAt !== null && (x.note ?? '') !== '' && x.noteStartedAt === null)) {
       const repo = repoConfig(p.repo);
       if (repo && !live.has(backlogKey(p.repo))) starts.push({ what: `${p.repo}: a session for the note`, go: () => startNoteSession(repo, p) });
     }
@@ -782,8 +766,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
     }
     for (const u of fresh.pickups.filter((x) => x.startedAt === null && x.failedAt === null && x.droppedAt === null)) {
       const repo = repoConfig(u.repo);
-      const reason = fresh.proposals.find((p) => p.id === u.proposalId)?.items?.find((i) => i.issue === u.issue)?.reason
-        ?? proposals.find((p) => p.id === u.proposalId)?.items?.find((i) => i.issue === u.issue)?.reason ?? null;
+      const reason = pickupReason(u, fresh.proposals);
       if (repo && !live.has(itemKey(u.repo, u.issue))) starts.push({ what: `${itemKey(u.repo, u.issue)}: a session for the pick-up`, go: () => startPickupSession(repo, u, reason) });
     }
     const waiting: string[] = [];

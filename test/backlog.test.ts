@@ -121,7 +121,8 @@ describe('a proposal, end to end', () => {
     expect((await call(h, 'claude', '/api/proposal-done', { id })).status).toBe(200);
 
     const work = await call(h, 'claude', '/api/backlog-work');
-    expect(work.body.proposals).toEqual([]);
+    // The finished proposal is still read, since the open pick-up's reason is on it.
+    expect((work.body.proposals as { id: number; doneAt: string | null }[]).map((p) => [p.id, p.doneAt !== null])).toEqual([[id, true]]);
     expect((work.body.pickups as { issue: number }[]).map((u) => u.issue)).toEqual([25]);
     // The "later" keeps #11 out of the next proposal.
     expect(await skipsFor(h.db, 'o/r', NOW_ISO)).toEqual([
@@ -134,12 +135,21 @@ describe('a proposal, end to end', () => {
     const id = await written(h);
     await call(h, 'owner', '/api/proposal-answer', { id, answers: { 25: 'later', 11: 'close' }, note: 'also #3' });
     await call(h, 'claude', '/api/proposal-carry', { id });
+    // Not before every choice is carried out.
+    expect((await call(h, 'claude', '/api/proposal-note-started', { id })).status).toBe(409);
+    expect((await call(h, 'claude', '/api/proposal-carry-done', { id })).status).toBe(200);
     expect((await call(h, 'claude', '/api/proposal-note-started', { id })).status).toBe(200);
     expect((await call(h, 'claude', '/api/proposal-note-started', { id })).status).toBe(409);
     const done = await call(h, 'claude', '/api/proposal-done', { repo: 'o/r', problem: "#3 doesn't exist" });
     expect(done.body.proposal).toMatchObject({ failure: "#3 doesn't exist" });
     // A failed proposal doesn't hold up the next one.
     expect((await call(h, 'owner', '/api/find-more', { repo: 'o/r' })).status).toBe(200);
+  });
+
+  it('keeps a note of only spaces as no note', async () => {
+    const id = await written(h);
+    const sent = await call(h, 'owner', '/api/proposal-answer', { id, answers: { 25: 'later', 11: 'later' }, note: '  \n ' });
+    expect(sent.body.proposal).toMatchObject({ note: '' });
   });
 
   it('once failed before its list, can be tried again; any failed one can be dismissed', async () => {
