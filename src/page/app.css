@@ -107,6 +107,11 @@ section h2 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 18p
 .shots { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .shots img { max-height: 120px; max-width: 220px; border: 1px solid var(--line); border-radius: 6px; }
 
+.waiting-list { display: flex; flex-direction: column; gap: 6px; }
+.waiting-line { font-size: 14px; padding: 6px 14px; border: 1px dashed var(--line); border-radius: 8px; }
+.waiting-line .repo { color: var(--muted); font-size: 13px; }
+.waiting-line .reason { color: var(--muted); }
+
 .sent { margin: 6px 0; color: var(--muted); font-size: 14px; }
 .sent ul { margin: 2px 0 0; padding-left: 20px; }
 
@@ -130,6 +135,7 @@ section h2 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 18p
 .slots b { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 2px; vertical-align: -1px; background: var(--line); }
 .slots b.f { background: var(--claude); }
 .slots .stale { color: var(--blocked); font-weight: 600; }
+.top .slots { margin: 0; }
 .backlog-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 12px; margin-bottom: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
 .backlog-line .n { color: var(--muted); }
 .backlog-line button { margin-left: auto; }

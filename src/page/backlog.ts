@@ -1,6 +1,6 @@
 // The backlog on the page: the line per repo with its "Find some more" button, the proposal card, and the cards of
 // picked-up issues. Like the other cards, every element comes from `el`, so text from GitHub or Claude stays text.
-import type { BacklogView, PickupCard, ProposalCard } from '../shared/backlog-view.ts';
+import type { BacklogView, PickupCard, ProposalCard, WaitingLine } from '../shared/backlog-view.ts';
 import { NOTE_MAX } from '../shared/names.ts';
 import { age, link, radioGroup } from './draw.ts';
 import { el } from './el.ts';
@@ -92,14 +92,26 @@ export function drawPickup(doc: Document, c: PickupCard, h: BacklogHandlers, now
   );
 }
 
-/** The Backlog section's contents: how many Mac sessions are running, and a line per repo. */
-export function drawBacklog(doc: Document, b: BacklogView, h: BacklogHandlers, now: Date): HTMLElement[] {
+/** A line per issue a proposal said is waiting on other open work: the issue, its repo, and what it waits for. */
+export function drawWaiting(doc: Document, lines: WaitingLine[]): HTMLElement[] {
+  return lines.map((w) => el(doc, 'div', { class: 'waiting-line', 'data-key': w.key },
+    link(doc, w.url, `#${w.issue} ${w.title}`), ' ', el(doc, 'span', { class: 'repo' }, w.repo),
+    el(doc, 'div', { class: 'reason' }, w.reason),
+  ));
+}
+
+/** The line at the top of the page saying how many Mac sessions are running, or that the Mac service never reported. */
+export function drawSessions(doc: Document, b: BacklogView, now: Date): HTMLElement {
   const s = b.sessions;
-  if (!s) return [el(doc, 'p', { class: 'slots' }, "The Mac service hasn't reported in yet, so nobody would look through a backlog.")];
+  if (!s) return el(doc, 'p', { class: 'slots' }, "The Mac service hasn't reported in yet, so nobody would look through a backlog.");
   const boxes = Array.from({ length: s.max }, (_, i) => el(doc, 'b', { class: i < s.running ? 'f' : '' }));
-  const slots = el(doc, 'p', { class: 'slots' }, ...boxes, ` ${s.running} of ${s.max} sessions on the Mac running`,
+  return el(doc, 'p', { class: 'slots' }, ...boxes, ` ${s.running} of ${s.max} sessions on the Mac running`,
     s.stale ? el(doc, 'span', { class: 'stale' }, ` · the Mac service last looked ${age(s.at, now)} ago`) : null);
-  const lines = b.repos.map((r) => {
+}
+
+/** The Backlog section's contents: a line per repo. */
+export function drawBacklog(doc: Document, b: BacklogView, h: BacklogHandlers): HTMLElement[] {
+  return b.repos.map((r) => {
     const count = r.open === null ? "couldn't count the open issues" : `${r.atLeast ? 'at least ' : ''}${r.open} open ${r.open === 1 ? 'issue' : 'issues'} nobody has picked up`;
     return el(doc, 'div', { class: 'backlog-line', 'data-repo': r.repo },
       el(doc, 'b', {}, r.name),
@@ -108,5 +120,4 @@ export function drawBacklog(doc: Document, b: BacklogView, h: BacklogHandlers, n
       el(doc, 'span', { class: 'error', 'data-role': 'error', hidden: '' }),
     );
   });
-  return [slots, ...lines];
 }

@@ -9,19 +9,29 @@ export const CLOSE = 'close';
 /** The choices for each issue on a proposal, in the order the card shows them. */
 export const PROPOSAL_CHOICES = [PICK_UP, LATER, CLOSE] as const;
 export type ProposalChoice = (typeof PROPOSAL_CHOICES)[number];
-/** The choices as a sentence says them: "pick up, later or close". */
-export const CHOICES_TEXT = `${PROPOSAL_CHOICES.slice(0, -1).join(', ')} or ${PROPOSAL_CHOICES.at(-1)}`;
+/** An issue that can't start until other open work lands. */
+export const WAITING = 'waiting';
+/** What a proposal can say about an issue: one of the owner's choices, or that it is waiting. */
+export const SUGGESTIONS = [...PROPOSAL_CHOICES, WAITING] as const;
+export type Suggestion = (typeof SUGGESTIONS)[number];
+/** The suggestions as a sentence says them: "pick up, later, close or waiting". */
+export const SUGGESTIONS_TEXT = `${SUGGESTIONS.slice(0, -1).join(', ')} or ${SUGGESTIONS.at(-1)}`;
 
 /** The most issues one proposal may suggest picking up. */
-export const MAX_PICKS = 5;
+export const MAX_PICKS = 8;
 /** An issue the owner said "later" to is left out of proposals for this long. */
 export const LATER_MS = 14 * DAY_MS;
 
 export interface ProposalItem {
   issue: number;
   title: string;
-  suggestion: ProposalChoice;
+  suggestion: Suggestion;
   reason: string;
+}
+
+/** Whether the owner is asked about this item; a waiting one is only shown. */
+export function isAsked(i: { suggestion: Suggestion }): boolean {
+  return i.suggestion !== WAITING;
 }
 
 export interface Proposal {
@@ -90,15 +100,15 @@ export type ItemInput = Omit<ProposalItem, 'title'>;
 /** Reads "#25 | pick up | why this one", as `pr-status propose` takes each item. */
 export function parseItem(text: string): ItemInput {
   const parts = text.split('|').map((p) => p.trim());
-  const shape = `Write each item as "#N | ${PICK_UP} | reason", with ${CHOICES_TEXT}`;
+  const shape = `Write each item as "#N | ${PICK_UP} | reason", with ${SUGGESTIONS_TEXT}`;
   if (parts.length < 3) throw new Refused(`"${text}" isn't an item. ${shape}`);
   const [num, choice, ...rest] = parts;
   const m = /^#?(\d+)$/.exec(num!);
   if (!m) throw new Refused(`"${num}" isn't an issue number. ${shape}`);
-  if (!(PROPOSAL_CHOICES as readonly string[]).includes(choice!)) throw new Refused(`"${choice}" isn't ${CHOICES_TEXT}. ${shape}`);
+  if (!(SUGGESTIONS as readonly string[]).includes(choice!)) throw new Refused(`"${choice}" isn't ${SUGGESTIONS_TEXT}. ${shape}`);
   const reason = rest.join(' | ').trim();
   if (reason === '') throw new Refused(`#${m[1]} has no reason. ${shape}`);
-  return { issue: Number(m[1]), suggestion: choice as ProposalChoice, reason };
+  return { issue: Number(m[1]), suggestion: choice as Suggestion, reason };
 }
 
 /** Why a list of items can't be a proposal, or null when it can. */
@@ -108,6 +118,7 @@ export function itemsProblem(items: ItemInput[]): string | null {
     if (seen.has(it.issue)) return `#${it.issue} is in the list twice`;
     seen.add(it.issue);
     if (/[\r\n]/.test(it.reason)) return `The reason for #${it.issue} must be one line`;
+    if (it.suggestion === WAITING && !/#\d+/.test(it.reason)) return `The reason for #${it.issue} must name what it waits for, as #N`;
   }
   const picks = items.filter((i) => i.suggestion === PICK_UP).length;
   if (picks > MAX_PICKS) return `A proposal may suggest picking up at most ${MAX_PICKS} issues, and this one suggests ${picks}`;

@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { OWNER_NAME } from '../src/shared/config.ts';
 import { CLAUDE_BOT_KEY, GAVE_UP_ASK, LABEL_IN_PROGRESS, PICKUP_GRACE_MS, SERVICE_GRACE_MS, SERVICE_WORKING_ASK, SESSION_LIMIT_MS } from '../src/shared/names.ts';
-import { CLOSE, PICK_UP, isUnderWay, pickupReason, type Pickup, type Proposal, type Skip } from '../src/shared/backlog.ts';
+import { CLOSE, PICK_UP, isAsked, isUnderWay, pickupReason, type Pickup, type Proposal, type Skip } from '../src/shared/backlog.ts';
 import { Refused, itemKey, recordNumber, type Found, type WorkRecord } from '../src/shared/work.ts';
 import { describe } from './answers.ts';
 import { notePrompt, pickupPrompt, proposalPrompt } from './backlog-prompts.ts';
@@ -630,7 +630,7 @@ export async function main(argv: string[], deps: ServiceDeps): Promise<number> {
 
   /** Carries out the owner's answers to a proposal: labels and pick-ups, and closes. Needs no session. */
   async function carryOut(p: Proposal): Promise<void> {
-    const items = p.items ?? [];
+    const items = (p.items ?? []).filter(isAsked);
     if (dryRun) {
       sayOnceAbout(`${p.repo} carry`, p.repo, `would carry out the answers: ${items.map((i) => `#${i.issue} ${p.answers?.[String(i.issue)]}`).join(', ') || 'nothing to do'}${p.note ? ', then start a session for the note' : ''}.`);
       return;
