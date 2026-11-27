@@ -1,6 +1,6 @@
 // The board's routes for the backlog. The owner asks for a proposal, answers it, and tries again or drops what went wrong;
 // the Mac service and its sessions (the service token) take the work, write the lists and say how it went.
-import { CHOICES_TEXT, SUGGESTIONS, itemsProblem, type ItemInput, type Suggestion } from '../shared/backlog.ts';
+import { SUGGESTIONS_TEXT, SUGGESTIONS, itemsProblem, type ItemInput, type Suggestion } from '../shared/backlog.ts';
 import { Refused, itemKey } from '../shared/work.ts';
 import type { Env } from './access.ts';
 import type { ApiDeps } from './api.ts';
@@ -44,7 +44,7 @@ async function itemsWithTitles(env: Env, deps: ApiDeps, repo: string, raw: unkno
   const items: ItemInput[] = raw.map((v) => {
     const ok = isObject(v) && typeof v.issue === 'number' && Number.isInteger(v.issue) && v.issue > 0
       && (SUGGESTIONS as readonly string[]).includes(v.suggestion as string) && typeof v.reason === 'string' && v.reason.trim() !== '';
-    if (!ok) throw new BadRequest(`Each item needs an "issue" number, a "suggestion" (${CHOICES_TEXT}) and a "reason"`);
+    if (!ok) throw new BadRequest(`Each item needs an "issue" number, a "suggestion" (${SUGGESTIONS_TEXT}) and a "reason"`);
     return { issue: v.issue as number, suggestion: v.suggestion as Suggestion, reason: (v.reason as string).trim() };
   });
   const problem = itemsProblem(items);

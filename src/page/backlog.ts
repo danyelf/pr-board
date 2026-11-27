@@ -109,9 +109,8 @@ export function drawSessions(doc: Document, b: BacklogView, now: Date): HTMLElem
     s.stale ? el(doc, 'span', { class: 'stale' }, ` · the Mac service last looked ${age(s.at, now)} ago`) : null);
 }
 
-/** The Backlog section's contents: a line per repo, none while the Mac service has never reported. */
+/** The Backlog section's contents: a line per repo. */
 export function drawBacklog(doc: Document, b: BacklogView, h: BacklogHandlers): HTMLElement[] {
-  if (!b.sessions) return [];
   return b.repos.map((r) => {
     const count = r.open === null ? "couldn't count the open issues" : `${r.atLeast ? 'at least ' : ''}${r.open} open ${r.open === 1 ? 'issue' : 'issues'} nobody has picked up`;
     return el(doc, 'div', { class: 'backlog-line', 'data-repo': r.repo },

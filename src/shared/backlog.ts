@@ -9,16 +9,13 @@ export const CLOSE = 'close';
 /** The choices for each issue on a proposal, in the order the card shows them. */
 export const PROPOSAL_CHOICES = [PICK_UP, LATER, CLOSE] as const;
 export type ProposalChoice = (typeof PROPOSAL_CHOICES)[number];
-/**
- * An issue that can't start until other open work lands. It is listed for the owner to see but asks nothing, and
- * doesn't count toward the picks.
- */
+/** An issue that can't start until other open work lands. */
 export const WAITING = 'waiting';
 /** What a proposal can say about an issue: one of the owner's choices, or that it is waiting. */
 export const SUGGESTIONS = [...PROPOSAL_CHOICES, WAITING] as const;
 export type Suggestion = (typeof SUGGESTIONS)[number];
 /** The suggestions as a sentence says them: "pick up, later, close or waiting". */
-export const CHOICES_TEXT = `${SUGGESTIONS.slice(0, -1).join(', ')} or ${SUGGESTIONS.at(-1)}`;
+export const SUGGESTIONS_TEXT = `${SUGGESTIONS.slice(0, -1).join(', ')} or ${SUGGESTIONS.at(-1)}`;
 
 /** The most issues one proposal may suggest picking up. */
 export const MAX_PICKS = 8;
@@ -103,12 +100,12 @@ export type ItemInput = Omit<ProposalItem, 'title'>;
 /** Reads "#25 | pick up | why this one", as `pr-status propose` takes each item. */
 export function parseItem(text: string): ItemInput {
   const parts = text.split('|').map((p) => p.trim());
-  const shape = `Write each item as "#N | ${PICK_UP} | reason", with ${CHOICES_TEXT}`;
+  const shape = `Write each item as "#N | ${PICK_UP} | reason", with ${SUGGESTIONS_TEXT}`;
   if (parts.length < 3) throw new Refused(`"${text}" isn't an item. ${shape}`);
   const [num, choice, ...rest] = parts;
   const m = /^#?(\d+)$/.exec(num!);
   if (!m) throw new Refused(`"${num}" isn't an issue number. ${shape}`);
-  if (!(SUGGESTIONS as readonly string[]).includes(choice!)) throw new Refused(`"${choice}" isn't ${CHOICES_TEXT}. ${shape}`);
+  if (!(SUGGESTIONS as readonly string[]).includes(choice!)) throw new Refused(`"${choice}" isn't ${SUGGESTIONS_TEXT}. ${shape}`);
   const reason = rest.join(' | ').trim();
   if (reason === '') throw new Refused(`#${m[1]} has no reason. ${shape}`);
   return { issue: Number(m[1]), suggestion: choice as Suggestion, reason };

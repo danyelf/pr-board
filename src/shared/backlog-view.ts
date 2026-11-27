@@ -185,7 +185,7 @@ export function buildBacklog(
   // Each repo's newest written proposal says which issues are waiting; one since closed, or now taken, is left out.
   const waiting: WaitingLine[] = [];
   for (const repo of new Set(proposals.map((p) => p.repo))) {
-    const latest = proposals.filter((p) => p.repo === repo && p.writtenAt !== null).sort((a, b) => Date.parse(b.writtenAt!) - Date.parse(a.writtenAt!) || b.id - a.id)[0];
+    const latest = proposals.filter((p) => p.repo === repo && p.writtenAt !== null).sort((a, b) => b.id - a.id)[0];
     const list = issues.find((i) => i.repo === repo);
     const taken = takenIn(repo);
     for (const i of latest?.items ?? []) {

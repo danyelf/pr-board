@@ -303,10 +303,9 @@ describe('the backlog on the page', () => {
     expect(walk(nodes[1]!).some((e) => e.tag === 'button')).toBe(false);
   });
 
-  it('says so when the Mac service has never reported, and lists no repos', () => {
+  it('says so when the Mac service has never reported', () => {
     const { doc } = fakeDoc();
-    const view = { sessions: null, repos: [{ repo: 'o/r', name: 'r', open: 6, atLeast: false, busy: null }], proposals: [], pickups: [], waiting: [] };
+    const view = { sessions: null, repos: [], proposals: [], pickups: [], waiting: [] };
     expect(textOf(drawSessions(doc, view, NOW_D) as unknown as FakeElement)).toContain("hasn't reported in yet");
-    expect(drawBacklog(doc, view, handlers)).toEqual([]);
   });
 });
