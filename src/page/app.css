@@ -134,7 +134,8 @@ section h2 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 18p
 .slots { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
 .slots b { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 2px; vertical-align: -1px; background: var(--line); }
 .slots b.f { background: var(--claude); }
-.slots .stale { color: var(--blocked); font-weight: 600; }
+&
+.top .slots { margin: 0; }
 .backlog-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 12px; margin-bottom: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
 .backlog-line .n { color: var(--muted); }
 .backlog-line button { margin-left: auto; }

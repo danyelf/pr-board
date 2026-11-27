@@ -1,7 +1,7 @@
 // The page: reads the board, draws it, keeps it current, and sends the owner's answers.
 import type { BoardPage, PickupCard, ProposalCard } from '../shared/backlog-view.ts';
 import type { CardView } from '../shared/view.ts';
-import { drawBacklog, drawPickup, drawProposal, drawWaiting, initialProposalForm, type BacklogHandlers, type ProposalForm } from './backlog.ts';
+import { drawBacklog, drawPickup, drawProposal, drawSessions, drawWaiting, initialProposalForm, type BacklogHandlers, type ProposalForm } from './backlog.ts';
 import { arrange, clock, drawCard, showChanged, showError, showSending, type CardHandlers } from './draw.ts';
 import { el } from './el.ts';
 import { afterRefusal, formProblem, initialForm, toAnswer, type FormState } from './form.ts';
@@ -188,7 +188,8 @@ function drawBacklogCards(next: BoardPage): void {
       backlogCards.delete(key);
     }
   }
-  backlogBody.replaceChildren(...drawBacklog(doc, next.backlog, backlogHandlers, now));
+  sessionsLine.replaceChildren(drawSessions(doc, next.backlog, now));
+  backlogBody.replaceChildren(...drawBacklog(doc, next.backlog, backlogHandlers));
   waitingList.replaceChildren(...drawWaiting(doc, next.backlog.waiting));
   waitingCount.textContent = ` · ${next.backlog.waiting.length}`;
 }
@@ -196,6 +197,7 @@ function drawBacklogCards(next: BoardPage): void {
 // The page's fixed parts.
 const root = doc.getElementById('board')!;
 const statusLine = el(doc, 'p', { class: 'status', role: 'status' });
+const sessionsLine = el(doc, 'div', { class: 'sessions' });
 const errors = el(doc, 'div', { class: 'errors', hidden: '' });
 const turnButton = el(doc, 'button', { type: 'button' }, 'By turn');
 const everythingButton = el(doc, 'button', { type: 'button' }, 'All');
@@ -241,6 +243,7 @@ root.replaceChildren(
     el(doc, 'h1', {}, 'PR Board'),
     el(doc, 'div', { class: 'switch', role: 'group', 'aria-label': 'View' }, turnButton, everythingButton),
     statusLine,
+    sessionsLine,
   ),
   errors,
   sections.waiting.wrap,
@@ -272,7 +275,7 @@ function layout(): void {
     arrange(s.list, all);
     if (s.count) s.count.textContent = ` · ${all.length}`;
   }
-  backlogWrap.hidden = view !== 'turn';
+  backlogWrap.hidden = view !== 'turn' || board.backlog.sessions === null;
   waitingWrap.hidden = view !== 'turn' || board.backlog.waiting.length === 0;
   // Nodes of cards that are in no shown section are dropped from the page but kept, so a view switch brings them back as they were.
   for (const name of Object.keys(sections) as (keyof typeof sections)[]) {

@@ -100,14 +100,19 @@ export function drawWaiting(doc: Document, lines: WaitingLine[]): HTMLElement[] 
   ));
 }
 
-/** The Backlog section's contents: how many Mac sessions are running, and a line per repo. */
-export function drawBacklog(doc: Document, b: BacklogView, h: BacklogHandlers, now: Date): HTMLElement[] {
+/** The line at the top of the page saying how many Mac sessions are running, or that the Mac service never reported. */
+export function drawSessions(doc: Document, b: BacklogView, now: Date): HTMLElement {
   const s = b.sessions;
-  if (!s) return [el(doc, 'p', { class: 'slots' }, "The Mac service hasn't reported in yet, so nobody would look through a backlog.")];
+  if (!s) return el(doc, 'p', { class: 'slots' }, "The Mac service hasn't reported in yet, so nobody would look through a backlog.");
   const boxes = Array.from({ length: s.max }, (_, i) => el(doc, 'b', { class: i < s.running ? 'f' : '' }));
-  const slots = el(doc, 'p', { class: 'slots' }, ...boxes, ` ${s.running} of ${s.max} sessions on the Mac running`,
+  return el(doc, 'p', { class: 'slots' }, ...boxes, ` ${s.running} of ${s.max} sessions on the Mac running`,
     s.stale ? el(doc, 'span', { class: 'stale' }, ` · the Mac service last looked ${age(s.at, now)} ago`) : null);
-  const lines = b.repos.map((r) => {
+}
+
+/** The Backlog section's contents: a line per repo, none while the Mac service has never reported. */
+export function drawBacklog(doc: Document, b: BacklogView, h: BacklogHandlers): HTMLElement[] {
+  if (!b.sessions) return [];
+  return b.repos.map((r) => {
     const count = r.open === null ? "couldn't count the open issues" : `${r.atLeast ? 'at least ' : ''}${r.open} open ${r.open === 1 ? 'issue' : 'issues'} nobody has picked up`;
     return el(doc, 'div', { class: 'backlog-line', 'data-repo': r.repo },
       el(doc, 'b', {}, r.name),
@@ -116,5 +121,4 @@ export function drawBacklog(doc: Document, b: BacklogView, h: BacklogHandlers, n
       el(doc, 'span', { class: 'error', 'data-role': 'error', hidden: '' }),
     );
   });
-  return [slots, ...lines];
 }

@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { drawBacklog, drawProposal, initialProposalForm } from '../src/page/backlog.ts';
+import { drawBacklog, drawProposal, drawSessions, initialProposalForm } from '../src/page/backlog.ts';
 import { drawCard } from '../src/page/draw.ts';
 import type { ProposalCard } from '../src/shared/backlog-view.ts';
 import { el } from '../src/page/el.ts';
@@ -290,21 +290,23 @@ describe('the backlog on the page', () => {
 
   it('draws the session count and a Find some more button only on a repo with nothing under way', () => {
     const { doc } = fakeDoc();
-    const nodes = drawBacklog(doc, {
+    const view = {
       sessions: { running: 1, max: 4, at: '2026-11-20T11:59:00.000Z', stale: false },
       repos: [{ repo: 'o/r', name: 'r', open: 6, atLeast: false, busy: null }, { repo: 'o/s', name: 's', open: 3, atLeast: true, busy: 'looking through the backlog…' }],
       proposals: [], pickups: [], waiting: [],
-    }, handlers, NOW_D) as unknown as FakeElement[];
-    expect(textOf(nodes[0]!)).toContain('1 of 4 sessions on the Mac running');
-    expect(textOf(nodes[1]!)).toContain('6 open issues nobody has picked up');
-    expect(walk(nodes[1]!).some((e) => e.tag === 'button')).toBe(true);
-    expect(textOf(nodes[2]!)).toContain('looking through the backlog…');
-    expect(walk(nodes[2]!).some((e) => e.tag === 'button')).toBe(false);
+    };
+    expect(textOf(drawSessions(doc, view, NOW_D) as unknown as FakeElement)).toContain('1 of 4 sessions on the Mac running');
+    const nodes = drawBacklog(doc, view, handlers) as unknown as FakeElement[];
+    expect(textOf(nodes[0]!)).toContain('6 open issues nobody has picked up');
+    expect(walk(nodes[0]!).some((e) => e.tag === 'button')).toBe(true);
+    expect(textOf(nodes[1]!)).toContain('looking through the backlog…');
+    expect(walk(nodes[1]!).some((e) => e.tag === 'button')).toBe(false);
   });
 
-  it('says so when the Mac service has never reported', () => {
+  it('says so when the Mac service has never reported, and lists no repos', () => {
     const { doc } = fakeDoc();
-    const nodes = drawBacklog(doc, { sessions: null, repos: [], proposals: [], pickups: [], waiting: [] }, handlers, NOW_D) as unknown as FakeElement[];
-    expect(textOf(nodes[0]!)).toContain("hasn't reported in yet");
+    const view = { sessions: null, repos: [{ repo: 'o/r', name: 'r', open: 6, atLeast: false, busy: null }], proposals: [], pickups: [], waiting: [] };
+    expect(textOf(drawSessions(doc, view, NOW_D) as unknown as FakeElement)).toContain("hasn't reported in yet");
+    expect(drawBacklog(doc, view, handlers)).toEqual([]);
   });
 });
